@@ -14,9 +14,12 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package com.aliyun.emr.jss.common.rpc
 
-import com.aliyun.emr.jss.common.JindoException
+package com.aliyun.emr.jss.common.internal
 
-private[jss] class RpcEndpointNotFoundException(uri: String)
-  extends JindoException(s"Cannot find endpoint: $uri")
+import java.util.concurrent.TimeUnit
+
+import org.apache.spark.network.util.ByteUnit
+
+package object config {
+}

@@ -1,8 +1,8 @@
 package com.aliyun.emr.jss
 
+import com.aliyun.emr.jss.common.JindoConf
 import com.aliyun.emr.jss.common.rpc.netty.NettyRpcEnvFactory
 import com.aliyun.emr.jss.common.rpc.{RpcAddress, RpcEndpointRef, RpcEnv, RpcEnvConfig}
-import org.apache.spark.SparkConf
 
 import scala.concurrent.duration.Duration
 import scala.concurrent.{Await, Future}
@@ -16,7 +16,7 @@ object Client {
   }
 
   def asyncCall() = {
-    val config = RpcEnvConfig(new SparkConf(), "hello-client", "localhost", "localhost", 52345, 0, true)
+    val config = RpcEnvConfig(new JindoConf(), "hello-client", "localhost", "localhost", 52345, 0, true)
     val rpcEnv: RpcEnv = new NettyRpcEnvFactory().create(config)
     val endPointRef: RpcEndpointRef = rpcEnv.setupEndpointRef(RpcAddress("localhost", 52345), "hello-service")
     val future: Future[String] = endPointRef.ask[String](SayHi("neo"))
@@ -28,7 +28,7 @@ object Client {
   }
 
   def syncCall() = {
-    val config = RpcEnvConfig(new SparkConf(), "hello-client", "localhost", "localhost", 52345, 0, true)
+    val config = RpcEnvConfig(new JindoConf(), "hello-client", "localhost", "localhost", 52345, 0, true)
     val rpcEnv: RpcEnv = new NettyRpcEnvFactory().create(config)
     val endPointRef: RpcEndpointRef = rpcEnv.setupEndpointRef(RpcAddress("localhost", 52345), "hello-service")
     val result = endPointRef.askSync[String](SayBye("neo"))

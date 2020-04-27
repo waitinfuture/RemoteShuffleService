@@ -28,7 +28,7 @@ private[jss] case class RpcAddress(host: String, port: Int) {
   def hostPort: String = host + ":" + port
 
   /** Returns a string in the form of "spark://host:port". */
-  def toSparkURL: String = "jss://" + hostPort
+  def toJindoURL: String = "jindo://" + hostPort
 
   override def toString: String = hostPort
 }
@@ -42,9 +42,9 @@ private[jss] object RpcAddress {
     RpcAddress(uriObj.getHost, uriObj.getPort)
   }
 
-  /** Returns the [[RpcAddress]] encoded in the form of "spark://host:port" */
-  def fromJssURL(jssUrl: String): RpcAddress = {
-    val (host, port) = Utils.extractHostPortFromJssUrl(jssUrl)
+  /** Returns the [[RpcAddress]] encoded in the form of "jindo://host:port" */
+  def fromJindoURL(jindoUrl: String): RpcAddress = {
+    val (host, port) = Utils.extractHostPortFromJindoUrl(jindoUrl)
     RpcAddress(host, port)
   }
 }

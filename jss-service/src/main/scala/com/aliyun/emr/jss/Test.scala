@@ -1,13 +1,13 @@
 package com.aliyun.emr.jss
 
+import com.aliyun.emr.jss.common.JindoConf
 import com.aliyun.emr.jss.common.rpc.{RpcCallContext, RpcEndpoint, RpcEnv, RpcEnvConfig}
 import com.aliyun.emr.jss.common.rpc.netty.NettyRpcEnvFactory
-import org.apache.spark.SparkConf
 
 object Test {
 
   def main(args: Array[String]): Unit = {
-    val config = RpcEnvConfig(new SparkConf(), "hello-server", "localhost", "localhost", 52345, 0, false)
+    val config = RpcEnvConfig(new JindoConf(), "hello-server", "localhost", "localhost", 52345, 0, false)
     val rpcEnv: RpcEnv = new NettyRpcEnvFactory().create(config)
     val helloEndpoint: RpcEndpoint = new HelloEndpoint(rpcEnv)
     rpcEnv.setupEndpoint("hello-service", helloEndpoint)

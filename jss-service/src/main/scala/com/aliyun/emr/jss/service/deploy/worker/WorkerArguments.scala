@@ -1,9 +1,9 @@
 package com.aliyun.emr.jss.service.deploy.worker
 
+import com.aliyun.emr.jss.common.JindoConf
 import com.aliyun.emr.jss.common.util.Utils
-import org.apache.spark.SparkConf
 
-class ShuffleServiceWorkerArguments (args: Array[String], conf: SparkConf) {
+class WorkerArguments(args: Array[String], conf: JindoConf) {
 
   var host = Utils.localHostName()
   var port = 0

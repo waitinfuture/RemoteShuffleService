@@ -14,9 +14,11 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package com.aliyun.emr.jss.common.rpc
 
-import com.aliyun.emr.jss.common.JindoException
+package com.aliyun.emr.jss.common
 
-private[jss] class RpcEndpointNotFoundException(uri: String)
-  extends JindoException(s"Cannot find endpoint: $uri")
+class JindoException(message: String, cause: Throwable)
+  extends Exception(message, cause) {
+
+  def this(message: String) = this(message, null)
+}

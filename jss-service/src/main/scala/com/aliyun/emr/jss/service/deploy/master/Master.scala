@@ -2,15 +2,15 @@ package com.aliyun.emr.jss.service.deploy.master
 
 import java.util.concurrent.{ScheduledFuture, TimeUnit}
 
+import com.aliyun.emr.jss.common.JindoConf
+import com.aliyun.emr.jss.common.internal.Logging
 import com.aliyun.emr.jss.common.rpc.{RpcAddress, RpcEnv, ThreadSafeRpcEndpoint}
 import com.aliyun.emr.jss.common.util.{ThreadUtils, Utils}
-import org.apache.spark.SparkConf
-import org.apache.spark.internal.Logging
 
-class ShuffleServiceMaster(
+class Master(
     override val rpcEnv: RpcEnv,
     address: RpcAddress,
-    val conf: SparkConf) extends ThreadSafeRpcEndpoint with Logging {
+    val conf: JindoConf) extends ThreadSafeRpcEndpoint with Logging {
 
   private val forwardMessageThread =
     ThreadUtils.newDaemonSingleThreadScheduledExecutor("master-forward-message-thread")
@@ -18,11 +18,11 @@ class ShuffleServiceMaster(
   private var checkForWorkerTimeOutTask: ScheduledFuture[_] = _
 
   override def onStart(): Unit = {
-    checkForWorkerTimeOutTask = forwardMessageThread.scheduleAtFixedRate(new Runnable {
-      override def run(): Unit = Utils.tryLogNonFatalError {
-        self.send(CheckForWorkerTimeOut)
-      }
-    }, 0, WORKER_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+//    checkForWorkerTimeOutTask = forwardMessageThread.scheduleAtFixedRate(new Runnable {
+//      override def run(): Unit = Utils.tryLogNonFatalError {
+//        self.send(CheckForWorkerTimeOut)
+//      }
+//    }, 0, WORKER_TIMEOUT_MS, TimeUnit.MILLISECONDS)
   }
   override def onStop(): Unit = {}
 
@@ -35,7 +35,7 @@ class ShuffleServiceMaster(
   }
 }
 
-object ShuffleServiceMaster extends Logging {
+object Master extends Logging {
 
   val SYSTEM_NAME = "jssMaster"
   val ENDPOINT_NAME = "Master"
@@ -45,11 +45,11 @@ object ShuffleServiceMaster extends Logging {
 //    Thread.setDefaultUncaughtExceptionHandler(new SparkUncaughtExceptionHandler(
 //      exitOnUncaughtException = false))
 //    Utils.initDaemon(log)
-    val conf = new SparkConf
-    val masterArgs = new ShuffleServiceMasterArguments(args, conf)
+    val conf = new JindoConf()
+    val masterArgs = new MasterArguments(args, conf)
     val rpcEnv = RpcEnv.create(SYSTEM_NAME, masterArgs.host, masterArgs.port, conf)
     rpcEnv.setupEndpoint(ENDPOINT_NAME,
-      new ShuffleServiceMaster(rpcEnv, rpcEnv.address, conf))
+      new Master(rpcEnv, rpcEnv.address, conf))
     rpcEnv.awaitTermination()
   }
 

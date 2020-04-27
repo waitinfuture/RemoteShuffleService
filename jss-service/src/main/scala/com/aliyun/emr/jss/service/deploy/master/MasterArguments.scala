@@ -1,9 +1,9 @@
 package com.aliyun.emr.jss.service.deploy.master
 
+import com.aliyun.emr.jss.common.JindoConf
 import com.aliyun.emr.jss.common.util.Utils
-import org.apache.spark.SparkConf
 
-class ShuffleServiceMasterArguments(args: Array[String], conf: SparkConf) {
+class MasterArguments(args: Array[String], conf: JindoConf) {
 
   var host = Utils.localHostName()
   var port = 9099

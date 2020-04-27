@@ -17,12 +17,11 @@
 
 package com.aliyun.emr.jss.common.rpc.netty
 
+import com.aliyun.emr.jss.common.JindoException
+import com.aliyun.emr.jss.common.internal.Logging
 import javax.annotation.concurrent.GuardedBy
 
 import scala.util.control.NonFatal
-
-import org.apache.spark.SparkException
-import org.apache.spark.internal.Logging
 import com.aliyun.emr.jss.common.rpc.{RpcAddress, RpcEndpoint, ThreadSafeRpcEndpoint}
 
 
@@ -103,7 +102,7 @@ private[jss] class Inbox(
           case RpcMessage(_sender, content, context) =>
             try {
               endpoint.receiveAndReply(context).applyOrElse[Any, Unit](content, { msg =>
-                throw new SparkException(s"Unsupported message $message from ${_sender}")
+                throw new JindoException(s"Unsupported message $message from ${_sender}")
               })
             } catch {
               case e: Throwable =>
@@ -115,7 +114,7 @@ private[jss] class Inbox(
 
           case OneWayMessage(_sender, content) =>
             endpoint.receive.applyOrElse[Any, Unit](content, { msg =>
-              throw new SparkException(s"Unsupported message $message from ${_sender}")
+              throw new JindoException(s"Unsupported message $message from ${_sender}")
             })
 
           case OnStart =>

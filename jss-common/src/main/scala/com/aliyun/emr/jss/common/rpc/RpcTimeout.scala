@@ -19,10 +19,10 @@ package com.aliyun.emr.jss.common.rpc
 
 import java.util.concurrent.TimeoutException
 
+import com.aliyun.emr.jss.common.JindoConf
+
 import scala.concurrent.Future
 import scala.concurrent.duration._
-
-import org.apache.spark.SparkConf
 import com.aliyun.emr.jss.common.util.{ThreadUtils, Utils}
 
 /**
@@ -88,7 +88,7 @@ private[jss] object RpcTimeout {
    * @param timeoutProp property key for the timeout in seconds
    * @throws NoSuchElementException if property is not set
    */
-  def apply(conf: SparkConf, timeoutProp: String): RpcTimeout = {
+  def apply(conf: JindoConf, timeoutProp: String): RpcTimeout = {
     val timeout = { conf.getTimeAsSeconds(timeoutProp).seconds }
     new RpcTimeout(timeout, timeoutProp)
   }
@@ -102,7 +102,7 @@ private[jss] object RpcTimeout {
    * @param timeoutProp property key for the timeout in seconds
    * @param defaultValue default timeout value in seconds if property not found
    */
-  def apply(conf: SparkConf, timeoutProp: String, defaultValue: String): RpcTimeout = {
+  def apply(conf: JindoConf, timeoutProp: String, defaultValue: String): RpcTimeout = {
     val timeout = { conf.getTimeAsSeconds(timeoutProp, defaultValue).seconds }
     new RpcTimeout(timeout, timeoutProp)
   }
@@ -117,7 +117,7 @@ private[jss] object RpcTimeout {
    * @param timeoutPropList prioritized list of property keys for the timeout in seconds
    * @param defaultValue default timeout value in seconds if no properties found
    */
-  def apply(conf: SparkConf, timeoutPropList: Seq[String], defaultValue: String): RpcTimeout = {
+  def apply(conf: JindoConf, timeoutPropList: Seq[String], defaultValue: String): RpcTimeout = {
     require(timeoutPropList.nonEmpty)
 
     // Find the first set property or use the default value with the first property

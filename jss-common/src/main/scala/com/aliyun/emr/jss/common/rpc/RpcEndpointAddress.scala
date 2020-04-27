@@ -17,7 +17,7 @@
 
 package com.aliyun.emr.jss.common.rpc
 
-import org.apache.spark.SparkException
+import com.aliyun.emr.jss.common.JindoException
 
 /**
  * An address identifier for an RPC endpoint.
@@ -38,9 +38,9 @@ private[jss] case class RpcEndpointAddress(rpcAddress: RpcAddress, name: String)
   }
 
   override val toString = if (rpcAddress != null) {
-      s"spark://$name@${rpcAddress.host}:${rpcAddress.port}"
+      s"jindo://$name@${rpcAddress.host}:${rpcAddress.port}"
     } else {
-      s"spark-client://$name"
+      s"jindo-client://$name"
     }
 }
 
@@ -50,25 +50,25 @@ private[jss] object RpcEndpointAddress {
     new RpcEndpointAddress(host, port, name)
   }
 
-  def apply(sparkUrl: String): RpcEndpointAddress = {
+  def apply(jindoUrl: String): RpcEndpointAddress = {
     try {
-      val uri = new java.net.URI(sparkUrl)
+      val uri = new java.net.URI(jindoUrl)
       val host = uri.getHost
       val port = uri.getPort
       val name = uri.getUserInfo
-      if (uri.getScheme != "spark" ||
+      if (uri.getScheme != "jindo" ||
           host == null ||
           port < 0 ||
           name == null ||
           (uri.getPath != null && !uri.getPath.isEmpty) || // uri.getPath returns "" instead of null
           uri.getFragment != null ||
           uri.getQuery != null) {
-        throw new SparkException("Invalid Spark URL: " + sparkUrl)
+        throw new JindoException("Invalid Jindo URL: " + jindoUrl)
       }
       new RpcEndpointAddress(host, port, name)
     } catch {
       case e: java.net.URISyntaxException =>
-        throw new SparkException("Invalid Spark URL: " + sparkUrl, e)
+        throw new JindoException("Invalid Jindo URL: " + jindoUrl, e)
     }
   }
 }

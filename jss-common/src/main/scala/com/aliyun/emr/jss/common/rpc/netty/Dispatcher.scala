@@ -18,14 +18,14 @@
 package com.aliyun.emr.jss.common.rpc.netty
 
 import java.util.concurrent.{ConcurrentHashMap, ConcurrentMap, LinkedBlockingQueue, ThreadPoolExecutor, TimeUnit}
+
+import com.aliyun.emr.jss.common.JindoException
+import com.aliyun.emr.jss.common.internal.Logging
 import javax.annotation.concurrent.GuardedBy
 
 import scala.collection.JavaConverters._
 import scala.concurrent.Promise
 import scala.util.control.NonFatal
-
-import org.apache.spark.SparkException
-import org.apache.spark.internal.Logging
 import org.apache.spark.network.client.RpcResponseCallback
 import com.aliyun.emr.jss.common.rpc._
 import com.aliyun.emr.jss.common.util.ThreadUtils
@@ -157,7 +157,7 @@ private[jss] class Dispatcher(nettyEnv: NettyRpcEnv, numUsableCores: Int) extend
       if (stopped) {
         Some(new RpcEnvStoppedException())
       } else if (data == null) {
-        Some(new SparkException(s"Could not find $endpointName."))
+        Some(new JindoException(s"Could not find $endpointName."))
       } else {
         data.inbox.post(message)
         receivers.offer(data)

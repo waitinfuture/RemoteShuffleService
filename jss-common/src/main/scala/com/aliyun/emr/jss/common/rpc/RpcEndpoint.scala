@@ -17,7 +17,7 @@
 
 package com.aliyun.emr.jss.common.rpc
 
-import org.apache.spark.SparkException
+import com.aliyun.emr.jss.common.JindoException
 
 /**
  * A factory class to create the [[RpcEnv]]. It must have an empty constructor so that it can be
@@ -67,7 +67,7 @@ private[jss] trait RpcEndpoint {
    * unmatched message, `SparkException` will be thrown and sent to `onError`.
    */
   def receive: PartialFunction[Any, Unit] = {
-    case _ => throw new SparkException(self + " does not implement 'receive'")
+    case _ => throw new JindoException(self + " does not implement 'receive'")
   }
 
   /**
@@ -75,7 +75,7 @@ private[jss] trait RpcEndpoint {
    * `SparkException` will be thrown and sent to `onError`.
    */
   def receiveAndReply(context: RpcCallContext): PartialFunction[Any, Unit] = {
-    case _ => context.sendFailure(new SparkException(self + " won't reply anything"))
+    case _ => context.sendFailure(new JindoException(self + " won't reply anything"))
   }
 
   /**

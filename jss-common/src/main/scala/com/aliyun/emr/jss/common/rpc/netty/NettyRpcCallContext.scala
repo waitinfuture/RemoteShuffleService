@@ -17,9 +17,9 @@
 
 package com.aliyun.emr.jss.common.rpc.netty
 
-import scala.concurrent.Promise
+import com.aliyun.emr.jss.common.internal.Logging
 
-import org.apache.spark.internal.Logging
+import scala.concurrent.Promise
 import org.apache.spark.network.client.RpcResponseCallback
 import com.aliyun.emr.jss.common.rpc.{RpcAddress, RpcCallContext}
 

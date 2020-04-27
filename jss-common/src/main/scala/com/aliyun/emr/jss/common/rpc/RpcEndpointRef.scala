@@ -17,17 +17,17 @@
 
 package com.aliyun.emr.jss.common.rpc
 
+import com.aliyun.emr.jss.common.JindoConf
+import com.aliyun.emr.jss.common.internal.Logging
+
 import scala.concurrent.Future
 import scala.reflect.ClassTag
-
-import org.apache.spark.{SparkConf, SparkException}
-import org.apache.spark.internal.Logging
 import com.aliyun.emr.jss.common.util.RpcUtils
 
 /**
  * A reference for a remote [[RpcEndpoint]]. [[RpcEndpointRef]] is thread-safe.
  */
-private[jss] abstract class RpcEndpointRef(conf: SparkConf)
+private[jss] abstract class RpcEndpointRef(conf: JindoConf)
   extends Serializable with Logging {
 
   private[this] val maxRetries = RpcUtils.numRetries(conf)

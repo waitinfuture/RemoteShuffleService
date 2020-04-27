@@ -21,7 +21,7 @@ import java.io._
 import java.lang.reflect.{Field, Method}
 import java.security.AccessController
 
-import org.apache.spark.internal.Logging
+import com.aliyun.emr.jss.common.internal.Logging
 
 import scala.annotation.tailrec
 import scala.collection.mutable

@@ -19,12 +19,12 @@ package com.aliyun.emr.jss.common.rpc.netty
 
 import java.nio.ByteBuffer
 import java.util.concurrent.Callable
+
+import com.aliyun.emr.jss.common.JindoException
+import com.aliyun.emr.jss.common.internal.Logging
 import javax.annotation.concurrent.GuardedBy
 
 import scala.util.control.NonFatal
-
-import org.apache.spark.SparkException
-import org.apache.spark.internal.Logging
 import org.apache.spark.network.client.{RpcResponseCallback, TransportClient}
 import com.aliyun.emr.jss.common.rpc.{RpcAddress, RpcEnvStoppedException}
 
@@ -112,7 +112,7 @@ private[jss] class Outbox(nettyEnv: NettyRpcEnv, val address: RpcAddress) {
 
   /**
    * Send a message. If there is no active connection, cache it and launch a new connection. If
-   * [[Outbox]] is stopped, the sender will be notified with a [[SparkException]].
+   * [[Outbox]] is stopped, the sender will be notified with a [[com.aliyun.emr.jss.common.JindoException]].
    */
   def send(message: OutboxMessage): Unit = {
     val dropped = synchronized {
@@ -124,7 +124,7 @@ private[jss] class Outbox(nettyEnv: NettyRpcEnv, val address: RpcAddress) {
       }
     }
     if (dropped) {
-      message.onFailure(new SparkException("Message is dropped because Outbox is stopped"))
+      message.onFailure(new JindoException("Message is dropped because Outbox is stopped"))
     } else {
       drainOutbox()
     }
@@ -250,7 +250,7 @@ private[jss] class Outbox(nettyEnv: NettyRpcEnv, val address: RpcAddress) {
 
   /**
    * Stop [[Outbox]]. The remaining messages in the [[Outbox]] will be notified with a
-   * [[SparkException]].
+   * [[com.aliyun.emr.jss.common.JindoException]].
    */
   def stop(): Unit = {
     synchronized {
@@ -268,7 +268,7 @@ private[jss] class Outbox(nettyEnv: NettyRpcEnv, val address: RpcAddress) {
     // update messages and it's safe to just drain the queue.
     var message = messages.poll()
     while (message != null) {
-      message.onFailure(new SparkException("Message is dropped because Outbox is stopped"))
+      message.onFailure(new JindoException("Message is dropped because Outbox is stopped"))
       message = messages.poll()
     }
   }

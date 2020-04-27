@@ -22,7 +22,7 @@ import java.nio.channels.ReadableByteChannel
 
 import scala.concurrent.Future
 
-import org.apache.spark.SparkConf
+import com.aliyun.emr.jss.common.JindoConf
 import com.aliyun.emr.jss.common.rpc.netty.NettyRpcEnvFactory
 import com.aliyun.emr.jss.common.util.RpcUtils
 
@@ -37,7 +37,7 @@ private[jss] object RpcEnv {
       name: String,
       host: String,
       port: Int,
-      conf: SparkConf,
+      conf: JindoConf,
       clientMode: Boolean = false): RpcEnv = {
     create(name, host, host, port, conf, 0, clientMode)
   }
@@ -47,7 +47,7 @@ private[jss] object RpcEnv {
       bindAddress: String,
       advertiseAddress: String,
       port: Int,
-      conf: SparkConf,
+      conf: JindoConf,
       numUsableCores: Int,
       clientMode: Boolean): RpcEnv = {
     val config = RpcEnvConfig(conf, name, bindAddress, advertiseAddress, port,
@@ -66,7 +66,7 @@ private[jss] object RpcEnv {
  *
  * [[RpcEnv]] also provides some methods to retrieve [[RpcEndpointRef]]s given name or uri.
  */
-private[jss] abstract class RpcEnv(conf: SparkConf) {
+private[jss] abstract class RpcEnv(conf: JindoConf) {
 
   private[jss] val defaultLookupTimeout = RpcUtils.lookupRpcTimeout(conf)
 
@@ -194,7 +194,7 @@ private[jss] trait RpcEnvFileServer {
 }
 
 private[jss] case class RpcEnvConfig(
-    conf: SparkConf,
+    conf: JindoConf,
     name: String,
     bindAddress: String,
     advertiseAddress: String,

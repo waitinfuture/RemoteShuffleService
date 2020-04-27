@@ -22,34 +22,33 @@ import java.nio.ByteBuffer
 import java.nio.channels.{Pipe, ReadableByteChannel, WritableByteChannel}
 import java.util.concurrent._
 import java.util.concurrent.atomic.AtomicBoolean
+
+import com.aliyun.emr.jss.common.JindoConf
+import com.aliyun.emr.jss.common.internal.Logging
 import javax.annotation.Nullable
 
 import scala.concurrent.{Future, Promise}
 import scala.reflect.ClassTag
 import scala.util.{DynamicVariable, Failure, Success, Try}
 import scala.util.control.NonFatal
-
-import org.apache.spark.SparkConf
-import org.apache.spark.internal.Logging
 import org.apache.spark.network.TransportContext
 import org.apache.spark.network.client._
 import org.apache.spark.network.crypto.{AuthClientBootstrap, AuthServerBootstrap}
-import org.apache.spark.network.netty.SparkTransportConf
 import org.apache.spark.network.server._
 import com.aliyun.emr.jss.common.rpc._
 import com.aliyun.emr.jss.common.serializer.{JavaSerializer, JavaSerializerInstance, SerializationStream}
 import com.aliyun.emr.jss.common.util.{ByteBufferInputStream, ByteBufferOutputStream, ThreadUtils, Utils}
 
 private[jss] class NettyRpcEnv(
-    val conf: SparkConf,
+    val conf: JindoConf,
     javaSerializerInstance: JavaSerializerInstance,
     host: String,
     numUsableCores: Int) extends RpcEnv(conf) with Logging {
 
-  private[jss] val transportConf = SparkTransportConf.fromSparkConf(
-    conf.clone.set("spark.rpc.io.numConnectionsPerPeer", "1"),
+  private[jss] val transportConf = Utils.fromJindoConf(
+    conf.clone.set("jindo.rpc.io.numConnectionsPerPeer", "1"),
     "rpc",
-    conf.getInt("spark.rpc.io.threads", numUsableCores))
+    conf.getInt("jindo.rpc.io.threads", numUsableCores))
 
   private val dispatcher: Dispatcher = new Dispatcher(this, numUsableCores)
 
@@ -350,7 +349,7 @@ private[jss] class NettyRpcEnv(
         }
 
         val ioThreads = clone.getInt("spark.files.io.threads", 1)
-        val downloadConf = SparkTransportConf.fromSparkConf(clone, module, ioThreads)
+        val downloadConf = Utils.fromJindoConf(clone, module, ioThreads)
         val downloadContext = new TransportContext(downloadConf, new NoOpRpcHandler(), true)
         fileDownloadFactory = downloadContext.createClientFactory(createClientBootstraps())
       }
@@ -442,13 +441,13 @@ private[jss] object NettyRpcEnv extends Logging {
 private[jss] class NettyRpcEnvFactory extends RpcEnvFactory with Logging {
 
   def create(config: RpcEnvConfig): RpcEnv = {
-    val sparkConf = config.conf
+    val jindoConf = config.conf
     // Use JavaSerializerInstance in multiple threads is safe. However, if we plan to support
     // KryoSerializer in future, we have to use ThreadLocal to store SerializerInstance
     val javaSerializerInstance =
-      new JavaSerializer(sparkConf).newInstance().asInstanceOf[JavaSerializerInstance]
+      new JavaSerializer(jindoConf).newInstance().asInstanceOf[JavaSerializerInstance]
     val nettyEnv =
-      new NettyRpcEnv(sparkConf, javaSerializerInstance, config.advertiseAddress,
+      new NettyRpcEnv(jindoConf, javaSerializerInstance, config.advertiseAddress,
         config.numUsableCores)
     if (!config.clientMode) {
       val startNettyRpcEnv: Int => (NettyRpcEnv, Int) = { actualPort =>
@@ -456,7 +455,7 @@ private[jss] class NettyRpcEnvFactory extends RpcEnvFactory with Logging {
         (nettyEnv, nettyEnv.address.port)
       }
       try {
-        Utils.startServiceOnPort(config.port, startNettyRpcEnv, sparkConf, config.name)._1
+        Utils.startServiceOnPort(config.port, startNettyRpcEnv, jindoConf, config.name)._1
       } catch {
         case NonFatal(e) =>
           nettyEnv.shutdown()
@@ -488,7 +487,7 @@ private[jss] class NettyRpcEnvFactory extends RpcEnvFactory with Logging {
  * @param nettyEnv The RpcEnv associated with this ref.
  */
 private[jss] class NettyRpcEndpointRef(
-    @transient private val conf: SparkConf,
+    @transient private val conf: JindoConf,
     private val endpointAddress: RpcEndpointAddress,
     @transient @volatile private var nettyEnv: NettyRpcEnv) extends RpcEndpointRef(conf) {
 

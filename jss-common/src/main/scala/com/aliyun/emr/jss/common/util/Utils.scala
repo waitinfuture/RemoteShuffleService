@@ -20,14 +20,16 @@ package com.aliyun.emr.jss.common.util
 import java.io.IOException
 import java.net._
 
+import com.aliyun.emr.jss.common.{JindoConf, JindoException}
+import com.aliyun.emr.jss.common.internal.Logging
 import com.google.common.net.InetAddresses
 import io.netty.channel.unix.Errors.NativeIoException
 import org.apache.commons.lang3.SystemUtils
-import org.apache.spark.{SparkConf, SparkException}
-import org.apache.spark.internal.Logging
-import org.apache.spark.network.util.JavaUtils
+import org.apache.spark.network.util.{ConfigProvider, JavaUtils, TransportConf}
 
 import scala.collection.JavaConverters._
+import scala.collection.Map
+import scala.util.Try
 import scala.util.control.NonFatal
 
 object Utils extends Logging {
@@ -88,7 +90,7 @@ object Utils extends Logging {
     JavaUtils.byteStringAsGb(str)
   }
 
-  @throws(classOf[SparkException])
+  @throws(classOf[JindoException])
   def extractHostPortFromSparkUrl(sparkUrl: String): (String, Int) = {
     try {
       val uri = new java.net.URI(sparkUrl)
@@ -101,34 +103,34 @@ object Utils extends Logging {
         uri.getFragment != null ||
         uri.getQuery != null ||
         uri.getUserInfo != null) {
-        throw new SparkException("Invalid master URL: " + sparkUrl)
+        throw new JindoException("Invalid master URL: " + sparkUrl)
       }
       (host, port)
     } catch {
       case e: java.net.URISyntaxException =>
-        throw new SparkException("Invalid master URL: " + sparkUrl, e)
+        throw new JindoException("Invalid master URL: " + sparkUrl, e)
     }
   }
 
-  @throws(classOf[SparkException])
-  def extractHostPortFromJssUrl(jssUrl: String): (String, Int) = {
+  @throws(classOf[JindoException])
+  def extractHostPortFromJindoUrl(jindoUrl: String): (String, Int) = {
     try {
-      val uri = new java.net.URI(jssUrl)
+      val uri = new java.net.URI(jindoUrl)
       val host = uri.getHost
       val port = uri.getPort
-      if (uri.getScheme != "jss" ||
+      if (uri.getScheme != "jindo" ||
         host == null ||
         port < 0 ||
         (uri.getPath != null && !uri.getPath.isEmpty) || // uri.getPath returns "" instead of null
         uri.getFragment != null ||
         uri.getQuery != null ||
         uri.getUserInfo != null) {
-        throw new SparkException("Invalid master URL: " + jssUrl)
+        throw new JindoException("Invalid master URL: " + jindoUrl)
       }
       (host, port)
     } catch {
       case e: java.net.URISyntaxException =>
-        throw new SparkException("Invalid master URL: " + jssUrl, e)
+        throw new JindoException("Invalid master URL: " + jindoUrl, e)
     }
   }
 
@@ -157,7 +159,7 @@ object Utils extends Logging {
         originalThrowable = cause
         try {
           logError("Aborting task", originalThrowable)
-//          TaskContext.get().markTaskFailed(originalThrowable)
+          //          TaskContext.get().markTaskFailed(originalThrowable)
           catchBlock
         } catch {
           case t: Throwable =>
@@ -182,7 +184,7 @@ object Utils extends Logging {
   def startServiceOnPort[T](
                              startPort: Int,
                              startService: Int => (T, Int),
-                             conf: SparkConf,
+                             conf: JindoConf,
                              serviceName: String = ""): (T, Int) = {
 
     require(startPort == 0 || (1024 <= startPort && startPort < 65536),
@@ -233,14 +235,14 @@ object Utils extends Logging {
       }
     }
     // Should never happen
-    throw new SparkException(s"Failed to start service$serviceString on port $startPort")
+    throw new JindoException(s"Failed to start service$serviceString on port $startPort")
   }
 
   def userPort(base: Int, offset: Int): Int = {
     (base + offset - 1024) % (65536 - 1024) + 1024
   }
 
-  def portMaxRetries(conf: SparkConf): Int = {
+  def portMaxRetries(conf: JindoConf): Int = {
     val maxRetries = conf.getOption("spark.port.maxRetries").map(_.toInt)
     if (conf.contains("spark.testing")) {
       // Set a higher number of retries for tests...
@@ -260,8 +262,8 @@ object Utils extends Logging {
           return true
         }
         isBindCollision(e.getCause)
-//      case e: MultiException =>
-//        e.getThrowables.asScala.exists(isBindCollision)
+      //      case e: MultiException =>
+      //        e.getThrowables.asScala.exists(isBindCollision)
       case e: NativeIoException =>
         (e.getMessage != null && e.getMessage.startsWith("bind() failed: ")) ||
           isBindCollision(e.getCause)
@@ -330,34 +332,25 @@ object Utils extends Logging {
   }
 
   private var customHostname: Option[String] = sys.env.get("JSS_LOCAL_HOSTNAME")
+
   def setCustomHostname(hostname: String) {
     // DEBUG code
     Utils.checkHost(hostname)
     customHostname = Some(hostname)
   }
 
-  /**
-    * Get the local machine's FQDN.
-    */
   def localCanonicalHostName(): String = {
     customHostname.getOrElse(localIpAddress.getCanonicalHostName)
   }
 
-  /**
-    * Get the local machine's hostname.
-    */
   def localHostName(): String = {
     customHostname.getOrElse(localIpAddress.getHostAddress)
   }
 
-  /**
-    * Get the local machine's URI.
-    */
   def localHostNameForURI(): String = {
     customHostname.getOrElse(InetAddresses.toUriString(localIpAddress))
   }
 
-  /** Executes the given block. Log non-fatal errors if any, and only throw fatal errors */
   def tryLogNonFatalError(block: => Unit) {
     try {
       block
@@ -365,6 +358,65 @@ object Utils extends Logging {
       case NonFatal(t) =>
         logError(s"Uncaught exception in thread ${Thread.currentThread().getName}", t)
     }
+  }
+
+  def stringToSeq(str: String): Seq[String] = {
+    str.split(",").map(_.trim()).filter(_.nonEmpty)
+  }
+
+  def getSystemProperties: Map[String, String] = {
+    System.getProperties.stringPropertyNames().asScala
+      .map(key => (key, System.getProperty(key))).toMap
+  }
+
+  private val MAX_DEFAULT_NETTY_THREADS = 8
+
+  def fromJindoConf(_conf: JindoConf, module: String, numUsableCores: Int = 0): TransportConf = {
+    val conf = _conf.clone
+
+    // Specify thread configuration based on our JVM's allocation of cores (rather than necessarily
+    // assuming we have all the machine's cores).
+    // NB: Only set if serverThreads/clientThreads not already set.
+    val numThreads = defaultNumThreads(numUsableCores)
+    conf.setIfMissing(s"jindo.$module.io.serverThreads", numThreads.toString)
+    conf.setIfMissing(s"jindo.$module.io.clientThreads", numThreads.toString)
+
+    new TransportConf(module, new ConfigProvider {
+      override def get(name: String): String = conf.get(name)
+      override def get(name: String, defaultValue: String): String = conf.get(name, defaultValue)
+      override def getAll(): java.lang.Iterable[java.util.Map.Entry[String, String]] = {
+        conf.getAll.toMap.asJava.entrySet()
+      }
+    })
+  }
+
+  /**
+    * Returns the default number of threads for both the Netty client and server thread pools.
+    * If numUsableCores is 0, we will use Runtime get an approximate number of available cores.
+    */
+  private def defaultNumThreads(numUsableCores: Int): Int = {
+    val availableCores =
+      if (numUsableCores > 0) numUsableCores else Runtime.getRuntime.availableProcessors()
+    math.min(availableCores, MAX_DEFAULT_NETTY_THREADS)
+  }
+
+  def getClassLoader: ClassLoader = getClass.getClassLoader
+
+  def getContextOrClassLoader: ClassLoader =
+    Option(Thread.currentThread().getContextClassLoader).getOrElse(getClassLoader)
+
+  /** Determines whether the provided class is loadable in the current thread. */
+  def classIsLoadable(clazz: String): Boolean = {
+    // scalastyle:off classforname
+    Try { Class.forName(clazz, false, getContextOrClassLoader) }.isSuccess
+    // scalastyle:on classforname
+  }
+
+  // scalastyle:off classforname
+  /** Preferred alternative to Class.forName(className) */
+  def classForName(className: String): Class[_] = {
+    Class.forName(className, true, getContextOrClassLoader)
+    // scalastyle:on classforname
   }
 
 }
