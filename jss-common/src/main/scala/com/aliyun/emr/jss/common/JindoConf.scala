@@ -17,16 +17,14 @@
 
 package com.aliyun.emr.jss.common
 
-import java.util.{Map => JMap}
 import java.util.concurrent.ConcurrentHashMap
+import java.util.{Map => JMap}
 
 import com.aliyun.emr.jss.common.internal.Logging
 import com.aliyun.emr.jss.common.internal.config._
 import com.aliyun.emr.jss.common.util.Utils
 
 import scala.collection.JavaConverters._
-import scala.collection.mutable.LinkedHashSet
-import scala.concurrent.duration._
 
 class JindoConf(loadDefaults: Boolean) extends Cloneable with Logging with Serializable {
 

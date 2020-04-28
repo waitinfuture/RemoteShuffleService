@@ -17,10 +17,11 @@
 
 package com.aliyun.emr.jss.common.util
 
-import java.io.IOException
+import java.io.{File, FileInputStream, IOException, InputStreamReader}
 import java.math.{MathContext, RoundingMode}
 import java.net._
-import java.util.Locale
+import java.nio.charset.StandardCharsets
+import java.util.{Locale, Properties}
 
 import com.aliyun.emr.jss.common.{JindoConf, JindoException}
 import com.aliyun.emr.jss.common.internal.Logging
@@ -71,6 +72,12 @@ object Utils extends Logging {
 
   def byteStringAsGb(str: String): Long = {
     JavaUtils.byteStringAsGb(str)
+  }
+
+  def memoryStringToMb(str: String): Int = {
+    // Convert to bytes, rather than directly to MB, because when no units are specified the unit
+    // is assumed to be bytes
+    (JavaUtils.byteStringAsBytes(str) / 1024 / 1024).toInt
   }
 
   def bytesToString(size: Long): String = bytesToString(BigInt(size))
@@ -407,5 +414,62 @@ object Utils extends Logging {
   def classForName(className: String): Class[_] = {
     Class.forName(className, true, getContextOrClassLoader)
     // scalastyle:on classforname
+  }
+
+  def loadDefaultJindoProperties(conf: JindoConf, filePath: String = null): String = {
+    val path = Option(filePath).getOrElse(getDefaultPropertiesFile())
+    Option(path).foreach { confFile =>
+      getPropertiesFromFile(confFile).filter { case (k, v) =>
+        k.startsWith("spark.")
+      }.foreach { case (k, v) =>
+        conf.setIfMissing(k, v)
+        sys.props.getOrElseUpdate(k, v)
+      }
+    }
+    path
+  }
+
+  def getDefaultPropertiesFile(env: Map[String, String] = sys.env): String = {
+    env.get("JINDO_CONF_DIR")
+      .orElse(env.get("JINDO_HOME").map { t => s"$t${File.separator}conf" })
+      .map { t => new File(s"$t${File.separator}jindo-defaults.conf")}
+      .filter(_.isFile)
+      .map(_.getAbsolutePath)
+      .orNull
+  }
+
+  private[util] def trimExceptCRLF(str: String): String = {
+    val nonSpaceOrNaturalLineDelimiter: Char => Boolean = { ch =>
+      ch > ' ' || ch == '\r' || ch == '\n'
+    }
+
+    val firstPos = str.indexWhere(nonSpaceOrNaturalLineDelimiter)
+    val lastPos = str.lastIndexWhere(nonSpaceOrNaturalLineDelimiter)
+    if (firstPos >= 0 && lastPos >= 0) {
+      str.substring(firstPos, lastPos + 1)
+    } else {
+      ""
+    }
+  }
+
+  def getPropertiesFromFile(filename: String): Map[String, String] = {
+    val file = new File(filename)
+    require(file.exists(), s"Properties file $file does not exist")
+    require(file.isFile(), s"Properties file $file is not a normal file")
+
+    val inReader = new InputStreamReader(new FileInputStream(file), StandardCharsets.UTF_8)
+    try {
+      val properties = new Properties()
+      properties.load(inReader)
+      properties.stringPropertyNames().asScala
+        .map { k => (k, trimExceptCRLF(properties.getProperty(k))) }
+        .toMap
+
+    } catch {
+      case e: IOException =>
+        throw new JindoException(s"Failed when loading Jindo properties from $filename", e)
+    } finally {
+      inReader.close()
+    }
   }
 }
