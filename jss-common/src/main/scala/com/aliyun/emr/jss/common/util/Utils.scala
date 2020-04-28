@@ -36,82 +36,80 @@ import scala.util.control.{ControlThrowable, NonFatal}
 
 object Utils extends Logging {
 
+  def stringToSeq(str: String): Seq[String] = {
+    str.split(",").map(_.trim()).filter(_.nonEmpty)
+  }
+
   def checkHost(host: String) {
     assert(host != null && host.indexOf(':') == -1, s"Expected hostname (not IP) but got $host")
   }
 
-  /**
-    * Convert a time parameter such as (50s, 100ms, or 250us) to milliseconds for internal use. If
-    * no suffix is provided, the passed number is assumed to be in ms.
-    */
+  def getSystemProperties: Map[String, String] = {
+    System.getProperties.stringPropertyNames().asScala
+      .map(key => (key, System.getProperty(key))).toMap
+  }
+
   def timeStringAsMs(str: String): Long = {
     JavaUtils.timeStringAsMs(str)
   }
 
-  /**
-    * Convert a time parameter such as (50s, 100ms, or 250us) to seconds for internal use. If
-    * no suffix is provided, the passed number is assumed to be in seconds.
-    */
   def timeStringAsSeconds(str: String): Long = {
     JavaUtils.timeStringAsSec(str)
   }
 
-  /**
-    * Convert a passed byte string (e.g. 50b, 100k, or 250m) to bytes for internal use.
-    *
-    * If no suffix is provided, the passed number is assumed to be in bytes.
-    */
   def byteStringAsBytes(str: String): Long = {
     JavaUtils.byteStringAsBytes(str)
   }
 
-  /**
-    * Convert a passed byte string (e.g. 50b, 100k, or 250m) to kibibytes for internal use.
-    *
-    * If no suffix is provided, the passed number is assumed to be in kibibytes.
-    */
   def byteStringAsKb(str: String): Long = {
     JavaUtils.byteStringAsKb(str)
   }
 
-  /**
-    * Convert a passed byte string (e.g. 50b, 100k, or 250m) to mebibytes for internal use.
-    *
-    * If no suffix is provided, the passed number is assumed to be in mebibytes.
-    */
   def byteStringAsMb(str: String): Long = {
     JavaUtils.byteStringAsMb(str)
   }
 
-  /**
-    * Convert a passed byte string (e.g. 50b, 100k, or 250m, 500g) to gibibytes for internal use.
-    *
-    * If no suffix is provided, the passed number is assumed to be in gibibytes.
-    */
   def byteStringAsGb(str: String): Long = {
     JavaUtils.byteStringAsGb(str)
   }
 
-  @throws(classOf[JindoException])
-  def extractHostPortFromSparkUrl(sparkUrl: String): (String, Int) = {
-    try {
-      val uri = new java.net.URI(sparkUrl)
-      val host = uri.getHost
-      val port = uri.getPort
-      if (uri.getScheme != "spark" ||
-        host == null ||
-        port < 0 ||
-        (uri.getPath != null && !uri.getPath.isEmpty) || // uri.getPath returns "" instead of null
-        uri.getFragment != null ||
-        uri.getQuery != null ||
-        uri.getUserInfo != null) {
-        throw new JindoException("Invalid master URL: " + sparkUrl)
+  def bytesToString(size: Long): String = bytesToString(BigInt(size))
+
+  def bytesToString(size: BigInt): String = {
+    val EB = 1L << 60
+    val PB = 1L << 50
+    val TB = 1L << 40
+    val GB = 1L << 30
+    val MB = 1L << 20
+    val KB = 1L << 10
+
+    if (size >= BigInt(1L << 11) * EB) {
+      // The number is too large, show it in scientific notation.
+      BigDecimal(size, new MathContext(3, RoundingMode.HALF_UP)).toString() + " B"
+    } else {
+      val (value, unit) = {
+        if (size >= 2 * EB) {
+          (BigDecimal(size) / EB, "EB")
+        } else if (size >= 2 * PB) {
+          (BigDecimal(size) / PB, "PB")
+        } else if (size >= 2 * TB) {
+          (BigDecimal(size) / TB, "TB")
+        } else if (size >= 2 * GB) {
+          (BigDecimal(size) / GB, "GB")
+        } else if (size >= 2 * MB) {
+          (BigDecimal(size) / MB, "MB")
+        } else if (size >= 2 * KB) {
+          (BigDecimal(size) / KB, "KB")
+        } else {
+          (BigDecimal(size), "B")
+        }
       }
-      (host, port)
-    } catch {
-      case e: java.net.URISyntaxException =>
-        throw new JindoException("Invalid master URL: " + sparkUrl, e)
+      "%.1f %s".formatLocal(Locale.US, value, unit)
     }
+  }
+
+  def megabytesToString(megabytes: Long): String = {
+    bytesToString(megabytes * 1024L * 1024L)
   }
 
   @throws(classOf[JindoException])
@@ -146,6 +144,24 @@ object Utils extends Logging {
       case NonFatal(e) =>
         logError("Exception encountered", e)
         throw new IOException(e)
+    }
+  }
+
+  def tryLogNonFatalError(block: => Unit) {
+    try {
+      block
+    } catch {
+      case NonFatal(t) =>
+        logError(s"Uncaught exception in thread ${Thread.currentThread().getName}", t)
+    }
+  }
+
+  def tryOrExit(block: => Unit) {
+    try {
+      block
+    } catch {
+      case e: ControlThrowable => throw e
+      case t: Throwable => throw t
     }
   }
 
@@ -254,9 +270,6 @@ object Utils extends Logging {
     }
   }
 
-  /**
-    * Return whether the exception is caused by an address-port collision when binding.
-    */
   def isBindCollision(exception: Throwable): Boolean = {
     exception match {
       case e: BindException =>
@@ -282,14 +295,8 @@ object Utils extends Logging {
     new URI("file", null, "localhost", -1, "/" + fileName, null, null).getRawPath.substring(1)
   }
 
-  /**
-    * Whether the underlying operating system is Windows.
-    */
   val isWindows = SystemUtils.IS_OS_WINDOWS
 
-  /**
-    * Whether the underlying operating system is Mac OS X.
-    */
   val isMac = SystemUtils.IS_OS_MAC_OSX
 
   private lazy val localIpAddress: InetAddress = findLocalInetAddress()
@@ -353,24 +360,6 @@ object Utils extends Logging {
     customHostname.getOrElse(InetAddresses.toUriString(localIpAddress))
   }
 
-  def tryLogNonFatalError(block: => Unit) {
-    try {
-      block
-    } catch {
-      case NonFatal(t) =>
-        logError(s"Uncaught exception in thread ${Thread.currentThread().getName}", t)
-    }
-  }
-
-  def stringToSeq(str: String): Seq[String] = {
-    str.split(",").map(_.trim()).filter(_.nonEmpty)
-  }
-
-  def getSystemProperties: Map[String, String] = {
-    System.getProperties.stringPropertyNames().asScala
-      .map(key => (key, System.getProperty(key))).toMap
-  }
-
   private val MAX_DEFAULT_NETTY_THREADS = 8
 
   def fromJindoConf(_conf: JindoConf, module: String, numUsableCores: Int = 0): TransportConf = {
@@ -385,17 +374,15 @@ object Utils extends Logging {
 
     new TransportConf(module, new ConfigProvider {
       override def get(name: String): String = conf.get(name)
+
       override def get(name: String, defaultValue: String): String = conf.get(name, defaultValue)
+
       override def getAll(): java.lang.Iterable[java.util.Map.Entry[String, String]] = {
         conf.getAll.toMap.asJava.entrySet()
       }
     })
   }
 
-  /**
-    * Returns the default number of threads for both the Netty client and server thread pools.
-    * If numUsableCores is 0, we will use Runtime get an approximate number of available cores.
-    */
   private def defaultNumThreads(numUsableCores: Int): Int = {
     val availableCores =
       if (numUsableCores > 0) numUsableCores else Runtime.getRuntime.availableProcessors()
@@ -407,10 +394,11 @@ object Utils extends Logging {
   def getContextOrClassLoader: ClassLoader =
     Option(Thread.currentThread().getContextClassLoader).getOrElse(getClassLoader)
 
-  /** Determines whether the provided class is loadable in the current thread. */
   def classIsLoadable(clazz: String): Boolean = {
     // scalastyle:off classforname
-    Try { Class.forName(clazz, false, getContextOrClassLoader) }.isSuccess
+    Try {
+      Class.forName(clazz, false, getContextOrClassLoader)
+    }.isSuccess
     // scalastyle:on classforname
   }
 
@@ -420,53 +408,4 @@ object Utils extends Logging {
     Class.forName(className, true, getContextOrClassLoader)
     // scalastyle:on classforname
   }
-
-  def bytesToString(size: Long): String = bytesToString(BigInt(size))
-
-  def bytesToString(size: BigInt): String = {
-    val EB = 1L << 60
-    val PB = 1L << 50
-    val TB = 1L << 40
-    val GB = 1L << 30
-    val MB = 1L << 20
-    val KB = 1L << 10
-
-    if (size >= BigInt(1L << 11) * EB) {
-      // The number is too large, show it in scientific notation.
-      BigDecimal(size, new MathContext(3, RoundingMode.HALF_UP)).toString() + " B"
-    } else {
-      val (value, unit) = {
-        if (size >= 2 * EB) {
-          (BigDecimal(size) / EB, "EB")
-        } else if (size >= 2 * PB) {
-          (BigDecimal(size) / PB, "PB")
-        } else if (size >= 2 * TB) {
-          (BigDecimal(size) / TB, "TB")
-        } else if (size >= 2 * GB) {
-          (BigDecimal(size) / GB, "GB")
-        } else if (size >= 2 * MB) {
-          (BigDecimal(size) / MB, "MB")
-        } else if (size >= 2 * KB) {
-          (BigDecimal(size) / KB, "KB")
-        } else {
-          (BigDecimal(size), "B")
-        }
-      }
-      "%.1f %s".formatLocal(Locale.US, value, unit)
-    }
-  }
-
-  def megabytesToString(megabytes: Long): String = {
-    bytesToString(megabytes * 1024L * 1024L)
-  }
-
-  def tryOrExit(block: => Unit) {
-    try {
-      block
-    } catch {
-      case e: ControlThrowable => throw e
-      case t: Throwable => throw t
-    }
-  }
-
 }
