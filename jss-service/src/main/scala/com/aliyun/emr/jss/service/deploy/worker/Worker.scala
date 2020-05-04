@@ -1,26 +1,41 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
+ *
+ *    http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package com.aliyun.emr.jss.service.deploy.worker
 
-import java.text.SimpleDateFormat
-import java.util.concurrent.{Future => JFuture, ScheduledFuture => JScheduledFuture}
-import java.util.concurrent.TimeUnit
-import java.util.{Date, Locale, UUID}
+import java.util.Date
+import java.util.concurrent.{TimeUnit, Future => JFuture, ScheduledFuture => JScheduledFuture}
 
 import com.aliyun.emr.jss.common.JindoConf
 import com.aliyun.emr.jss.common.internal.Logging
 import com.aliyun.emr.jss.common.rpc._
 import com.aliyun.emr.jss.common.util.{ThreadUtils, Utils}
 import com.aliyun.emr.jss.protocol.RpcNameConstants
+import com.aliyun.emr.jss.protocol.message.ShuffleMessages.{RegisterShufflePartition, RegisterShufflePartitionResponse}
 import com.aliyun.emr.jss.service.deploy.DeployMessages._
 
-import scala.util.Random
 import scala.util.control.NonFatal
 
 private[deploy] class Worker(
     override val rpcEnv: RpcEnv,
-    memory: Int,
+    memory: Int, // In MB format
     masterRpcAddress: RpcAddress,
     endpointName: String,
-    val conf: JindoConf) extends ThreadSafeRpcEndpoint with Logging {
+    val conf: JindoConf) extends RpcEndpoint with Logging {
 
   private val host = rpcEnv.address.host
   private val port = rpcEnv.address.port
@@ -28,65 +43,47 @@ private[deploy] class Worker(
   Utils.checkHost(host)
   assert (port > 0)
 
-  // A scheduled executor used to send messages at the specified time.
-  private val forwordMessageScheduler =
-    ThreadUtils.newDaemonSingleThreadScheduledExecutor("worker-forward-message-scheduler")
-
-  private val HEARTBEAT_MILLIS = conf.getLong("jindo.worker.timeout", 60) * 1000 / 4
-
-  // For worker and executor IDs
-  private def createDateFormat = new SimpleDateFormat("yyyyMMddHHmmss", Locale.US)
-
-  // Model retries to connect to the master, after Hadoop's model.
-  // The first six attempts to reconnect are in shorter intervals (between 5 and 15 seconds)
-  // Afterwards, the next 10 attempts are between 30 and 90 seconds.
-  // A bit of randomness is introduced so that not all of the workers attempt to reconnect at
-  // the same time.
-  private val INITIAL_REGISTRATION_RETRIES = 6
-  private val TOTAL_REGISTRATION_RETRIES = INITIAL_REGISTRATION_RETRIES + 10
-  private val FUZZ_MULTIPLIER_INTERVAL_LOWER_BOUND = 0.500
-  private val REGISTRATION_RETRY_FUZZ_MULTIPLIER = {
-    val randomNumberGenerator = new Random(UUID.randomUUID.getMostSignificantBits)
-    randomNumberGenerator.nextDouble + FUZZ_MULTIPLIER_INTERVAL_LOWER_BOUND
-  }
-  private val INITIAL_REGISTRATION_RETRY_INTERVAL_SECONDS = (math.round(10 *
-    REGISTRATION_RETRY_FUZZ_MULTIPLIER))
-  private val PROLONGED_REGISTRATION_RETRY_INTERVAL_SECONDS = (math.round(60
-    * REGISTRATION_RETRY_FUZZ_MULTIPLIER))
-
-  private var master: Option[RpcEndpointRef] = None
-  private val workerUri = RpcEndpointAddress(rpcEnv.address, endpointName).toString
+  // Status
   private var registered = false
   private var connected = false
-  private val workerId = generateWorkerId()
-
   private var connectionAttemptCount = 0
-  private var registerMasterFutures: Array[JFuture[_]] = null
+
+  // Threads
+  private val forwordMessageScheduler =
+    ThreadUtils.newDaemonSingleThreadScheduledExecutor("worker-forward-message-scheduler")
+  private var registerMasterFuture: JFuture[_] = null
   private var registrationRetryTimer: Option[JScheduledFuture[_]] = None
-  // A thread pool for registering with masters. Because registering with a master is a blocking
-  // action, this thread pool must be able to create "masterRpcAddresses.size" threads at the same
-  // time so that we can register with all masters.
-  private val registerMasterThreadPool = ThreadUtils.newDaemonCachedThreadPool(
-    "worker-register-master-threadpool",
-    Seq(masterRpcAddress).length // Make sure we can register with all masters at the same time
-  )
 
-  private def generateWorkerId(): String = {
-    "worker-%s-%s-%d".format(createDateFormat.format(new Date), host, port)
-  }
+  // Configs
+  private val HEARTBEAT_MILLIS = conf.getLong("jindo.worker.timeout", 60) * 1000 / 4
+  private val REGISTRATION_RETRY_INTERVAL_SECONDS = 5
+  private val TOTAL_REGISTRATION_RETRIES = 10
 
+  // Structs
   var memoryUsed = 0
   def memoryFree: Int = memory - memoryUsed
 
+  private val workerId = "worker-%s-%s-%d".format(Utils.createDateFormat.format(new Date), host, port)
+  private var master: Option[RpcEndpointRef] = None
+
   override def onStart(): Unit = {
     assert(!registered)
-    logInfo("Starting Spark worker %s:%d with %s RAM".format(
+    logInfo("Starting Jindo worker %s:%d with %s RAM".format(
       host, port, Utils.megabytesToString(memory)))
     registerWithMaster()
   }
 
   override def onStop(): Unit = {
+    cancelLastRegistrationRetry()
+    forwordMessageScheduler.shutdownNow()
+  }
 
+  override def onDisconnected(remoteAddress: RpcAddress): Unit = {
+    if (masterRpcAddress == remoteAddress)  {
+      logInfo(s"Master $remoteAddress Disassociated !")
+      connected = false
+      registerWithMaster()
+    }
   }
 
   override def receive: PartialFunction[Any, Unit] = {
@@ -101,24 +98,24 @@ private[deploy] class Worker(
   }
 
   override def receiveAndReply(context: _root_.com.aliyun.emr.jss.common.rpc.RpcCallContext): _root_.scala.PartialFunction[Any, Unit] = {
-    null
+    case RegisterShufflePartition(applicationId, shuffleId, reduceId,
+      partitionMemoryBytes, mode, chunkIndex) =>
+      context.reply(RegisterShufflePartitionResponse(true))
   }
 
-  private def tryRegisterAllMasters(): Array[JFuture[_]] = {
-    Array(masterRpcAddress).map { masterAddress =>
-      registerMasterThreadPool.submit(new Runnable {
-        override def run(): Unit = {
-          try {
-            logInfo("Connecting to master " + masterAddress + "...")
-            val masterEndpoint = rpcEnv.setupEndpointRef(masterAddress, RpcNameConstants.MASTER_EP)
-            sendRegisterMessageToMaster(masterEndpoint)
-          } catch {
-            case ie: InterruptedException => // Cancelled
-            case NonFatal(e) => logWarning(s"Failed to connect to master $masterAddress", e)
-          }
+  private def tryRegisterMaster(): JFuture[_] = {
+    forwordMessageScheduler.submit(new Runnable {
+      override def run(): Unit = {
+        try {
+          logInfo("Connecting to master " + masterRpcAddress + "...")
+          val masterEndpoint = rpcEnv.setupEndpointRef(masterRpcAddress, RpcNameConstants.MASTER_EP)
+          sendRegisterMessageToMaster(masterEndpoint)
+        } catch {
+          case ie: InterruptedException => // Cancelled
+          case NonFatal(e) => logWarning(s"Failed to connect to master $masterRpcAddress", e)
         }
-      })
-    }
+      }
+    })
   }
 
   /**
@@ -158,41 +155,27 @@ private[deploy] class Worker(
             // registered == false && master != None means we lost the connection to master, so
             // masterRef cannot be used and we need to recreate it again. Note: we must not set
             // master to None due to the above comments.
-            if (registerMasterFutures != null) {
-              registerMasterFutures.foreach(_.cancel(true))
+            if (registerMasterFuture != null) {
+              registerMasterFuture.cancel(true)
             }
-            val masterAddress = masterRef.address
-            registerMasterFutures = Array(registerMasterThreadPool.submit(new Runnable {
+            registerMasterFuture = forwordMessageScheduler.submit(new Runnable {
               override def run(): Unit = {
                 try {
-                  logInfo("Connecting to master " + masterAddress + "...")
-                  val masterEndpoint = rpcEnv.setupEndpointRef(masterAddress, RpcNameConstants.MASTER_EP)
+                  logInfo("Connecting to master " + masterRpcAddress + "...")
+                  val masterEndpoint = rpcEnv.setupEndpointRef(masterRpcAddress, RpcNameConstants.MASTER_EP)
                   sendRegisterMessageToMaster(masterEndpoint)
                 } catch {
                   case ie: InterruptedException => // Cancelled
-                  case NonFatal(e) => logWarning(s"Failed to connect to master $masterAddress", e)
+                  case NonFatal(e) => logWarning(s"Failed to connect to master $masterRpcAddress", e)
                 }
               }
-            }))
+            })
           case None =>
-            if (registerMasterFutures != null) {
-              registerMasterFutures.foreach(_.cancel(true))
+            if (registerMasterFuture != null) {
+              registerMasterFuture.cancel(true)
             }
             // We are retrying the initial registration
-            registerMasterFutures = tryRegisterAllMasters()
-        }
-        // We have exceeded the initial registration retry threshold
-        // All retries from now on should use a higher interval
-        if (connectionAttemptCount == INITIAL_REGISTRATION_RETRIES) {
-          registrationRetryTimer.foreach(_.cancel(true))
-          registrationRetryTimer = Some(
-            forwordMessageScheduler.scheduleAtFixedRate(new Runnable {
-              override def run(): Unit = Utils.tryLogNonFatalError {
-                self.send(ReregisterWithMaster)
-              }
-            }, PROLONGED_REGISTRATION_RETRY_INTERVAL_SECONDS,
-              PROLONGED_REGISTRATION_RETRY_INTERVAL_SECONDS,
-              TimeUnit.SECONDS))
+            registerMasterFuture = tryRegisterMaster()
         }
       } else {
         logError("All masters are unresponsive! Giving up.")
@@ -205,9 +188,9 @@ private[deploy] class Worker(
     * Cancel last registeration retry, or do nothing if no retry
     */
   private def cancelLastRegistrationRetry(): Unit = {
-    if (registerMasterFutures != null) {
-      registerMasterFutures.foreach(_.cancel(true))
-      registerMasterFutures = null
+    if (registerMasterFuture != null) {
+      registerMasterFuture.cancel(true)
+      registerMasterFuture = null
     }
     registrationRetryTimer.foreach(_.cancel(true))
     registrationRetryTimer = None
@@ -219,7 +202,7 @@ private[deploy] class Worker(
     registrationRetryTimer match {
       case None =>
         registered = false
-        registerMasterFutures = tryRegisterAllMasters()
+        registerMasterFuture = tryRegisterMaster()
         connectionAttemptCount = 0
         registrationRetryTimer = Some(forwordMessageScheduler.scheduleAtFixedRate(
           new Runnable {
@@ -227,8 +210,8 @@ private[deploy] class Worker(
               Option(self).foreach(_.send(ReregisterWithMaster))
             }
           },
-          INITIAL_REGISTRATION_RETRY_INTERVAL_SECONDS,
-          INITIAL_REGISTRATION_RETRY_INTERVAL_SECONDS,
+          REGISTRATION_RETRY_INTERVAL_SECONDS,
+          REGISTRATION_RETRY_INTERVAL_SECONDS,
           TimeUnit.SECONDS))
       case Some(_) =>
         logInfo("Not spawning another attempt to register with the master, since there is an" +
@@ -246,13 +229,13 @@ private[deploy] class Worker(
     ))
   }
 
-  private def handleRegisterResponse(msg: RegisterWorkerResponse): Unit = synchronized {
+  private def handleRegisterResponse(msg: RegisterWorkerResponse): Unit = {
     msg match {
-      case RegisteredWorker(masterRef, masterAddress) =>
+      case RegisteredWorker =>
         logInfo("Successfully registered with master " + masterRpcAddress.toJindoURL)
         registered = true
+        master = Some(rpcEnv.setupEndpointRef(masterRpcAddress, RpcNameConstants.MASTER_EP))
         connected = true
-        master = Some(masterRef)
         forwordMessageScheduler.scheduleAtFixedRate(new Runnable {
           override def run(): Unit = Utils.tryLogNonFatalError {
             self.send(SendHeartbeat)

@@ -21,6 +21,7 @@ import java.io.{File, FileInputStream, IOException, InputStreamReader}
 import java.math.{MathContext, RoundingMode}
 import java.net._
 import java.nio.charset.StandardCharsets
+import java.text.SimpleDateFormat
 import java.util.{Locale, Properties}
 
 import com.aliyun.emr.jss.common.{JindoConf, JindoException}
@@ -36,6 +37,8 @@ import scala.util.Try
 import scala.util.control.{ControlThrowable, NonFatal}
 
 object Utils extends Logging {
+
+  def createDateFormat = new SimpleDateFormat("yyyyMMddHHmmss", Locale.US)
 
   def stringToSeq(str: String): Seq[String] = {
     str.split(",").map(_.trim()).filter(_.nonEmpty)

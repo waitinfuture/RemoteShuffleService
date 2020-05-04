@@ -1,5 +1,7 @@
 package com.aliyun.emr.jss.service.deploy.master
 
+import java.util.concurrent.ConcurrentSkipListSet
+
 import com.aliyun.emr.jss.common.rpc.RpcEndpointRef
 import com.aliyun.emr.jss.common.util.Utils
 
@@ -8,7 +10,7 @@ private[jss] class WorkerInfo(
     val host: String,
     val port: Int,
     val memory: Int,
-    val endpoint: RpcEndpointRef) extends Serializable {
+    val endpoint: RpcEndpointRef) extends Serializable with Comparable[WorkerInfo] {
 
   Utils.checkHost(host)
   assert(port > 0)
@@ -16,6 +18,7 @@ private[jss] class WorkerInfo(
   @transient var state: WorkerState.Value = _
   @transient var memoryUsed: Int = _
   @transient var lastHeartbeat: Long = _
+  @transient val servePartitionChunks = new ConcurrentSkipListSet[String]()
 
   init()
 
@@ -37,8 +40,14 @@ private[jss] class WorkerInfo(
     host + ":" + port
   }
 
-  def setMemoryUsed(memoryUsed: Int): Unit = {
-    this.memoryUsed = memoryUsed
+  def addShufflePartition(chunkIndex: String, partitionMemory: Int) {
+    servePartitionChunks.add(chunkIndex)
+    memoryUsed += partitionMemory
+  }
+
+  def removeShufflePartition(chunkIndex: String, partitionMemory: Int) {
+    servePartitionChunks.remove(chunkIndex)
+    memoryUsed -= partitionMemory
   }
 
   def setState(state: WorkerState.Value): Unit = {
@@ -46,4 +55,14 @@ private[jss] class WorkerInfo(
   }
 
   def isAlive(): Boolean = this.state == WorkerState.ALIVE
+
+  override def compareTo(o: WorkerInfo): Int = {
+    if (o.id == this.id) {
+      0
+    } else if (o.id > this.id) {
+      -1
+    } else {
+      1
+    }
+  }
 }

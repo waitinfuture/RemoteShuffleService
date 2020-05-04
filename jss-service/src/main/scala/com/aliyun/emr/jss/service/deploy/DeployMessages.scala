@@ -7,6 +7,9 @@ private[deploy] sealed trait DeployMessage extends Serializable
 
 private[deploy] object DeployMessages {
 
+  // Master to Itself
+  case object CheckForWorkerTimeOut
+
   // Worker to Master
   case class RegisterWorker(
       id: String,
@@ -24,12 +27,13 @@ private[deploy] object DeployMessages {
 
   sealed trait RegisterWorkerResponse
 
-  case class RegisteredWorker(master: RpcEndpointRef, masterAddress: RpcAddress) extends DeployMessage with RegisterWorkerResponse
+  case object RegisteredWorker extends DeployMessage with RegisterWorkerResponse
 
   case class RegisterWorkerFailed(message: String) extends DeployMessage with RegisterWorkerResponse
 
   case object ReregisterWithMaster // used when a worker attempts to reconnect to a master
 
-  case object SendHeartbeat
+  case object SendHeartbeat extends DeployMessage
 
+  case object ReconnectWorker extends DeployMessage
 }
