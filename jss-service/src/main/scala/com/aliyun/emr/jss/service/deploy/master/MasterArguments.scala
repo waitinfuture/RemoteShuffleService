@@ -28,11 +28,11 @@ class MasterArguments(args: Array[String], conf: JindoConf) {
   var port = 9099
   var propertiesFile: String = null
 
-  if (System.getenv("SPARK_MASTER_HOST") != null) {
-    host = System.getenv("SPARK_MASTER_HOST")
+  if (System.getenv("SHUFFLE_MASTER_HOST") != null) {
+    host = System.getenv("SHUFFLE_MASTER_HOST")
   }
-  if (System.getenv("SPARK_MASTER_PORT") != null) {
-    port = System.getenv("SPARK_MASTER_PORT").toInt
+  if (System.getenv("SHUFFLE_MASTER_PORT") != null) {
+    port = System.getenv("SHUFFLE_MASTER_PORT").toInt
   }
 
   parse(args.toList)

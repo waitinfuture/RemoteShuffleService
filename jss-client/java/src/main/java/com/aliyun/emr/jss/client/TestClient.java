@@ -11,5 +11,8 @@ public class TestClient
         ShuffleClientImpl client = new ShuffleClientImpl();
         client.init();
         List<PartitionLocation> result = client.registerShuffle("linxuewei", 1, 20, 5);
+        for (int i = 0; i < result.size(); i++) {
+            System.out.println(result.get(i));
+        }
     }
 }

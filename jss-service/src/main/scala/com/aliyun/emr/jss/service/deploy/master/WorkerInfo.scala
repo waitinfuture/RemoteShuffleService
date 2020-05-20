@@ -1,6 +1,6 @@
 package com.aliyun.emr.jss.service.deploy.master
 
-import java.util.concurrent.ConcurrentSkipListSet
+import java.util
 
 import com.aliyun.emr.jss.common.rpc.RpcEndpointRef
 import com.aliyun.emr.jss.common.util.Utils
@@ -15,14 +15,16 @@ private[jss] class WorkerInfo(
   Utils.checkHost(host)
   assert(port > 0)
 
-  @transient var state: WorkerState.Value = _
-  @transient var memoryUsed: Int = _
-  @transient var lastHeartbeat: Long = _
-  @transient val servePartitionChunks = new ConcurrentSkipListSet[String]()
+  var state: WorkerState.Value = _
+  var memoryUsed: Int = _
+  var lastHeartbeat: Long = _
+  // stores PartitionLocation's UUID
+  val masterPartitionLocations = new util.ArrayList[String]()
+  val slavePartitionLocations = new util.ArrayList[String]()
 
   init()
 
-  def memoryFree: Int = memory - memoryUsed
+  def freeMemory: Int = memory - memoryUsed
 
   private def readObject(in: java.io.ObjectInputStream): Unit = Utils.tryOrIOException {
     in.defaultReadObject()
@@ -40,14 +42,30 @@ private[jss] class WorkerInfo(
     host + ":" + port
   }
 
-  def addShufflePartition(chunkIndex: String, partitionMemory: Int) {
-    servePartitionChunks.add(chunkIndex)
+  def addMasterPartition(partitionLocationId: String, partitionMemory: Int) {
+    masterPartitionLocations.add(partitionLocationId)
     memoryUsed += partitionMemory
   }
 
-  def removeShufflePartition(chunkIndex: String, partitionMemory: Int) {
-    servePartitionChunks.remove(chunkIndex)
+  def addSlavePartition(partitionLocationId: String, partitionMemory: Int): Unit = {
+    slavePartitionLocations.add(partitionLocationId)
+    memoryUsed += partitionMemory
+  }
+
+  def removeMasterPartition(partitionLocationId: String, partitionMemory: Int) {
+    masterPartitionLocations.remove(partitionLocationId)
     memoryUsed -= partitionMemory
+  }
+
+  def removeSlavePartition(partitionLocationId: String, partitionMemory: Int): Unit = {
+    slavePartitionLocations.remove(partitionLocationId)
+    memoryUsed -= partitionMemory
+  }
+
+  def clearAll(): Unit = {
+    memoryUsed = 0
+    masterPartitionLocations.clear()
+    slavePartitionLocations.clear()
   }
 
   def setState(state: WorkerState.Value): Unit = {

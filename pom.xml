@@ -121,6 +121,18 @@
                 <version>${slf4j.version}</version>
                 <!-- runtime scope is appropriate, but causes SBT build problems -->
             </dependency>
+            <dependency>
+                <groupId>junit</groupId>
+                <artifactId>junit</artifactId>
+                <scope>test</scope>
+                <version>4.12</version>
+            </dependency>
+            <dependency>
+                <groupId>org.scalatest</groupId>
+                <artifactId>scalatest_${scala.binary.version}</artifactId>
+                <scope>test</scope>
+                <version>3.0.3</version>
+            </dependency>
         </dependencies>
     </dependencyManagement>
 

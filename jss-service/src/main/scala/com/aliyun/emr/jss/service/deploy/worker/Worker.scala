@@ -17,18 +17,19 @@
 
 package com.aliyun.emr.jss.service.deploy.worker
 
+import java.util
 import java.util.Date
 import java.util.concurrent.{TimeUnit, Future => JFuture, ScheduledFuture => JScheduledFuture}
+import scala.util.control.Breaks._
+import scala.collection.JavaConversions._
 
 import com.aliyun.emr.jss.common.JindoConf
 import com.aliyun.emr.jss.common.internal.Logging
 import com.aliyun.emr.jss.common.rpc._
 import com.aliyun.emr.jss.common.util.{ThreadUtils, Utils}
 import com.aliyun.emr.jss.protocol.RpcNameConstants
-import com.aliyun.emr.jss.protocol.message.ShuffleMessages.{RegisterShufflePartition, RegisterShufflePartitionResponse}
+import com.aliyun.emr.jss.protocol.message.ShuffleMessages.{ClearBuffers, ClearBuffersResponse, RegisterPartition, RegisterPartitionResponse, ReserveBuffers, ReserveBuffersResponse}
 import com.aliyun.emr.jss.service.deploy.DeployMessages._
-
-import scala.util.control.NonFatal
 
 private[deploy] class Worker(
     override val rpcEnv: RpcEnv,
@@ -47,6 +48,13 @@ private[deploy] class Worker(
   private var registered = false
   private var connected = false
   private var connectionAttemptCount = 0
+
+  // Memory Pool
+  private val MemoryPoolCapacity = conf.getLong("ess.memorypool.capacity", 1 * 1024 * 1024 * 1024)
+  private val ChunkSize = conf.getLong("ess.chunksize", 32 * 1024 * 1024)
+  private val memoryPool = new MemoryPool(MemoryPoolCapacity, ChunkSize)
+  private val masterPartitionChunks = new util.HashMap[String, DoubleChunk]()
+  private val slavePartitionChunks = new util.HashMap[String, DoubleChunk]()
 
   // Threads
   private val forwordMessageScheduler =
@@ -97,10 +105,71 @@ private[deploy] class Worker(
       if (connected) { sendToMaster(Heartbeat(workerId, self)) }
   }
 
+  var flag = false
+
+  // TODO
   override def receiveAndReply(context: _root_.com.aliyun.emr.jss.common.rpc.RpcCallContext): _root_.scala.PartialFunction[Any, Unit] = {
-    case RegisterShufflePartition(applicationId, shuffleId, reduceId,
+    case RegisterPartition(applicationId, shuffleId, reduceId,
       partitionMemoryBytes, mode, chunkIndex) =>
-      context.reply(RegisterShufflePartitionResponse(true))
+      context.reply(RegisterPartitionResponse(true))
+    case ReserveBuffers(masterLocations, slaveLocations) =>
+      val masterDoubleChunks = new util.HashMap[String, DoubleChunk]()
+      breakable({
+        for (ind <- 0 until masterLocations.size()) {
+          val ch1 = memoryPool.allocateChunk()
+          if (ch1 == null) {
+            break()
+          } else {
+            val ch2 = memoryPool.allocateChunk()
+            if (ch2 == null) {
+              memoryPool.returnChunk(ch1)
+              break()
+            } else {
+              masterDoubleChunks.put(masterLocations.get(ind).getUUID,
+                new DoubleChunk(ch1, ch2, memoryPool, masterLocations.get(ind).getUUID))
+            }
+          }
+        }
+      })
+      if (masterDoubleChunks.size() < masterLocations.size()) {
+        logInfo("not all master partition satisfied, return chunks")
+        masterDoubleChunks.foreach(entry => entry._2.returnChunks())
+        context.reply(ReserveBuffersResponse(false))
+      } else {
+        val slaveDoubleChunks = new util.HashMap[String, DoubleChunk]()
+        breakable({
+          for (ind <- 0 until slaveLocations.size()) {
+            val ch1 = memoryPool.allocateChunk()
+            if (ch1 == null) {
+              break()
+            } else {
+              val ch2 = memoryPool.allocateChunk()
+              if (ch2 == null) {
+                break()
+              } else {
+                slaveDoubleChunks.put(slaveLocations.get(ind).getUUID,
+                  new DoubleChunk(ch1, ch2, memoryPool, slaveLocations.get(ind).getUUID))
+              }
+            }
+          }
+        })
+        if (slaveDoubleChunks.size() < slaveDoubleChunks.size()) {
+          logInfo("not all slave partition satisfied, return chunks")
+          masterDoubleChunks.foreach(entry => entry._2.returnChunks())
+          slaveDoubleChunks.foreach(entry => entry._2.returnChunks())
+          context.reply(ReserveBuffersResponse(false))
+        } else {
+          masterPartitionChunks.synchronized {
+            masterPartitionChunks.putAll(masterDoubleChunks)
+          }
+          slavePartitionChunks.synchronized {
+            slavePartitionChunks.putAll(slaveDoubleChunks)
+          }
+          context.reply(ReserveBuffersResponse(true))
+        }
+      }
+    case ClearBuffers(masterLocations, slaveLocations) =>
+      context.reply(ClearBuffersResponse(true))
   }
 
   private def tryRegisterMaster(): JFuture[_] = {
@@ -232,7 +301,7 @@ private[deploy] class Worker(
   private def handleRegisterResponse(msg: RegisterWorkerResponse): Unit = {
     msg match {
       case RegisteredWorker =>
-        logInfo("Successfully registered with master " + masterRpcAddress.toJindoURL)
+        logInfo("Successfully registered with master " + masterRpcAddress.toEssURL)
         registered = true
         master = Some(rpcEnv.setupEndpointRef(masterRpcAddress, RpcNameConstants.MASTER_EP))
         connected = true

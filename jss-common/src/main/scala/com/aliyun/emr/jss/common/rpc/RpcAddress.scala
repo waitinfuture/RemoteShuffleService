@@ -28,7 +28,7 @@ private[jss] case class RpcAddress(host: String, port: Int) {
   def hostPort: String = host + ":" + port
 
   /** Returns a string in the form of "spark://host:port". */
-  def toJindoURL: String = "jindo://" + hostPort
+  def toEssURL: String = "ess://" + hostPort
 
   override def toString: String = hostPort
 }

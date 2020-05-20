@@ -1,59 +1,71 @@
 package com.aliyun.emr.jss.protocol;
 
 import java.io.Serializable;
-import java.net.URI;
 
 public final class PartitionLocation implements Serializable
 {
-    private String applicationId;
-    private int shuffleId;
-    private int reduceId;
-    private URI jssWorkerUrl;
-    private boolean isActive;
+    public enum Mode {
+        Master, Slave
+    };
 
-    public PartitionLocation(String applicationId, int shuffleId, int reduceId, URI jssWorkerUrl) {
-        this.applicationId = applicationId;
-        this.shuffleId = shuffleId;
-        this.reduceId = reduceId;
-        this.jssWorkerUrl = jssWorkerUrl;
-        this.isActive = false;
+    private String UUID;
+    private String host;
+    private int port;
+    private Mode mode;
+    private PartitionLocation slavePartitionLocation;
+
+    public PartitionLocation(String UUID, String host, int port, Mode mode) {
+        this.UUID = UUID;
+        this.host = host;
+        this.port = port;
+        this.mode = mode;
     }
 
-    public PartitionLocation(String applicationId, int shuffleId, int reduceId, URI jssWorkerUrl, boolean isActive) {
-        this.applicationId = applicationId;
-        this.shuffleId = shuffleId;
-        this.reduceId = reduceId;
-        this.jssWorkerUrl = jssWorkerUrl;
-        this.isActive = isActive;
+    public PartitionLocation(String UUID, String host, int port, PartitionLocation slave) {
+        this.UUID = UUID;
+        this.host = host;
+        this.port = port;
+        this.mode = Mode.Master;
+        this.slavePartitionLocation = slave;
     }
 
-    public String getApplicationId()
-    {
-        return applicationId;
+    public String getUUID() {
+        return UUID;
     }
 
-    public int getShuffleId()
-    {
-        return shuffleId;
+    public String getHost() {
+        return host;
     }
 
-    public int getReduceId()
-    {
-        return reduceId;
+    public void setHost(String host) {
+        this.host = host;
     }
 
-    public boolean isActive()
-    {
-        return isActive;
+    public int getPort() {
+        return port;
     }
 
-    public void setActive(boolean active)
-    {
-        isActive = active;
+    public void setPort(int port) {
+        this.port = port;
     }
 
-    public URI getJssWorkerUrl()
-    {
-        return jssWorkerUrl;
+    public Mode getMode() {
+        return mode;
+    }
+
+    public void setMode(Mode mode) {
+        this.mode = mode;
+    }
+
+    public PartitionLocation getSlavePartitionLocation() {
+        return slavePartitionLocation;
+    }
+
+    public void setSlavePartitionLocation(PartitionLocation slavePartitionLocation) {
+        this.slavePartitionLocation = slavePartitionLocation;
+    }
+
+    public String toString() {
+        return UUID + "\n" + host + ":" + port + "\n" + "Mode: " + mode;
     }
 }

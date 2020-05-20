@@ -58,7 +58,7 @@ private[jss] class NettyStreamManager(rpcEnv: NettyRpcEnv)
     require(existingPath == null || existingPath == file,
       s"File ${file.getName} was already registered with a different path " +
         s"(old path = $existingPath, new path = $file")
-    s"${rpcEnv.address.toJindoURL}/files/${Utils.encodeFileNameToURIRawPath(file.getName())}"
+    s"${rpcEnv.address.toEssURL}/files/${Utils.encodeFileNameToURIRawPath(file.getName())}"
   }
 
   override def addJar(file: File): String = {
@@ -66,14 +66,14 @@ private[jss] class NettyStreamManager(rpcEnv: NettyRpcEnv)
     require(existingPath == null || existingPath == file,
       s"File ${file.getName} was already registered with a different path " +
         s"(old path = $existingPath, new path = $file")
-    s"${rpcEnv.address.toJindoURL}/jars/${Utils.encodeFileNameToURIRawPath(file.getName())}"
+    s"${rpcEnv.address.toEssURL}/jars/${Utils.encodeFileNameToURIRawPath(file.getName())}"
   }
 
   override def addDirectory(baseUri: String, path: File): String = {
     val fixedBaseUri = validateDirectoryUri(baseUri)
     require(dirs.putIfAbsent(fixedBaseUri.stripPrefix("/"), path) == null,
       s"URI '$fixedBaseUri' already registered.")
-    s"${rpcEnv.address.toJindoURL}$fixedBaseUri"
+    s"${rpcEnv.address.toEssURL}$fixedBaseUri"
   }
 
 }

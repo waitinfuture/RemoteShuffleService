@@ -423,7 +423,7 @@ object Utils extends Logging {
     val path = Option(filePath).getOrElse(getDefaultPropertiesFile())
     Option(path).foreach { confFile =>
       getPropertiesFromFile(confFile).filter { case (k, v) =>
-        k.startsWith("spark.")
+        k.startsWith("emr.shuffle.")
       }.foreach { case (k, v) =>
         conf.setIfMissing(k, v)
         sys.props.getOrElseUpdate(k, v)

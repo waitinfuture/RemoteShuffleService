@@ -11,6 +11,7 @@ import com.aliyun.emr.jss.protocol.RpcNameConstants;
 import com.aliyun.emr.jss.protocol.message.ShuffleMessages;
 import scala.reflect.ClassTag$;
 
+import java.io.InputStream;
 import java.util.List;
 
 public class ShuffleClientImpl extends ShuffleClient
@@ -24,17 +25,20 @@ public class ShuffleClientImpl extends ShuffleClient
             0,
             new JindoConf(), true);
         _master = _env.setupEndpointRef(new RpcAddress(localhost, 9099), RpcNameConstants.MASTER_EP);
-
     }
 
     @Override
     public List<PartitionLocation> registerShuffle(String applicationId, int shuffleId, int numMappers, int numPartitions)
     {
-        Object obj = _master.askSync(
-            new ShuffleMessages.RegisterShuffle(applicationId, shuffleId, numMappers, numPartitions),
-            ClassTag$.MODULE$.apply(ShuffleMessages.RegisterShuffleResponse.class)
+        ShuffleMessages.RegisterResponse response = _master.askSync(
+            new ShuffleMessages.Register(applicationId, shuffleId, numMappers, numPartitions),
+            ClassTag$.MODULE$.apply(ShuffleMessages.RegisterResponse.class)
         );
-        return null;
+        if (response.success()) {
+            return response.partitionLocations();
+        } else {
+            return null;
+        }
     }
 
     @Override
@@ -43,8 +47,7 @@ public class ShuffleClientImpl extends ShuffleClient
 
     }
 
-    @Override
-    public PartitionLocation revive(int mapperId, PartitionLocation location)
+    private PartitionLocation revive(int mapperId, PartitionLocation location)
     {
         return null;
     }
@@ -56,8 +59,8 @@ public class ShuffleClientImpl extends ShuffleClient
     }
 
     @Override
-    public void readPartition(String applicationId, int shuffleId, int reduceId)
+    public InputStream readPartition(String applicationId, int shuffleId, int reduceId)
     {
-
+        return null;
     }
 }

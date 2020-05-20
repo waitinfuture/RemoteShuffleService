@@ -1,27 +1,27 @@
 package com.aliyun.emr.jss.service.deploy.master
 
-import java.net.URI
-import java.util.concurrent.{ConcurrentHashMap, ConcurrentSkipListSet, ScheduledFuture, TimeUnit}
+import java.util
+import java.util.concurrent.{ConcurrentHashMap, ScheduledFuture, TimeUnit}
+
+import scala.collection.JavaConversions._
+import scala.collection.JavaConverters._
+import scala.util.Random
 
 import com.aliyun.emr.jss.common.JindoConf
 import com.aliyun.emr.jss.common.internal.Logging
 import com.aliyun.emr.jss.common.rpc.{RpcAddress, RpcEndpoint, RpcEnv}
 import com.aliyun.emr.jss.common.util.{ThreadUtils, Utils}
 import com.aliyun.emr.jss.protocol.{PartitionLocation, RpcNameConstants}
-import com.aliyun.emr.jss.protocol.message.ShuffleMessages.{RegisterShuffle, RegisterShufflePartition, RegisterShufflePartitionResponse, RegisterShuffleResponse}
+import com.aliyun.emr.jss.protocol.message.ShuffleMessages._
 import com.aliyun.emr.jss.service.deploy.DeployMessages._
-
-import scala.collection.JavaConverters._
-import scala.collection.mutable.ArrayBuffer
-import scala.concurrent.Future
-import scala.concurrent.duration.Duration
-import scala.util.{Failure, Random, Success}
-import scala.util.control.Breaks._
 
 private[deploy] class Master(
     override val rpcEnv: RpcEnv,
     address: RpcAddress,
     val conf: JindoConf) extends RpcEndpoint with Logging {
+
+  type WorkerResource = java.util.Map[WorkerInfo,
+    (java.util.List[PartitionLocation], java.util.List[PartitionLocation])]
 
   // Threads
   private val forwardMessageThread =
@@ -33,12 +33,13 @@ private[deploy] class Master(
   )
 
   // Configs
-  private val PARTITION_MEMORY_MB = conf.getSizeAsMb("jindo.partition.memory", "8m").toInt
-  private val WORKER_TIMEOUT_MS = conf.getLong("jindo.worker.timeout", 60) * 1000
+  private val PARTITION_MEMORY_MB = conf.getSizeAsMb("ess.partition.memory", "8m").toInt
+  private val WORKER_TIMEOUT_MS = conf.getLong("ess.worker.timeout", 60) * 1000
   private val REAPER_ITERATIONS = 15
 
   // Structs
-  val workers = new ConcurrentSkipListSet[WorkerInfo]()
+  val workers = new util.ArrayList[WorkerInfo]()
+  val workersLock = new Object()
   private val idToWorker = new ConcurrentHashMap[String, WorkerInfo]()
   private val addressToWorker = new ConcurrentHashMap[RpcAddress, WorkerInfo]
   private val partitionChunkIndex = new ConcurrentHashMap[String, Int]()
@@ -88,6 +89,7 @@ private[deploy] class Master(
       timeOutDeadWorkers()
 
     case Heartbeat(workerId, worker) =>
+      logDebug(s"received heartbeat from ${workerId}")
       idToWorker.get(workerId) match {
         case workerInfo: WorkerInfo =>
           workerInfo.lastHeartbeat = System.currentTimeMillis()
@@ -123,71 +125,73 @@ private[deploy] class Master(
       }
   }
 
+  def reserveBuffers(slots: WorkerResource): util.List[WorkerInfo] = {
+    val failed = new util.ArrayList[WorkerInfo]()
+
+    slots.foreach(entry => {
+      val res = entry._1.endpoint.askSync[ReserveBuffersResponse](
+        ReserveBuffers(entry._2._1, entry._2._2))
+      if (res.success) {
+        logInfo(s"Successfully allocated partition buffer from worker ${entry._1.hostPort}")
+      } else {
+        logInfo(s"Failed to reserve buffers from worker ${entry._1.hostPort}")
+        failed.add(entry._1)
+      }
+    })
+
+    failed
+  }
+
+  def clearBuffers(slots: WorkerResource): Unit = {
+    slots.foreach(entry => {
+      val res = entry._1.endpoint.askSync[ClearBuffersResponse](
+        ClearBuffers(entry._2._1, entry._2._2)
+      )
+      if (res.success) {
+        logInfo(s"ClearBuffers success for worker ${entry._1}")
+      } else {
+        logInfo(s"Failed to clear buffers for worker ${entry._1}, retry once")
+        entry._1.endpoint.ask[ClearBuffersResponse](
+          ClearBuffers(entry._2._1, entry._2._2)
+        )
+      }
+    })
+  }
+
   override def receiveAndReply(context: _root_.com.aliyun.emr.jss.common.rpc.RpcCallContext): _root_.scala.PartialFunction[Any, Unit] = {
-    case RegisterShuffle(applicationId, shuffleId, numMappers, numPartitions) =>
-      var success: Boolean = true
-      val partitionLocation = new ArrayBuffer[PartitionLocation]()
-      var successReturnCount: Int = 0
-      val futures = new ArrayBuffer[Future[RegisterShufflePartitionResponse]]()
-      breakable({
-        for (reduceId <- 0 until numPartitions) {
-          val picked = choosePartitionLocation(applicationId, shuffleId, reduceId)
-          if (picked == null) {
-            success = false
-            break()
-          } else {
-            val masterChunkIndex = getChunkIndex(applicationId, shuffleId, reduceId, 1)
-            val slaveChunkIndex = getChunkIndex(applicationId, shuffleId, reduceId, 0)
+    case Register(applicationId, shuffleId, numMappers, numPartitions) =>
+      logInfo(s"received register shuffle, ${applicationId}, ${shuffleId}, ${numMappers}, ${numPartitions}")
 
-            picked._1.addShufflePartition(masterChunkIndex, PARTITION_MEMORY_MB)
-            val m_tmp = picked._1.endpoint.ask[RegisterShufflePartitionResponse](
-              RegisterShufflePartition(
-                applicationId,
-                shuffleId,
-                reduceId,
-                PARTITION_MEMORY_MB,
-                1, masterChunkIndex))
-            m_tmp.onComplete({
-              case Success(_) =>
-                partitionLocation.append(
-                  new PartitionLocation(applicationId, shuffleId, reduceId,
-                    new URI(picked._1.endpoint.address.toJindoURL))
-                )
-                successReturnCount += 1
-              case Failure(_) =>
-                picked._1.removeShufflePartition(masterChunkIndex, PARTITION_MEMORY_MB)
-            })(ThreadUtils.sameThread)
-            futures.append(m_tmp)
+      val slots = workers.synchronized {
+        MasterUtil.offerSlots(workers, PARTITION_MEMORY_MB, numPartitions)
+      }
 
-            picked._2.addShufflePartition(slaveChunkIndex, PARTITION_MEMORY_MB)
-            val s_tmp = picked._2.endpoint.ask[RegisterShufflePartitionResponse](
-              RegisterShufflePartition(
-                applicationId,
-                shuffleId,
-                reduceId,
-                PARTITION_MEMORY_MB,
-                1, slaveChunkIndex))
-            s_tmp.onComplete({
-              case Success(_) =>
-                successReturnCount += 1
-              case Failure(_) =>
-                picked._2.removeShufflePartition(slaveChunkIndex, PARTITION_MEMORY_MB)
-            })(ThreadUtils.sameThread)
-            futures.append(s_tmp)
-          }
+      if (slots == null || slots.isEmpty()) {
+        logError("offerSlots failed!")
+        context.reply(RegisterResponse(false, null))
+      } else {
+        // reserve buffers
+        var failed = reserveBuffers(slots)
+
+        // retry once if any failed
+        failed = if (failed.nonEmpty) {
+          logInfo("reserve buffers failed, retry once")
+          reserveBuffers(slots.filterKeys(worker => failed.contains(worker)))
+        } else null
+
+        // register failed, clear allocated resources
+        if (failed != null && !failed.isEmpty()) {
+          logError("reserve buffers still fail after retry, clear buffers")
+          clearBuffers(slots)
+          logInfo("response fail to reserve buffers")
+          context.reply(RegisterResponse(false, null))
+        } else {
+          // register shuffle success
+          val locations: List[PartitionLocation] = slots.flatMap(_._2._1).toList
+          logInfo(s"going to reply register success, locations ${locations}")
+          context.reply(RegisterResponse(true, locations))
         }
-      })
-
-      for (future <- futures) {
-        ThreadUtils.awaitReady(future, Duration.Inf)
       }
-
-      if (successReturnCount != numPartitions * 2) {
-        // failed some partition does not register success
-        success = false
-        // return resource to workerInfo
-      }
-      context.reply(RegisterShuffleResponse(success, partitionLocation.toList))
   }
 
   private def choosePartitionLocation(
@@ -195,7 +199,7 @@ private[deploy] class Master(
       shuffleId: Int,
       reduceId: Int): (WorkerInfo, WorkerInfo) = {
     val available = workers.asScala.filter(w => {
-      if (w.memoryFree > PARTITION_MEMORY_MB && w.state == WorkerState.ALIVE) {
+      if (w.freeMemory > PARTITION_MEMORY_MB && w.state == WorkerState.ALIVE) {
         true
       } else {
         false
