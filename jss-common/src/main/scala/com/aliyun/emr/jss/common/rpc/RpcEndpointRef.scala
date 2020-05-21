@@ -17,7 +17,7 @@
 
 package com.aliyun.emr.jss.common.rpc
 
-import com.aliyun.emr.jss.common.JindoConf
+import com.aliyun.emr.jss.common.EssConf
 import com.aliyun.emr.jss.common.internal.Logging
 
 import scala.concurrent.Future
@@ -27,7 +27,7 @@ import com.aliyun.emr.jss.common.util.RpcUtils
 /**
  * A reference for a remote [[RpcEndpoint]]. [[RpcEndpointRef]] is thread-safe.
  */
-private[jss] abstract class RpcEndpointRef(conf: JindoConf)
+private[jss] abstract class RpcEndpointRef(conf: EssConf)
   extends Serializable with Logging {
 
   private[this] val maxRetries = RpcUtils.numRetries(conf)

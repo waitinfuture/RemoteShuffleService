@@ -6,16 +6,15 @@ import com.aliyun.emr.jss.common.rpc.RpcEndpointRef
 import com.aliyun.emr.jss.common.util.Utils
 
 private[jss] class WorkerInfo(
-    val id: String,
-    val host: String,
-    val port: Int,
-    val memory: Int,
-    val endpoint: RpcEndpointRef) extends Serializable with Comparable[WorkerInfo] {
+  val host: String,
+  val port: Int,
+  val memory: Int,
+  val partitionSize: Int,
+  val endpoint: RpcEndpointRef) extends Serializable {
 
   Utils.checkHost(host)
   assert(port > 0)
 
-  var state: WorkerState.Value = _
   var memoryUsed: Int = _
   var lastHeartbeat: Long = _
   // stores PartitionLocation's UUID
@@ -32,7 +31,6 @@ private[jss] class WorkerInfo(
   }
 
   private def init() {
-    state = WorkerState.ALIVE
     memoryUsed = 0
     lastHeartbeat = System.currentTimeMillis()
   }
@@ -42,9 +40,9 @@ private[jss] class WorkerInfo(
     host + ":" + port
   }
 
-  def addMasterPartition(partitionLocationId: String, partitionMemory: Int) {
+  def addMasterPartition(partitionLocationId: String) {
     masterPartitionLocations.add(partitionLocationId)
-    memoryUsed += partitionMemory
+    memoryUsed += partitionSize
   }
 
   def addSlavePartition(partitionLocationId: String, partitionMemory: Int): Unit = {
@@ -68,22 +66,6 @@ private[jss] class WorkerInfo(
     slavePartitionLocations.clear()
   }
 
-  def setState(state: WorkerState.Value): Unit = {
-    this.state = state
-  }
-
-  def isAlive(): Boolean = this.state == WorkerState.ALIVE
-
-  override def compareTo(o: WorkerInfo): Int = {
-    if (o.id == this.id) {
-      0
-    } else if (o.id > this.id) {
-      -1
-    } else {
-      1
-    }
-  }
-
   override def equals(obj: Any): Boolean = {
     val other = obj.asInstanceOf[WorkerInfo]
     host == other.host && port == other.port
@@ -91,5 +73,9 @@ private[jss] class WorkerInfo(
 
   override def hashCode(): Int = {
     hostPort.hashCode
+  }
+
+  override def toString: String = {
+    s"${host}:${port}  ${freeMemory}/${memory}"
   }
 }

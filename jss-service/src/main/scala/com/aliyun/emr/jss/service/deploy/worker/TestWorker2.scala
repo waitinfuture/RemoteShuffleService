@@ -2,12 +2,12 @@ package com.aliyun.emr.jss.service.deploy.worker
 
 import com.aliyun.emr.jss.common.internal.Logging
 import com.aliyun.emr.jss.common.rpc.{RpcAddress, RpcEnv}
-import com.aliyun.emr.jss.common.JindoConf
+import com.aliyun.emr.jss.common.EssConf
 import com.aliyun.emr.jss.protocol.RpcNameConstants
 
 private[deploy] object TestWorker2 extends Logging {
   def main(args: Array[String]): Unit = {
-    val conf = new JindoConf
+    val conf = new EssConf
     val workerArgs = new WorkerArguments(args, conf)
 
     val rpcEnv = RpcEnv.create(RpcNameConstants.WORKER_SYS,

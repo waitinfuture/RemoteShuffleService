@@ -26,9 +26,9 @@ import com.aliyun.emr.jss.common.util.Utils
 
 import scala.collection.JavaConverters._
 
-class JindoConf(loadDefaults: Boolean) extends Cloneable with Logging with Serializable {
+class EssConf(loadDefaults: Boolean) extends Cloneable with Logging with Serializable {
 
-  import JindoConf._
+  import EssConf._
 
   /** Create a JindoConf that loads defaults from system properties and the classpath */
   def this() = this(true)
@@ -47,7 +47,7 @@ class JindoConf(loadDefaults: Boolean) extends Cloneable with Logging with Seria
     loadFromSystemProperties(false)
   }
 
-  private[jss] def loadFromSystemProperties(silent: Boolean): JindoConf = {
+  private[jss] def loadFromSystemProperties(silent: Boolean): EssConf = {
     // Load any spark.* system properties
     for ((key, value) <- Utils.getSystemProperties if key.startsWith("jindo.")) {
       set(key, value, silent)
@@ -56,11 +56,11 @@ class JindoConf(loadDefaults: Boolean) extends Cloneable with Logging with Seria
   }
 
   /** Set a configuration variable. */
-  def set(key: String, value: String): JindoConf = {
+  def set(key: String, value: String): EssConf = {
     set(key, value, false)
   }
 
-  private[jss] def set(key: String, value: String, silent: Boolean): JindoConf = {
+  private[jss] def set(key: String, value: String, silent: Boolean): EssConf = {
     if (key == null) {
       throw new NullPointerException("null key")
     }
@@ -74,38 +74,38 @@ class JindoConf(loadDefaults: Boolean) extends Cloneable with Logging with Seria
     this
   }
 
-  private[jss] def set[T](entry: ConfigEntry[T], value: T): JindoConf = {
+  private[jss] def set[T](entry: ConfigEntry[T], value: T): EssConf = {
     set(entry.key, entry.stringConverter(value))
     this
   }
 
-  private[jss] def set[T](entry: OptionalConfigEntry[T], value: T): JindoConf = {
+  private[jss] def set[T](entry: OptionalConfigEntry[T], value: T): EssConf = {
     set(entry.key, entry.rawStringConverter(value))
     this
   }
 
   /** Set multiple parameters together */
-  def setAll(settings: Traversable[(String, String)]): JindoConf = {
+  def setAll(settings: Traversable[(String, String)]): EssConf = {
     settings.foreach { case (k, v) => set(k, v) }
     this
   }
 
   /** Set a parameter if it isn't already configured */
-  def setIfMissing(key: String, value: String): JindoConf = {
+  def setIfMissing(key: String, value: String): EssConf = {
     if (settings.putIfAbsent(key, value) == null) {
       logDeprecationWarning(key)
     }
     this
   }
 
-  private[jss] def setIfMissing[T](entry: ConfigEntry[T], value: T): JindoConf = {
+  private[jss] def setIfMissing[T](entry: ConfigEntry[T], value: T): EssConf = {
     if (settings.putIfAbsent(entry.key, entry.stringConverter(value)) == null) {
       logDeprecationWarning(entry.key)
     }
     this
   }
 
-  private[jss] def setIfMissing[T](entry: OptionalConfigEntry[T], value: T): JindoConf = {
+  private[jss] def setIfMissing[T](entry: OptionalConfigEntry[T], value: T): EssConf = {
     if (settings.putIfAbsent(entry.key, entry.rawStringConverter(value)) == null) {
       logDeprecationWarning(entry.key)
     }
@@ -113,12 +113,12 @@ class JindoConf(loadDefaults: Boolean) extends Cloneable with Logging with Seria
   }
 
   /** Remove a parameter from the configuration */
-  def remove(key: String): JindoConf = {
+  def remove(key: String): EssConf = {
     settings.remove(key)
     this
   }
 
-  private[jss] def remove(entry: ConfigEntry[_]): JindoConf = {
+  private[jss] def remove(entry: ConfigEntry[_]): EssConf = {
     remove(entry.key)
   }
 
@@ -330,8 +330,8 @@ class JindoConf(loadDefaults: Boolean) extends Cloneable with Logging with Seria
   private[jss] def contains(entry: ConfigEntry[_]): Boolean = contains(entry.key)
 
   /** Copy this object */
-  override def clone: JindoConf = {
-    val cloned = new JindoConf(false)
+  override def clone: EssConf = {
+    val cloned = new EssConf(false)
     settings.entrySet().asScala.foreach { e =>
       cloned.set(e.getKey(), e.getValue(), true)
     }
@@ -363,7 +363,7 @@ class JindoConf(loadDefaults: Boolean) extends Cloneable with Logging with Seria
   }
 }
 
-private[jss] object JindoConf extends Logging {
+private[jss] object EssConf extends Logging {
 
   /**
     * Maps deprecated config keys to information about the deprecation.

@@ -22,7 +22,7 @@ import java.nio.channels.ReadableByteChannel
 
 import scala.concurrent.Future
 
-import com.aliyun.emr.jss.common.JindoConf
+import com.aliyun.emr.jss.common.EssConf
 import com.aliyun.emr.jss.common.rpc.netty.NettyRpcEnvFactory
 import com.aliyun.emr.jss.common.util.RpcUtils
 
@@ -37,9 +37,8 @@ private[jss] object RpcEnv {
       name: String,
       host: String,
       port: Int,
-      conf: JindoConf,
-      clientMode: Boolean = false): RpcEnv = {
-    create(name, host, host, port, conf, 0, clientMode)
+      conf: EssConf): RpcEnv = {
+    create(name, host, host, port, conf, 0)
   }
 
   def create(
@@ -47,11 +46,10 @@ private[jss] object RpcEnv {
       bindAddress: String,
       advertiseAddress: String,
       port: Int,
-      conf: JindoConf,
-      numUsableCores: Int,
-      clientMode: Boolean): RpcEnv = {
+      conf: EssConf,
+      numUsableCores: Int): RpcEnv = {
     val config = RpcEnvConfig(conf, name, bindAddress, advertiseAddress, port,
-      numUsableCores, clientMode)
+      numUsableCores)
     new NettyRpcEnvFactory().create(config)
   }
 }
@@ -66,7 +64,7 @@ private[jss] object RpcEnv {
  *
  * [[RpcEnv]] also provides some methods to retrieve [[RpcEndpointRef]]s given name or uri.
  */
-private[jss] abstract class RpcEnv(conf: JindoConf) {
+private[jss] abstract class RpcEnv(conf: EssConf) {
 
   private[jss] val defaultLookupTimeout = RpcUtils.lookupRpcTimeout(conf)
 
@@ -194,10 +192,9 @@ private[jss] trait RpcEnvFileServer {
 }
 
 private[jss] case class RpcEnvConfig(
-    conf: JindoConf,
+    conf: EssConf,
     name: String,
     bindAddress: String,
     advertiseAddress: String,
     port: Int,
-    numUsableCores: Int,
-    clientMode: Boolean)
+    numUsableCores: Int)

@@ -23,7 +23,7 @@ import java.nio.channels.{Pipe, ReadableByteChannel, WritableByteChannel}
 import java.util.concurrent._
 import java.util.concurrent.atomic.AtomicBoolean
 
-import com.aliyun.emr.jss.common.JindoConf
+import com.aliyun.emr.jss.common.EssConf
 import com.aliyun.emr.jss.common.internal.Logging
 import javax.annotation.Nullable
 
@@ -40,7 +40,7 @@ import com.aliyun.emr.jss.common.serializer.{JavaSerializer, JavaSerializerInsta
 import com.aliyun.emr.jss.common.util.{ByteBufferInputStream, ByteBufferOutputStream, ThreadUtils, Utils}
 
 private[jss] class NettyRpcEnv(
-    val conf: JindoConf,
+    val conf: EssConf,
     javaSerializerInstance: JavaSerializerInstance,
     host: String,
     numUsableCores: Int) extends RpcEnv(conf) with Logging {
@@ -449,18 +449,16 @@ private[jss] class NettyRpcEnvFactory extends RpcEnvFactory with Logging {
     val nettyEnv =
       new NettyRpcEnv(jindoConf, javaSerializerInstance, config.advertiseAddress,
         config.numUsableCores)
-    if (!config.clientMode) {
-      val startNettyRpcEnv: Int => (NettyRpcEnv, Int) = { actualPort =>
-        nettyEnv.startServer(config.bindAddress, actualPort)
-        (nettyEnv, nettyEnv.address.port)
-      }
-      try {
-        Utils.startServiceOnPort(config.port, startNettyRpcEnv, jindoConf, config.name)._1
-      } catch {
-        case NonFatal(e) =>
-          nettyEnv.shutdown()
-          throw e
-      }
+    val startNettyRpcEnv: Int => (NettyRpcEnv, Int) = { actualPort =>
+      nettyEnv.startServer(config.bindAddress, actualPort)
+      (nettyEnv, nettyEnv.address.port)
+    }
+    try {
+      Utils.startServiceOnPort(config.port, startNettyRpcEnv, jindoConf, config.name)._1
+    } catch {
+      case NonFatal(e) =>
+        nettyEnv.shutdown()
+        throw e
     }
     nettyEnv
   }
@@ -487,7 +485,7 @@ private[jss] class NettyRpcEnvFactory extends RpcEnvFactory with Logging {
  * @param nettyEnv The RpcEnv associated with this ref.
  */
 private[jss] class NettyRpcEndpointRef(
-    @transient private val conf: JindoConf,
+    @transient private val conf: EssConf,
     private val endpointAddress: RpcEndpointAddress,
     @transient @volatile private var nettyEnv: NettyRpcEnv) extends RpcEndpointRef(conf) {
 

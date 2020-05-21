@@ -17,12 +17,12 @@
 
 package com.aliyun.emr.jss.service.deploy.worker
 
-import com.aliyun.emr.jss.common.JindoConf
+import com.aliyun.emr.jss.common.EssConf
 import com.aliyun.emr.jss.common.util.{IntParam, MemoryParam, Utils}
 
 import scala.annotation.tailrec
 
-class WorkerArguments(args: Array[String], conf: JindoConf) {
+class WorkerArguments(args: Array[String], conf: EssConf) {
 
   var host = Utils.localHostName()
   var port = 0

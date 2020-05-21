@@ -24,7 +24,7 @@ import java.nio.charset.StandardCharsets
 import java.text.SimpleDateFormat
 import java.util.{Locale, Properties}
 
-import com.aliyun.emr.jss.common.{JindoConf, JindoException}
+import com.aliyun.emr.jss.common.{EssConf, JindoException}
 import com.aliyun.emr.jss.common.internal.Logging
 import com.google.common.net.InetAddresses
 import io.netty.channel.unix.Errors.NativeIoException
@@ -212,7 +212,7 @@ object Utils extends Logging {
   def startServiceOnPort[T](
                              startPort: Int,
                              startService: Int => (T, Int),
-                             conf: JindoConf,
+                             conf: EssConf,
                              serviceName: String = ""): (T, Int) = {
 
     require(startPort == 0 || (1024 <= startPort && startPort < 65536),
@@ -270,7 +270,7 @@ object Utils extends Logging {
     (base + offset - 1024) % (65536 - 1024) + 1024
   }
 
-  def portMaxRetries(conf: JindoConf): Int = {
+  def portMaxRetries(conf: EssConf): Int = {
     val maxRetries = conf.getOption("spark.port.maxRetries").map(_.toInt)
     if (conf.contains("spark.testing")) {
       // Set a higher number of retries for tests...
@@ -350,7 +350,7 @@ object Utils extends Logging {
     }
   }
 
-  private var customHostname: Option[String] = sys.env.get("JSS_LOCAL_HOSTNAME")
+  private var customHostname: Option[String] = sys.env.get("ESS_LOCAL_HOSTNAME")
 
   def setCustomHostname(hostname: String) {
     // DEBUG code
@@ -372,7 +372,7 @@ object Utils extends Logging {
 
   private val MAX_DEFAULT_NETTY_THREADS = 8
 
-  def fromJindoConf(_conf: JindoConf, module: String, numUsableCores: Int = 0): TransportConf = {
+  def fromJindoConf(_conf: EssConf, module: String, numUsableCores: Int = 0): TransportConf = {
     val conf = _conf.clone
 
     // Specify thread configuration based on our JVM's allocation of cores (rather than necessarily
@@ -419,7 +419,7 @@ object Utils extends Logging {
     // scalastyle:on classforname
   }
 
-  def loadDefaultJindoProperties(conf: JindoConf, filePath: String = null): String = {
+  def loadDefaultJindoProperties(conf: EssConf, filePath: String = null): String = {
     val path = Option(filePath).getOrElse(getDefaultPropertiesFile())
     Option(path).foreach { confFile =>
       getPropertiesFromFile(confFile).filter { case (k, v) =>

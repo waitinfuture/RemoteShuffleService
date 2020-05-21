@@ -20,7 +20,7 @@ package com.aliyun.emr.jss.common.serializer
 import java.io._
 import java.nio.ByteBuffer
 
-import com.aliyun.emr.jss.common.JindoConf
+import com.aliyun.emr.jss.common.EssConf
 import org.apache.spark.annotation.DeveloperApi
 import com.aliyun.emr.jss.common.util.{ByteBufferInputStream, ByteBufferOutputStream, Utils}
 
@@ -136,11 +136,11 @@ private[jss] class JavaSerializerInstance(
  * Spark application.
  */
 @DeveloperApi
-class JavaSerializer(conf: JindoConf) extends Serializer with Externalizable {
+class JavaSerializer(conf: EssConf) extends Serializer with Externalizable {
   private var counterReset = conf.getInt("spark.serializer.objectStreamReset", 100)
   private var extraDebugInfo = conf.getBoolean("spark.serializer.extraDebugInfo", true)
 
-  protected def this() = this(new JindoConf())  // For deserialization only
+  protected def this() = this(new EssConf())  // For deserialization only
 
   override def newInstance(): SerializerInstance = {
     val classLoader = defaultClassLoader.getOrElse(Thread.currentThread.getContextClassLoader)

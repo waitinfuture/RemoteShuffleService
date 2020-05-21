@@ -17,35 +17,35 @@
 
 package com.aliyun.emr.jss.common.util
 
-import com.aliyun.emr.jss.common.JindoConf
+import com.aliyun.emr.jss.common.EssConf
 import com.aliyun.emr.jss.common.rpc.{RpcAddress, RpcEndpointRef, RpcEnv, RpcTimeout}
 
 private[jss] object RpcUtils {
 
   /** Returns the configured number of times to retry connecting */
-  def numRetries(conf: JindoConf): Int = {
+  def numRetries(conf: EssConf): Int = {
     conf.getInt("jindo.rpc.numRetries", 3)
   }
 
   /** Returns the configured number of milliseconds to wait on each retry */
-  def retryWaitMs(conf: JindoConf): Long = {
+  def retryWaitMs(conf: EssConf): Long = {
     conf.getTimeAsMs("jindo.rpc.retry.wait", "3s")
   }
 
   /** Returns the default Spark timeout to use for RPC ask operations. */
-  def askRpcTimeout(conf: JindoConf): RpcTimeout = {
+  def askRpcTimeout(conf: EssConf): RpcTimeout = {
     RpcTimeout(conf, Seq("jindo.rpc.askTimeout", "jindo.network.timeout"), "120s")
   }
 
   /** Returns the default Spark timeout to use for RPC remote endpoint lookup. */
-  def lookupRpcTimeout(conf: JindoConf): RpcTimeout = {
+  def lookupRpcTimeout(conf: EssConf): RpcTimeout = {
     RpcTimeout(conf, Seq("jindo.rpc.lookupTimeout", "jindo.network.timeout"), "120s")
   }
 
   private val MAX_MESSAGE_SIZE_IN_MB = Int.MaxValue / 1024 / 1024
 
   /** Returns the configured max message size for messages in bytes. */
-  def maxMessageSizeBytes(conf: JindoConf): Int = {
+  def maxMessageSizeBytes(conf: EssConf): Int = {
     val maxSizeInMB = conf.getInt("jindo.rpc.message.maxSize", 128)
     if (maxSizeInMB > MAX_MESSAGE_SIZE_IN_MB) {
       throw new IllegalArgumentException(

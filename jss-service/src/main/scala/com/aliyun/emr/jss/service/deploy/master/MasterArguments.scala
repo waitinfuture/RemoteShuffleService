@@ -17,12 +17,12 @@
 
 package com.aliyun.emr.jss.service.deploy.master
 
-import com.aliyun.emr.jss.common.JindoConf
+import com.aliyun.emr.jss.common.EssConf
 import com.aliyun.emr.jss.common.util.{IntParam, Utils}
 
 import scala.annotation.tailrec
 
-class MasterArguments(args: Array[String], conf: JindoConf) {
+class MasterArguments(args: Array[String], conf: EssConf) {
 
   var host = Utils.localHostName()
   var port = 9099

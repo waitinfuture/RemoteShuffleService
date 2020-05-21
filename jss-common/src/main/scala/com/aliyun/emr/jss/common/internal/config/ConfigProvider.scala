@@ -19,7 +19,7 @@ package com.aliyun.emr.jss.common.internal.config
 
 import java.util.{Map => JMap}
 
-import com.aliyun.emr.jss.common.JindoConf
+import com.aliyun.emr.jss.common.EssConf
 
 /**
  * A source of configuration values.
@@ -55,7 +55,7 @@ private[jss] class JindoConfigProvider(conf: JMap[String, String]) extends Confi
 
   override def get(key: String): Option[String] = {
     if (key.startsWith("jindo.")) {
-      Option(conf.get(key)).orElse(JindoConf.getDeprecatedConfig(key, conf))
+      Option(conf.get(key)).orElse(EssConf.getDeprecatedConfig(key, conf))
     } else {
       None
     }

@@ -14,6 +14,11 @@ public abstract class ShuffleClient implements Cloneable
         int numPartitions
     );
 
+    public abstract PartitionLocation revive(
+        String applicationId,
+        int shuffleId
+    );
+
     public abstract void pushData(byte[] data, PartitionLocation location);
 
     public abstract void unregisterShuffle(String applicationId, int shuffleId);
