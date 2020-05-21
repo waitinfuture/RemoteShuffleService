@@ -9,7 +9,7 @@ import scala.util.Random
 
 import com.aliyun.emr.jss.common.JindoConf
 import com.aliyun.emr.jss.common.internal.Logging
-import com.aliyun.emr.jss.common.rpc.{RpcAddress, RpcEndpoint, RpcEnv}
+import com.aliyun.emr.jss.common.rpc.{RpcAddress, RpcCallContext, RpcEndpoint, RpcEnv}
 import com.aliyun.emr.jss.common.util.{ThreadUtils, Utils}
 import com.aliyun.emr.jss.protocol.{PartitionLocation, RpcNameConstants}
 import com.aliyun.emr.jss.protocol.message.ShuffleMessages._
@@ -37,12 +37,14 @@ private[deploy] class Master(
   private val WORKER_TIMEOUT_MS = conf.getLong("ess.worker.timeout", 60) * 1000
   private val REAPER_ITERATIONS = 15
 
-  // Structs
+  // States
   val workers = new util.ArrayList[WorkerInfo]()
   val workersLock = new Object()
   private val idToWorker = new ConcurrentHashMap[String, WorkerInfo]()
   private val addressToWorker = new ConcurrentHashMap[RpcAddress, WorkerInfo]
   private val partitionChunkIndex = new ConcurrentHashMap[String, Int]()
+  // key: appid_shuffleid value: resources allocated for the shuffle
+  private val shuffleResources = new util.HashMap[String, WorkerResource]()
 
   private def getChunkIndex(applicationId: String,
     shuffleId: Int,
@@ -142,56 +144,42 @@ private[deploy] class Master(
     failed
   }
 
+  def reserveBuffersWithRetry(slots: WorkerResource): util.List[WorkerInfo] = {
+    // reserve buffers
+    var failed = reserveBuffers(slots)
+
+    // retry once if any failed
+    failed = if (failed.nonEmpty) {
+      logInfo("reserve buffers failed, retry once")
+      reserveBuffers(slots.filterKeys(worker => failed.contains(worker)))
+    } else null
+
+    failed
+  }
+
   def clearBuffers(slots: WorkerResource): Unit = {
     slots.foreach(entry => {
       val res = entry._1.endpoint.askSync[ClearBuffersResponse](
-        ClearBuffers(entry._2._1, entry._2._2)
+        ClearBuffers(entry._2._1.map(_.getUUID()), entry._2._2.map(_.getUUID()))
       )
       if (res.success) {
         logInfo(s"ClearBuffers success for worker ${entry._1}")
       } else {
         logInfo(s"Failed to clear buffers for worker ${entry._1}, retry once")
         entry._1.endpoint.ask[ClearBuffersResponse](
-          ClearBuffers(entry._2._1, entry._2._2)
+          ClearBuffers(entry._2._1.map(_.getUUID()), entry._2._2.map(_.getUUID()))
         )
       }
     })
   }
 
-  override def receiveAndReply(context: _root_.com.aliyun.emr.jss.common.rpc.RpcCallContext): _root_.scala.PartialFunction[Any, Unit] = {
-    case Register(applicationId, shuffleId, numMappers, numPartitions) =>
+  override def receiveAndReply(context: RpcCallContext): PartialFunction[Any, Unit] = {
+    case RegisterShuffle(applicationId, shuffleId, numMappers, numPartitions) =>
       logInfo(s"received register shuffle, ${applicationId}, ${shuffleId}, ${numMappers}, ${numPartitions}")
-
-      val slots = workers.synchronized {
-        MasterUtil.offerSlots(workers, PARTITION_MEMORY_MB, numPartitions)
-      }
-
-      if (slots == null || slots.isEmpty()) {
-        logError("offerSlots failed!")
-        context.reply(RegisterResponse(false, null))
-      } else {
-        // reserve buffers
-        var failed = reserveBuffers(slots)
-
-        // retry once if any failed
-        failed = if (failed.nonEmpty) {
-          logInfo("reserve buffers failed, retry once")
-          reserveBuffers(slots.filterKeys(worker => failed.contains(worker)))
-        } else null
-
-        // register failed, clear allocated resources
-        if (failed != null && !failed.isEmpty()) {
-          logError("reserve buffers still fail after retry, clear buffers")
-          clearBuffers(slots)
-          logInfo("response fail to reserve buffers")
-          context.reply(RegisterResponse(false, null))
-        } else {
-          // register shuffle success
-          val locations: List[PartitionLocation] = slots.flatMap(_._2._1).toList
-          logInfo(s"going to reply register success, locations ${locations}")
-          context.reply(RegisterResponse(true, locations))
-        }
-      }
+      handleRegisterShuffle(context, applicationId, shuffleId, numPartitions)
+    case Revive(applicationId, shuffleId, oldLocation) =>
+      logInfo(s"received Revive request, ${applicationId}, ${shuffleId}, ${oldLocation}")
+      handleRevive(context, applicationId, shuffleId)
   }
 
   private def choosePartitionLocation(
@@ -265,6 +253,98 @@ private[deploy] class Master(
     idToWorker.remove(worker.id)
     addressToWorker.remove(worker.endpoint.address)
   }
+
+  def handleRegisterShuffle(context: RpcCallContext, applicationId: String,
+    shuffleId: Int, numPartitions: Int): Unit = {
+    val shuffleKey = s"${applicationId}-${shuffleId}"
+
+    // check if shuffle has already registered
+    if (shuffleResources.containsKey(shuffleKey)) {
+      logError(s"shuffle ${shuffleKey} has registered!")
+      context.reply(RegisterShuffleResponse(false, null))
+      return
+    }
+
+    val slots = workers.synchronized {
+      MasterUtil.offerSlots(workers, PARTITION_MEMORY_MB, numPartitions)
+    }
+
+    // reply false if offer slots failed
+    if (slots == null || slots.isEmpty()) {
+      logError("offerSlots failed!")
+      context.reply(RegisterShuffleResponse(false, null))
+      return
+    }
+
+    // reserve buffers
+    val failed = reserveBuffersWithRetry(slots)
+
+    // reserve buffers failed, clear allocated resources
+    if (failed != null && !failed.isEmpty()) {
+      logError("reserve buffers still fail after retry, clear buffers")
+      clearBuffers(slots)
+      logInfo("fail to reserve buffers")
+      context.reply(RegisterShuffleResponse(false, null))
+      return
+    }
+
+    // register shuffle success, update status
+    val locations: List[PartitionLocation] = slots.flatMap(_._2._1).toList
+    shuffleResources.synchronized {
+      val key = s"${applicationId}-${shuffleId}"
+      shuffleResources.put(key, slots)
+    }
+    logInfo(s"going to reply register success, locations ${locations}")
+    context.reply(RegisterShuffleResponse(true, locations))
+  }
+
+  private def handleRevive(context: RpcCallContext, applicationId: String, shuffleId: Int): Unit = {
+    // check whether shuffle has registered
+    val shuffleKey = s"${applicationId}-${shuffleId}"
+    if (!shuffleResources.containsKey(shuffleKey)) {
+      logError(s"shuffle ${shuffleKey} has not registered!")
+      context.reply(ReviveResponse(false, null))
+      return
+    }
+
+    // offer new slot
+    val slots = workers.synchronized {
+      MasterUtil.offerSlots(workers, PARTITION_MEMORY_MB, 1)
+    }
+    // reply false if offer slots failed
+    if (slots == null || slots.isEmpty()) {
+      logError("offerSlot failed!")
+      context.reply(ReviveResponse(false, null))
+      return
+    }
+
+    // reserve buffer
+    val failed = reserveBuffersWithRetry(slots)
+    // reserve buffers failed, clear allocated resources
+    if (failed != null && !failed.isEmpty()) {
+      logError("reserve buffers still fail after retry, clear buffers")
+      clearBuffers(slots)
+      logInfo("fail to reserve buffers")
+      context.reply(ReviveResponse(false, null))
+      return
+    }
+
+    // update status
+    shuffleResources.synchronized {
+      val resource = shuffleResources.get(shuffleKey)
+      val workerInfo = slots.keySet().head
+      resource.putIfAbsent(workerInfo,
+        (new util.ArrayList[PartitionLocation](), new util.ArrayList[PartitionLocation]()))
+      val (masterLocations, slaveLocations) = resource.get(workerInfo)
+      masterLocations.addAll(slots.head._2._1)
+      slaveLocations.addAll(slots.head._2._2)
+    }
+
+    // reply success
+    context.reply(ReviveResponse(true, slots.head._2._1.head))
+  }
+
+
 }
 
 private[deploy] object Master extends Logging {

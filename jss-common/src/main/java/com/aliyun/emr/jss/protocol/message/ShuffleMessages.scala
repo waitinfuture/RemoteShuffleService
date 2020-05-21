@@ -7,26 +7,15 @@ sealed trait Message extends Serializable
 
 object ShuffleMessages {
 
-  case class Register(
+  case class RegisterShuffle(
       applicationId: String,
       shuffleId: Int,
       numMappers: Int,
       numPartitions: Int) extends Message
 
-  case class RegisterResponse(
+  case class RegisterShuffleResponse(
       success: Boolean,
       partitionLocations: util.List[PartitionLocation]) extends Message
-
-  // mode == 1 means master partition
-  // else means slave partition
-  case class RegisterPartition(
-      applicationId: String,
-      shuffleId: Int,
-      reduceId: Int,
-      partitionMemoryBytes: Int,
-      mode: Int, chunkIndex: String) extends Message
-
-  case class RegisterPartitionResponse(success: Boolean) extends Message
 
   case class ReserveBuffers(
     masterLocations: util.List[PartitionLocation],
@@ -38,11 +27,22 @@ object ShuffleMessages {
   ) extends Message
 
   case class ClearBuffers(
-    masterLocations: util.List[PartitionLocation],
-    slaveLocations: util.List[PartitionLocation]
+    masterLocations: util.List[String],
+    slaveLocations: util.List[String]
   ) extends Message
 
   case class ClearBuffersResponse(
     success: Boolean
+  ) extends Message
+
+  case class Revive(
+    applicationId: String,
+    shuffleId: Int,
+    oldLocation: PartitionLocation
+  ) extends Message
+
+  case class ReviveResponse(
+    success: Boolean,
+    newLocation: PartitionLocation
   ) extends Message
 }

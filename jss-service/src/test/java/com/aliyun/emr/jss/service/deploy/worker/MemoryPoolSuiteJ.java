@@ -14,14 +14,16 @@ public class MemoryPoolSuiteJ {
         Chunk ch1 = memoryPool.allocateChunk();
         Chunk ch2 = memoryPool.allocateChunk();
         try {
-            OutputStream fileOutputStream = new FileOutputStream("tmp");
-            DoubleChunk doubleChunk = new DoubleChunk(ch1, ch2, fileOutputStream);
+            File file = new File("tmp");
+            if (file.exists()) {
+                file.delete();
+            }
+            DoubleChunk doubleChunk = new DoubleChunk(ch1, ch2, memoryPool, "tmp");
             byte[] data = new byte[64];
             doubleChunk.append(data);
             doubleChunk.append(data);
             doubleChunk.append(data);
             doubleChunk.append(data);
-            File file = new File("tmp");
             Thread.sleep(100);
             assert file.length() == 128;
             doubleChunk.flush();

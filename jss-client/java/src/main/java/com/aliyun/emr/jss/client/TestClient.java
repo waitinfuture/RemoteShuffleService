@@ -10,9 +10,13 @@ public class TestClient
     public static void main(String[] args) {
         ShuffleClientImpl client = new ShuffleClientImpl();
         client.init();
-        List<PartitionLocation> result = client.registerShuffle("linxuewei", 1, 20, 5);
-        for (int i = 0; i < result.size(); i++) {
-            System.out.println(result.get(i));
+        List<PartitionLocation> result = client.registerShuffle("appId", 1, 20, 10);
+        if (result != null) {
+            for (int i = 0; i < result.size(); i++) {
+                System.out.println(result.get(i));
+            }
         }
+
+
     }
 }

@@ -66,6 +66,6 @@ public final class PartitionLocation implements Serializable
     }
 
     public String toString() {
-        return UUID + "\n" + host + ":" + port + "\n" + "Mode: " + mode;
+        return UUID + "\t" + host + ":" + port + "\t" + "Mode: " + mode;
     }
 }

@@ -83,4 +83,13 @@ private[jss] class WorkerInfo(
       1
     }
   }
+
+  override def equals(obj: Any): Boolean = {
+    val other = obj.asInstanceOf[WorkerInfo]
+    host == other.host && port == other.port
+  }
+
+  override def hashCode(): Int = {
+    hostPort.hashCode
+  }
 }

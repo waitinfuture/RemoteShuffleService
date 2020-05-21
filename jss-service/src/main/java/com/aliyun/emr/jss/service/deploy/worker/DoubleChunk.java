@@ -48,7 +48,7 @@ public class DoubleChunk {
                     public void run() {
                         try {
                             // TODO: construct output stream
-                            OutputStream ostream = new FileOutputStream(fileName);
+                            OutputStream ostream = new FileOutputStream(fileName, true);
                             chunks[(working + 1) % 2].flushData(ostream);
                             slaveState = ChunkState.Ready;
                         } catch (Exception e) {
@@ -63,7 +63,7 @@ public class DoubleChunk {
                 logger.info("slave chunk is flushing, just flush data");
                 try {
                     // TODO: construct output stream
-                    OutputStream ostream = new FileOutputStream(fileName);
+                    OutputStream ostream = new FileOutputStream(fileName, true);
                     chunks[working].flushData(ostream);
                     chunks[working].append(data);
                 } catch (IOException e) {
@@ -87,7 +87,7 @@ public class DoubleChunk {
             }
             // TODO construct OutputStream
             try {
-                OutputStream ostream = new FileOutputStream(fileName);
+                OutputStream ostream = new FileOutputStream(fileName, true);
                 chunks[working].flushData(ostream);
             } catch (IOException e) {
                 logger.error("construct outputstream failed!", e);

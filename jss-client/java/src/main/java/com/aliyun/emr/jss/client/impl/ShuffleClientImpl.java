@@ -30,9 +30,9 @@ public class ShuffleClientImpl extends ShuffleClient
     @Override
     public List<PartitionLocation> registerShuffle(String applicationId, int shuffleId, int numMappers, int numPartitions)
     {
-        ShuffleMessages.RegisterResponse response = _master.askSync(
-            new ShuffleMessages.Register(applicationId, shuffleId, numMappers, numPartitions),
-            ClassTag$.MODULE$.apply(ShuffleMessages.RegisterResponse.class)
+        ShuffleMessages.RegisterShuffleResponse response = _master.askSync(
+            new ShuffleMessages.RegisterShuffle(applicationId, shuffleId, numMappers, numPartitions),
+            ClassTag$.MODULE$.apply(ShuffleMessages.RegisterShuffleResponse.class)
         );
         if (response.success()) {
             return response.partitionLocations();

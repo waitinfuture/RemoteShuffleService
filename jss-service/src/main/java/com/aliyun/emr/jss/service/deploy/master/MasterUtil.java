@@ -1,10 +1,8 @@
 package com.aliyun.emr.jss.service.deploy.master;
 
 import com.aliyun.emr.jss.protocol.PartitionLocation;
-import scala.Array;
 import scala.Tuple2;
 
-import javax.swing.plaf.ButtonUI;
 import java.util.*;
 
 public class MasterUtil {
