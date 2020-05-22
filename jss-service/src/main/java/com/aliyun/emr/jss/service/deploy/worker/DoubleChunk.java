@@ -1,6 +1,5 @@
 package com.aliyun.emr.jss.service.deploy.worker;
 
-import org.apache.commons.crypto.stream.output.Output;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 

@@ -2,7 +2,6 @@ package com.aliyun.emr.jss.service.deploy.worker
 
 import java.util
 
-import com.aliyun.emr.jss.service.deploy.master.WorkerInfo
 import org.scalatest.FunSuite
 
 class WorkerInfoSuite extends FunSuite {

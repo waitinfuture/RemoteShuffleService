@@ -51,8 +51,9 @@ private[deploy] class Worker(
   private val MemoryPoolCapacity = conf.getSizeAsBytes("ess.memoryPool.capacity", "1G")
   private val ChunkSize = conf.getSizeAsBytes("ess.partition.memory", "32m")
   private val memoryPool = new MemoryPool(MemoryPoolCapacity, ChunkSize)
-  private val masterPartitionChunks = new util.HashMap[String, (PartitionLocation, DoubleChunk)]()
-  private val slavePartitionChunks = new util.HashMap[String, DoubleChunk]()
+
+  // worker info
+  private val workerInfo = new WorkerInfo(host, port, memory, ChunkSize, self)
 
   // Threads
   private val forwordMessageScheduler =
@@ -96,16 +97,16 @@ private[deploy] class Worker(
 
   // TODO
   override def receiveAndReply(context: RpcCallContext): PartialFunction[Any, Unit] = {
-    case ReserveBuffers(masterLocations, slaveLocations) =>
-      handleReserveBuffers(context, masterLocations, slaveLocations)
-    case ClearBuffers(masterLocationIds, slaveLocationIds) =>
-      handleClearBuffers(context, masterLocationIds, slaveLocationIds)
+    case ReserveBuffers(shuffleKey, masterLocations, slaveLocations) =>
+      handleReserveBuffers(context, shuffleKey, masterLocations, slaveLocations)
+    case ClearBuffers(shuffleKey, masterLocs, slaveLocs) =>
+      handleClearBuffers(context, shuffleKey, masterLocs, slaveLocs)
   }
 
-  private def handleReserveBuffers(context: RpcCallContext,
+  private def handleReserveBuffers(context: RpcCallContext, shuffleKey: String,
     masterLocations: util.List[PartitionLocation],
-    slaveLocations: util.List[String]): Unit = {
-    val masterDoubleChunks = new util.HashMap[String, (PartitionLocation, DoubleChunk)]()
+    slaveLocations: util.List[PartitionLocation]): Unit = {
+    val masterDoubleChunks = new util.ArrayList[PartitionLocation]()
     breakable({
       for (ind <- 0 until masterLocations.size()) {
         val ch1 = memoryPool.allocateChunk()
@@ -117,8 +118,9 @@ private[deploy] class Worker(
             memoryPool.returnChunk(ch1)
             break()
           } else {
-            masterDoubleChunks.put(masterLocations.get(ind).getUUID,
-              (masterLocations.get(ind),
+            masterDoubleChunks.add(
+              new PartitionLocationWithDoubleChunks(
+                masterLocations.get(ind),
                 new DoubleChunk(ch1, ch2, memoryPool, masterLocations.get(ind).getUUID)))
           }
         }
@@ -126,11 +128,12 @@ private[deploy] class Worker(
     })
     if (masterDoubleChunks.size() < masterLocations.size()) {
       logInfo("not all master partition satisfied, return chunks")
-      masterDoubleChunks.foreach(entry => entry._2._2.returnChunks())
+      masterDoubleChunks.foreach(entry =>
+        entry.asInstanceOf[PartitionLocationWithDoubleChunks].doubleChunk.returnChunks())
       context.reply(ReserveBuffersResponse(false))
       return
     }
-    val slaveDoubleChunks = new util.HashMap[String, DoubleChunk]()
+    val slaveDoubleChunks = new util.ArrayList[PartitionLocation]()
     breakable({
       for (ind <- 0 until slaveLocations.size()) {
         val ch1 = memoryPool.allocateChunk()
@@ -141,52 +144,63 @@ private[deploy] class Worker(
           if (ch2 == null) {
             break()
           } else {
-            slaveDoubleChunks.put(slaveLocations.get(ind),
-              new DoubleChunk(ch1, ch2, memoryPool, slaveLocations.get(ind)))
+            slaveDoubleChunks.add(
+              new PartitionLocationWithDoubleChunks(
+                slaveLocations.get(ind),
+                new DoubleChunk(ch1, ch2, memoryPool, slaveLocations.get(ind).getUUID)
+              )
+            )
           }
         }
       }
     })
     if (slaveDoubleChunks.size() < slaveDoubleChunks.size()) {
       logInfo("not all slave partition satisfied, return chunks")
-      masterDoubleChunks.foreach(entry => entry._2._2.returnChunks())
-      slaveDoubleChunks.foreach(entry => entry._2.returnChunks())
+      masterDoubleChunks.foreach(entry =>
+        entry.asInstanceOf[PartitionLocationWithDoubleChunks].doubleChunk.returnChunks())
+      slaveDoubleChunks.foreach(entry =>
+        entry.asInstanceOf[PartitionLocationWithDoubleChunks].doubleChunk.returnChunks())
       context.reply(ReserveBuffersResponse(false))
       return
     }
-    masterPartitionChunks.synchronized {
-      masterPartitionChunks.putAll(masterDoubleChunks)
-    }
-    slavePartitionChunks.synchronized {
-      slavePartitionChunks.putAll(slaveDoubleChunks)
+    // reserve success, update status
+    workerInfo.synchronized {
+      workerInfo.addMasterPartition(shuffleKey, masterDoubleChunks)
+      workerInfo.addSlavePartition(shuffleKey, slaveDoubleChunks)
     }
     context.reply(ReserveBuffersResponse(true))
   }
 
   private def handleClearBuffers(context: RpcCallContext,
-    masterLocationIds: util.List[String],
-    slaveLocationIds: util.List[String]): Unit = {
+    shuffleKey: String,
+    masterLocs: util.List[PartitionLocation],
+    slaveLocs: util.List[PartitionLocation]): Unit = {
     // clear master partition chunks
-    if (masterLocationIds != null) {
-      masterPartitionChunks.synchronized {
-        masterLocationIds.foreach(id => {
-          val entry = masterPartitionChunks.get(id)
-          if (entry != null) {
-            entry._2.returnChunks()
+    if (!workerInfo.masterPartitionLocations.containsKey(shuffleKey)) {
+      logError(s"shuffle ${shuffleKey} doesn't exist!")
+      context.reply(ClearBuffersResponse(false))
+      return
+    }
+    val masterLocations = workerInfo.masterPartitionLocations.get(shuffleKey)
+    val slaveLocations = workerInfo.slavePartitionLocations.get(shuffleKey)
+    if (masterLocs != null) {
+      masterLocations.synchronized {
+        masterLocs.foreach(loc => {
+          val removed = masterLocations.remove(loc)
+          if (removed != null) {
+            removed.asInstanceOf[PartitionLocationWithDoubleChunks].doubleChunk.returnChunks()
           }
-          masterPartitionChunks.remove(id)
         })
       }
     }
     // clear slave partition chunks
-    if (slaveLocationIds != null) {
-      slavePartitionChunks.synchronized {
-        slaveLocationIds.foreach(id => {
-          val doubleChunk = slavePartitionChunks.get(id)
-          if (doubleChunk != null) {
-            doubleChunk.returnChunks()
+    if (slaveLocs != null) {
+      slaveLocations.synchronized {
+        slaveLocs.foreach(loc => {
+          val removed = slaveLocations.remove(loc)
+          if (removed != null) {
+            removed.asInstanceOf[PartitionLocationWithDoubleChunks].doubleChunk.returnChunks()
           }
-          slavePartitionChunks.remove(id)
         })
       }
     }

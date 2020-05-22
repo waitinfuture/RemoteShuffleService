@@ -1,18 +1,20 @@
 package com.aliyun.emr.jss.service.deploy.master;
 
 import com.aliyun.emr.jss.protocol.PartitionLocation;
+import com.aliyun.emr.jss.service.deploy.worker.WorkerInfo;
 import scala.Tuple2;
 
 import java.util.*;
 
 public class MasterUtil {
     public static Map<WorkerInfo,
-            Tuple2<List<PartitionLocation>, List<String>>> offerSlots(
+        Tuple2<List<PartitionLocation>, List<PartitionLocation>>> offerSlots(
+            String shuffleKey,
             ArrayList<WorkerInfo> workers,
             int numPartitions) {
         // master partition index
         int masterInd = 0;
-        Map<WorkerInfo, Tuple2<List<PartitionLocation>, List<String>>> slots =
+        Map<WorkerInfo, Tuple2<List<PartitionLocation>, List<PartitionLocation>>> slots =
                 new HashMap<>();
         // foreach iteration, allocate both master and slave partitions
         for(int p = 0; p < numPartitions; p++) {
@@ -42,10 +44,10 @@ public class MasterUtil {
             // available master/slave partition respectively
             String partitionId = UUID.randomUUID().toString();
 
-            // update slots, add master partition location
+            // new slave and master locations
             slots.putIfAbsent(workers.get(nextMasterInd),
                     new Tuple2<>(new ArrayList<>(), new ArrayList<>()));
-            Tuple2<List<PartitionLocation>, List<String>> locations =
+            Tuple2<List<PartitionLocation>, List<PartitionLocation>> locations =
                     slots.get(workers.get(nextMasterInd));
             PartitionLocation slaveLocation = new PartitionLocation(
                 partitionId,
@@ -57,17 +59,21 @@ public class MasterUtil {
                 partitionId,
                 workers.get(nextMasterInd).host(),
                 workers.get(nextMasterInd).port(),
+                PartitionLocation.Mode.Master,
                 slaveLocation
             );
-            workers.get(nextMasterInd).addMasterPartition(partitionId);
+            slaveLocation.setPeer(masterLocation);
+
+            // add master location to WorkerInfo
+            workers.get(nextMasterInd).addMasterPartition(shuffleKey, masterLocation);
             locations._1.add(masterLocation);
 
-            // update slots, add slave partition location
+            // add slave location to WorkerInfo
             slots.putIfAbsent(workers.get(nextSlaveInd),
                     new Tuple2<>(new ArrayList<>(), new ArrayList<>()));
-            workers.get(nextSlaveInd).addSlavePartition(partitionId);
             locations = slots.get(workers.get(nextSlaveInd));
-            locations._2.add(partitionId);
+            workers.get(nextSlaveInd).addSlavePartition(shuffleKey, slaveLocation);
+            locations._2.add(slaveLocation);
 
             // update index
             masterInd = (nextMasterInd + 1) % workers.size();
@@ -76,15 +82,22 @@ public class MasterUtil {
         return slots;
     }
 
-    public static Tuple2<WorkerInfo, String> offerSlaveSlot(
-        String partitionId, ArrayList<WorkerInfo> workers) {
+    public static Tuple2<WorkerInfo, PartitionLocation> offerSlaveSlot(
+        PartitionLocation masterLocation, ArrayList<WorkerInfo> workers) {
         Random rand = new Random();
         int startInd = rand.nextInt(workers.size());
         int curInd;
         for (int i = 0; i < workers.size(); i++) {
             curInd = (startInd + i) % workers.size();
             if (workers.get(curInd).slotAvailable()) {
-                return new Tuple2<>(workers.get(curInd), partitionId);
+                PartitionLocation location = new PartitionLocation(
+                    masterLocation.getUUID(),
+                    workers.get(curInd).host(),
+                    workers.get(curInd).port(),
+                    PartitionLocation.Mode.Slave,
+                    masterLocation
+                );
+                return new Tuple2<>(workers.get(curInd), location);
             }
         }
         return null;

@@ -2,15 +2,16 @@ package com.aliyun.emr.jss.service.deploy
 
 import java.util
 
+import scala.collection.JavaConversions._
+
 import com.aliyun.emr.jss.common.rpc.{RpcAddress, RpcEnv}
 import com.aliyun.emr.jss.common.util.Utils
 import com.aliyun.emr.jss.common.EssConf
 import com.aliyun.emr.jss.protocol.{PartitionLocation, RpcNameConstants}
-import com.aliyun.emr.jss.protocol.message.ControlMessages.{MapperEnd, MapperEndResponse, OfferSlave, OfferSlaveResponse, RegisterShuffle, RegisterShuffleResponse}
+import com.aliyun.emr.jss.protocol.message.ControlMessages._
 import com.aliyun.emr.jss.service.deploy.master.{Master, MasterArguments}
 import com.aliyun.emr.jss.service.deploy.worker.{Worker, WorkerArguments}
 import org.scalatest.FunSuite
-import scala.collection.JavaConversions._
 
 class MessageHandlerSuite extends FunSuite {
   /**
@@ -92,6 +93,11 @@ class MessageHandlerSuite extends FunSuite {
   )
   val master = env.setupEndpointRef(new RpcAddress(localhost, 9099), RpcNameConstants.MASTER_EP)
 
+  /**
+   * ===============================
+   *         start testing
+   * ===============================
+   */
   test("RegisterShuffle") {
     val res = master.askSync[RegisterShuffleResponse](
       RegisterShuffle(
@@ -106,17 +112,9 @@ class MessageHandlerSuite extends FunSuite {
     assert(partitionLocations.size() == 10)
     partitionLocations.foreach(p => {
       assert(p.getMode == PartitionLocation.Mode.Master)
-      assert(p.getSlavePartitionLocation != null)
-      assert(p.getSlavePartitionLocation.getMode == PartitionLocation.Mode.Slave)
+      assert(p.getPeer != null)
+      assert(p.getPeer.getMode == PartitionLocation.Mode.Slave)
     })
-  }
-
-  test("OfferSlave") {
-    val res = master.askSync[OfferSlaveResponse](
-      OfferSlave("myPartitionId")
-    )
-    assert(res.success)
-    println(res)
   }
 
   test("MapperEnd") {
@@ -133,6 +131,28 @@ class MessageHandlerSuite extends FunSuite {
       )
     )
     assert(res.success)
+    println(res)
+  }
+
+  test("SlaveLost") {
+    val partitionId = "p1"
+    val masterLocation = new PartitionLocation(
+      partitionId,
+      localhost,
+      11,
+      PartitionLocation.Mode.Master
+    )
+    val slaveLocation = new PartitionLocation(
+      partitionId,
+      localhost,
+      10,
+      PartitionLocation.Mode.Slave,
+      masterLocation
+    )
+    masterLocation.setPeer(slaveLocation)
+    val res = master.askSync[SlaveLostResponse](
+      SlaveLost("appId-1", slaveLocation)
+    )
     println(res)
   }
 }

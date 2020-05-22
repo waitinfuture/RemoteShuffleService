@@ -53,10 +53,6 @@ object ControlMessages {
     newLocation: PartitionLocation
   ) extends MasterMessage
 
-  case class OfferSlave(
-    partitionId: String
-  ) extends MasterMessage
-
   case class OfferSlaveResponse(
     success: Boolean,
     location: PartitionLocation
@@ -99,8 +95,9 @@ object ControlMessages {
   case object SendHeartbeat extends WorkerMessage
 
   case class ReserveBuffers(
+    shuffleKey: String,
     masterLocations: util.List[PartitionLocation],
-    slaveLocations: util.List[String]
+    slaveLocations: util.List[PartitionLocation]
   ) extends WorkerMessage
 
   case class ReserveBuffersResponse(
@@ -108,8 +105,9 @@ object ControlMessages {
   ) extends WorkerMessage
 
   case class ClearBuffers(
-    masterLocationIds: util.List[String],
-    slaveLocationIds: util.List[String]
+    shuffleKey: String,
+    masterLocs: util.List[PartitionLocation],
+    slaveLocs: util.List[PartitionLocation]
   ) extends WorkerMessage
 
   case class ClearBuffersResponse(
@@ -121,11 +119,13 @@ object ControlMessages {
    *  ==========================================
    */
   case class SlaveLost(
-    partitionLocation: PartitionLocation
+    shuffleKey: String,
+    slaveLocation: PartitionLocation
   ) extends Message
 
   case class SlaveLostResponse(
-    success: Boolean
+    success: Boolean,
+    slaveLocation: PartitionLocation
   ) extends Message
 
 }

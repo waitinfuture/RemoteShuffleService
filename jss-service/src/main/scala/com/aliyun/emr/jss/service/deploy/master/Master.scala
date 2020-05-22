@@ -12,6 +12,7 @@ import com.aliyun.emr.jss.common.rpc.{RpcAddress, RpcCallContext, RpcEndpoint, R
 import com.aliyun.emr.jss.common.util.{ThreadUtils, Utils}
 import com.aliyun.emr.jss.protocol.{PartitionLocation, RpcNameConstants}
 import com.aliyun.emr.jss.protocol.message.ControlMessages._
+import com.aliyun.emr.jss.service.deploy.worker.WorkerInfo
 
 private[deploy] class Master(
     override val rpcEnv: RpcEnv,
@@ -19,7 +20,7 @@ private[deploy] class Master(
     val conf: EssConf) extends RpcEndpoint with Logging {
 
   type WorkerResource = java.util.Map[WorkerInfo,
-    (java.util.List[PartitionLocation], java.util.List[String])]
+    (java.util.List[PartitionLocation], java.util.List[PartitionLocation])]
 
   // Threads
   private val forwardMessageThread =
@@ -31,7 +32,7 @@ private[deploy] class Master(
   )
 
   // Configs
-  private val CHUNK_SIZE = conf.getSizeAsKb("ess.partition.memory", "32m").toInt
+  private val CHUNK_SIZE = conf.getSizeAsBytes("ess.partition.memory", "32m")
   private val WORKER_TIMEOUT_MS = conf.getLong("ess.worker.timeout", 60) * 1000
 
   // States
@@ -97,12 +98,12 @@ private[deploy] class Master(
       }
   }
 
-  def reserveBuffers(slots: WorkerResource): util.List[WorkerInfo] = {
+  def reserveBuffers(shuffleKey: String, slots: WorkerResource): util.List[WorkerInfo] = {
     val failed = new util.ArrayList[WorkerInfo]()
 
     slots.foreach(entry => {
       val res = entry._1.endpoint.askSync[ReserveBuffersResponse](
-        ReserveBuffers(entry._2._1, entry._2._2))
+        ReserveBuffers(shuffleKey, entry._2._1, entry._2._2))
       if (res.success) {
         logInfo(s"Successfully allocated partition buffer from worker ${entry._1.hostPort}")
       } else {
@@ -114,31 +115,45 @@ private[deploy] class Master(
     failed
   }
 
-  def reserveBuffersWithRetry(slots: WorkerResource): util.List[WorkerInfo] = {
+  def reserveBuffersWithRetry(shuffleKey: String, slots: WorkerResource): util.List[WorkerInfo] = {
     // reserve buffers
-    var failed = reserveBuffers(slots)
+    var failed = reserveBuffers(shuffleKey, slots)
 
     // retry once if any failed
     failed = if (failed.nonEmpty) {
       logInfo("reserve buffers failed, retry once")
-      reserveBuffers(slots.filterKeys(worker => failed.contains(worker)))
+      reserveBuffers(shuffleKey, slots.filterKeys(worker => failed.contains(worker)))
     } else null
 
     failed
   }
 
-  def clearBuffers(slots: WorkerResource): Unit = {
+  def clearBuffers(shuffleKey: String, slots: WorkerResource): Unit = {
     slots.foreach(entry => {
-      val res = entry._1.endpoint.askSync[ClearBuffersResponse](
-        ClearBuffers(entry._2._1.map(_.getUUID()), entry._2._2)
+      var res = entry._1.endpoint.askSync[ClearBuffersResponse](
+        ClearBuffers(shuffleKey, entry._2._1, entry._2._2)
       )
       if (res.success) {
         logInfo(s"ClearBuffers success for worker ${entry._1}")
+        // update status
+        workers.synchronized {
+          entry._1.removeMasterPartition(shuffleKey, entry._2._1)
+          entry._1.removeSlavePartition(shuffleKey, entry._2._2)
+        }
       } else {
+        // retry once
         logInfo(s"Failed to clear buffers for worker ${entry._1}, retry once")
-        entry._1.endpoint.ask[ClearBuffersResponse](
-          ClearBuffers(entry._2._1.map(_.getUUID()), entry._2._2)
+        res = entry._1.endpoint.askSync[ClearBuffersResponse](
+          ClearBuffers(shuffleKey, entry._2._1, entry._2._2)
         )
+        if (res.success) {
+          logInfo(s"ClearBuffers success for worker ${entry._1}")
+          // update status
+          workers.synchronized {
+            entry._1.removeMasterPartition(shuffleKey, entry._2._1)
+            entry._1.removeSlavePartition(shuffleKey, entry._2._2)
+          }
+        }
       }
     })
   }
@@ -153,13 +168,13 @@ private[deploy] class Master(
     case Revive(applicationId, shuffleId) =>
       logInfo(s"received Revive request, ${applicationId}, ${shuffleId}")
       handleRevive(context, applicationId, shuffleId)
-    case OfferSlave(partitionId) =>
-      logInfo(s"received OfferSlave request, partitionId: ${partitionId}")
-      handleOfferSlave(context, partitionId)
     case MapperEnd(applicationId: String, shuffleId: Int, mapId: Int,
       attemptId: Int, partitionIds: util.List[String]) =>
       logInfo(s"receive MapperEnd request, ${applicationId}, ${shuffleId}, ${mapId}, ${attemptId}")
       handleMapperEnd(context, applicationId, shuffleId, mapId, attemptId, partitionIds)
+    case SlaveLost(shuffleKey, slaveLocation: PartitionLocation) =>
+      logInfo(s"receive SlaveLost request, ${slaveLocation}")
+      handleSlaveLost(context, shuffleKey, slaveLocation)
   }
 
   private def timeOutDeadWorkers() {
@@ -207,7 +222,7 @@ private[deploy] class Master(
     }
 
     val slots = workers.synchronized {
-      MasterUtil.offerSlots(workers, numPartitions)
+      MasterUtil.offerSlots(shuffleKey, workers, numPartitions)
     }
 
     // reply false if offer slots failed
@@ -218,22 +233,12 @@ private[deploy] class Master(
     }
 
     // reserve buffers
-    val failed = reserveBuffersWithRetry(slots)
+    val failed = reserveBuffersWithRetry(shuffleKey, slots)
 
     // reserve buffers failed, clear allocated resources
     if (failed != null && !failed.isEmpty()) {
       logError("reserve buffers still fail after retry, clear buffers")
-      clearBuffers(slots)
-      // update status
-      workers.synchronized {
-        slots.foreach(entry => {
-          val worker = entry._1
-          val masterLocations = entry._2._1
-          val slaveLocations = entry._2._2
-          masterLocations.foreach(loc => worker.removeMasterPartition(loc.getUUID))
-          slaveLocations.foreach(partitionId => worker.removeSlavePartition(partitionId))
-        })
-      }
+      clearBuffers(shuffleKey, slots)
       logInfo("fail to reserve buffers")
       context.reply(RegisterShuffleResponse(false, null))
       return
@@ -244,12 +249,6 @@ private[deploy] class Master(
       registeredShuffle.add(shuffleKey)
     }
     val locations: List[PartitionLocation] = slots.flatMap(_._2._1).toList
-    workers.synchronized {
-      slots.foreach(entry => {
-        entry._1.addMasterPartition(entry._2._1.map(_.getUUID))
-        entry._1.addSlavePartition(entry._2._2)
-      })
-    }
     shuffleMapperAttempts.synchronized {
       val attempts = new Array[Int](numMappers)
       0 until numMappers foreach (idx => attempts(idx) = 0)
@@ -270,7 +269,7 @@ private[deploy] class Master(
 
     // offer new slot
     val slots = workers.synchronized {
-      MasterUtil.offerSlots(workers, 1)
+      MasterUtil.offerSlots(shuffleKey, workers, 1)
     }
     // reply false if offer slots failed
     if (slots == null || slots.isEmpty()) {
@@ -280,62 +279,17 @@ private[deploy] class Master(
     }
 
     // reserve buffer
-    val failed = reserveBuffersWithRetry(slots)
+    val failed = reserveBuffersWithRetry(shuffleKey, slots)
     // reserve buffers failed, clear allocated resources
     if (failed != null && !failed.isEmpty()) {
-      logError("reserve buffers still fail after retry, clear buffers")
-      clearBuffers(slots)
+      clearBuffers(shuffleKey, slots)
       logInfo("fail to reserve buffers")
       context.reply(ReviveResponse(false, null))
       return
     }
 
-    // update status
-    workers.synchronized {
-      slots.foreach(entry => {
-        entry._1.addMasterPartition(entry._2._1.map(_.getUUID))
-        entry._1.addSlavePartition(entry._2._2)
-      })
-    }
-
     // reply success
     context.reply(ReviveResponse(true, slots.head._2._1.head))
-  }
-
-  private def handleOfferSlave(context: RpcCallContext, partitionId: String): Unit = {
-    // offer slot
-    val location = workers.synchronized {
-      MasterUtil.offerSlaveSlot(partitionId, workers)
-    }
-    if (location == null) {
-      logError("offer slot failed!");
-      context.reply(OfferSlaveResponse(false, null))
-      return
-    }
-
-    // reserve buffer
-    val slots = new util.HashMap[WorkerInfo, (util.List[PartitionLocation], util.List[String])]()
-    val locationList = new util.ArrayList[String]()
-    locationList.add(location._2)
-    slots.put(location._1, (new util.ArrayList[PartitionLocation](), locationList))
-    val failed = reserveBuffersWithRetry(slots)
-    if (failed != null && !failed.isEmpty()) {
-      logError("reserve buffer failed!")
-      context.reply(OfferSlaveResponse(false, null))
-      return
-    }
-
-    // update status
-    location._1.addSlavePartition(location._2)
-    // offer slave success
-    logInfo(s"offer slave success, partition location ${location._2}")
-    val partitionLocation = new PartitionLocation(
-      partitionId,
-      location._1.host,
-      location._1.port,
-      PartitionLocation.Mode.Slave
-    )
-    context.reply(OfferSlaveResponse(true, partitionLocation))
   }
 
   private def handleMapperEnd(
@@ -372,13 +326,13 @@ private[deploy] class Master(
   }
 
   private def handleSlaveLost(context: RpcCallContext,
-    partitionLocation: PartitionLocation): Unit = {
+    shuffleKey: String, slaveLocation: PartitionLocation): Unit = {
     // find worker
     var worker: WorkerInfo = null
     breakable({
       for (ind <- 0 until workers.length) {
-        if (workers.get(ind).host == partitionLocation.getHost
-          && workers.get(ind).port == partitionLocation.getPort) {
+        if (workers.get(ind).host == slaveLocation.getHost
+          && workers.get(ind).port == slaveLocation.getPort) {
           worker = workers.get(ind)
           break()
         }
@@ -386,18 +340,62 @@ private[deploy] class Master(
     })
     if (worker == null) {
       logError("Worker not found!")
-      context.reply(SlaveLostResponse(false))
+    } else {
+      // send ClearBuffer
+      val locs = new util.ArrayList[PartitionLocation]()
+      locs.add(slaveLocation)
+      var res = worker.endpoint.askSync[ClearBuffersResponse](
+        ClearBuffers(shuffleKey, null, locs)
+      )
+      if (res.success) {
+        logInfo("Successfully cleared buffer")
+        // update status
+        workers.synchronized {
+          worker.removeSlavePartition(shuffleKey, slaveLocation)
+        }
+      } else {
+        // retry once
+        res = worker.endpoint.askSync[ClearBuffersResponse](
+          ClearBuffers(shuffleKey, null, locs)
+        )
+        if (res.success) {
+          logInfo("Successfully cleared buffer")
+          // update status
+          workers.synchronized {
+            worker.removeSlavePartition(shuffleKey, slaveLocation)
+          }
+        }
+      }
+    }
+
+    // offer new slot
+    val location = workers.synchronized {
+      MasterUtil.offerSlaveSlot(slaveLocation.getPeer, workers)
+    }
+    if (location == null) {
+      logError("offer slot failed!")
+      context.reply(SlaveLostResponse(false, null))
       return
     }
 
-    // send ClearBuffer
-    val res = worker.endpoint.askSync[ClearBuffersResponse](
-      ClearBuffers(null, List(partitionLocation.getUUID))
-    )
-    if (res.success) {
-      worker.removeSlavePartition(partitionLocation.getUUID)
-      context.reply(SlaveLostResponse(true))
+    // reserve buffer
+    val slots = new util.HashMap[WorkerInfo, (util.List[PartitionLocation], util.List[PartitionLocation])]()
+    val locationList = new util.ArrayList[PartitionLocation]()
+    locationList.add(location._2)
+    slots.put(location._1, (new util.ArrayList[PartitionLocation](), locationList))
+    val failed = reserveBuffersWithRetry(shuffleKey, slots)
+    if (failed != null && !failed.isEmpty()) {
+      logError("reserve buffer failed!")
+      // update status
+      workers.synchronized {
+        worker.removeSlavePartition(shuffleKey, location._2)
+      }
+      context.reply(SlaveLostResponse(false, null))
+      return
     }
+
+    // handle SlaveLost success, reply
+    context.reply(SlaveLostResponse(true, location._2))
   }
 
 }
