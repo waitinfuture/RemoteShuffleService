@@ -29,7 +29,7 @@ class WorkerArguments(args: Array[String], conf: EssConf) {
   // var master: String = null
   // for local testing.
   var master: String = s"jindo://$host:9099"
-  var memory: Int = 2048
+  var memory: Long = 1 * 1024L * 1024 * 1024
   var propertiesFile: String = null
 
   if (conf.getenv("JINDO_WORKER_MEMORY") != null) {

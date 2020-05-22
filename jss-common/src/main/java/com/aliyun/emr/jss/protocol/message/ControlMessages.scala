@@ -20,13 +20,13 @@ object ControlMessages {
   case class RegisterWorker(
     host: String,
     port: Int,
-    memory: Int,
+    memory: Long,
     worker: RpcEndpointRef) extends MasterMessage
 
   case class ReregisterWorker(
     host: String,
     port: Int,
-    memory: Int,
+    memory: Long,
     worker: RpcEndpointRef) extends MasterMessage
 
   case class Heartbeat(host: String, port: Int) extends MasterMessage
@@ -100,7 +100,7 @@ object ControlMessages {
 
   case class ReserveBuffers(
     masterLocations: util.List[PartitionLocation],
-    slaveLocations: util.List[PartitionLocation]
+    slaveLocations: util.List[String]
   ) extends WorkerMessage
 
   case class ReserveBuffersResponse(

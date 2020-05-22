@@ -32,7 +32,7 @@ import com.aliyun.emr.jss.protocol.message.ControlMessages._
 
 private[deploy] class Worker(
     override val rpcEnv: RpcEnv,
-    memory: Int, // In Byte format
+    memory: Long, // In Byte format
     masterRpcAddress: RpcAddress,
     endpointName: String,
     val conf: EssConf) extends RpcEndpoint with Logging {
@@ -46,9 +46,6 @@ private[deploy] class Worker(
 
   Utils.checkHost(host)
   assert (port > 0)
-
-  // Status
-  private var connectionAttemptCount = 0
 
   // Memory Pool
   private val MemoryPoolCapacity = conf.getSizeAsBytes("ess.memoryPool.capacity", "1G")
@@ -66,11 +63,11 @@ private[deploy] class Worker(
 
   // Structs
   var memoryUsed = 0
-  def memoryFree: Int = memory - memoryUsed
+  def memoryFree: Long = memory - memoryUsed
 
   override def onStart(): Unit = {
     logInfo("Starting Worker %s:%d with %s RAM".format(
-      host, port, Utils.megabytesToString(memory)))
+      host, port, Utils.bytesToString(memory)))
     registerWithMaster()
 
     // start heartbeat
@@ -94,11 +91,11 @@ private[deploy] class Worker(
 
   override def receive: PartialFunction[Any, Unit] = {
     case SendHeartbeat =>
-      masterEndpoint.ask(Heartbeat(host, port))
+      masterEndpoint.send(Heartbeat(host, port))
   }
 
   // TODO
-  override def receiveAndReply(context: _root_.com.aliyun.emr.jss.common.rpc.RpcCallContext): _root_.scala.PartialFunction[Any, Unit] = {
+  override def receiveAndReply(context: RpcCallContext): PartialFunction[Any, Unit] = {
     case ReserveBuffers(masterLocations, slaveLocations) =>
       handleReserveBuffers(context, masterLocations, slaveLocations)
     case ClearBuffers(masterLocationIds, slaveLocationIds) =>
@@ -107,7 +104,7 @@ private[deploy] class Worker(
 
   private def handleReserveBuffers(context: RpcCallContext,
     masterLocations: util.List[PartitionLocation],
-    slaveLocations: util.List[PartitionLocation]): Unit = {
+    slaveLocations: util.List[String]): Unit = {
     val masterDoubleChunks = new util.HashMap[String, (PartitionLocation, DoubleChunk)]()
     breakable({
       for (ind <- 0 until masterLocations.size()) {
@@ -144,8 +141,8 @@ private[deploy] class Worker(
           if (ch2 == null) {
             break()
           } else {
-            slaveDoubleChunks.put(slaveLocations.get(ind).getUUID,
-              new DoubleChunk(ch1, ch2, memoryPool, slaveLocations.get(ind).getUUID))
+            slaveDoubleChunks.put(slaveLocations.get(ind),
+              new DoubleChunk(ch1, ch2, memoryPool, slaveLocations.get(ind)))
           }
         }
       }
@@ -203,12 +200,14 @@ private[deploy] class Worker(
       RegisterWorker(host, port, memory, self)
     )
     while (!res.success) {
+      logInfo("register worker failed!")
       Thread.sleep(1000)
-      logInfo("Trying to register with master")
+      logInfo("Trying to re-register with master")
       res = masterEndpoint.askSync[RegisterWorkerResponse](
         RegisterWorker(host, port, memory, self)
       )
     }
+    logInfo("Registered worker successfully")
   }
 
   private def reRegisterWithMaster(): Unit = {

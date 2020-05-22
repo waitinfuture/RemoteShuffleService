@@ -8,14 +8,14 @@ import com.aliyun.emr.jss.common.util.Utils
 private[jss] class WorkerInfo(
   val host: String,
   val port: Int,
-  val memory: Int,
+  val memory: Long,
   val partitionSize: Int,
   val endpoint: RpcEndpointRef) extends Serializable {
 
   Utils.checkHost(host)
   assert(port > 0)
 
-  var memoryUsed: Int = _
+  var memoryUsed: Long = _
   var lastHeartbeat: Long = _
   // stores PartitionLocation's UUID
   val masterPartitionLocations = new util.ArrayList[String]()
@@ -23,7 +23,10 @@ private[jss] class WorkerInfo(
 
   init()
 
-  def freeMemory: Int = memory - memoryUsed
+  // only exposed for test
+  def freeMemory: Long = memory - memoryUsed
+
+  def slotAvailable(): Boolean = freeMemory >= partitionSize
 
   private def readObject(in: java.io.ObjectInputStream): Unit = Utils.tryOrIOException {
     in.defaultReadObject()
@@ -40,24 +43,34 @@ private[jss] class WorkerInfo(
     host + ":" + port
   }
 
-  def addMasterPartition(partitionLocationId: String) {
-    masterPartitionLocations.add(partitionLocationId)
+  def addMasterPartition(partitionId: String): Unit = {
+    masterPartitionLocations.add(partitionId)
     memoryUsed += partitionSize
   }
 
-  def addSlavePartition(partitionLocationId: String, partitionMemory: Int): Unit = {
-    slavePartitionLocations.add(partitionLocationId)
-    memoryUsed += partitionMemory
+  def addMasterPartition(partitionIds: util.List[String]): Unit = {
+    masterPartitionLocations.addAll(partitionIds)
+    memoryUsed += partitionSize * partitionIds.size()
   }
 
-  def removeMasterPartition(partitionLocationId: String, partitionMemory: Int) {
+  def addSlavePartition(partitionId: String): Unit = {
+    slavePartitionLocations.add(partitionId)
+    memoryUsed += partitionSize
+  }
+
+  def addSlavePartition(partitionIds: util.List[String]): Unit = {
+    slavePartitionLocations.addAll(partitionIds)
+    memoryUsed += partitionSize * partitionIds.size()
+  }
+
+  def removeMasterPartition(partitionLocationId: String): Unit = {
     masterPartitionLocations.remove(partitionLocationId)
-    memoryUsed -= partitionMemory
+    memoryUsed -= partitionSize
   }
 
-  def removeSlavePartition(partitionLocationId: String, partitionMemory: Int): Unit = {
+  def removeSlavePartition(partitionLocationId: String): Unit = {
     slavePartitionLocations.remove(partitionLocationId)
-    memoryUsed -= partitionMemory
+    memoryUsed -= partitionSize
   }
 
   def clearAll(): Unit = {

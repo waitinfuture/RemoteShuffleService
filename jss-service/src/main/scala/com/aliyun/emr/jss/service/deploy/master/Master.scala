@@ -4,17 +4,14 @@ import java.util
 import java.util.concurrent.{ConcurrentHashMap, ScheduledFuture, TimeUnit}
 
 import scala.collection.JavaConversions._
-import scala.collection.JavaConverters._
-import scala.util.Random
 import scala.util.control.Breaks._
 
 import com.aliyun.emr.jss.common.EssConf
 import com.aliyun.emr.jss.common.internal.Logging
-import com.aliyun.emr.jss.common.rpc.{RpcAddress, RpcCallContext, RpcEndpoint, RpcEnv}
+import com.aliyun.emr.jss.common.rpc.{RpcAddress, RpcCallContext, RpcEndpoint, RpcEndpointRef, RpcEnv}
 import com.aliyun.emr.jss.common.util.{ThreadUtils, Utils}
 import com.aliyun.emr.jss.protocol.{PartitionLocation, RpcNameConstants}
 import com.aliyun.emr.jss.protocol.message.ControlMessages._
-import com.aliyun.emr.jss.service.deploy.DeployMessages._
 
 private[deploy] class Master(
     override val rpcEnv: RpcEnv,
@@ -22,7 +19,7 @@ private[deploy] class Master(
     val conf: EssConf) extends RpcEndpoint with Logging {
 
   type WorkerResource = java.util.Map[WorkerInfo,
-    (java.util.List[PartitionLocation], java.util.List[PartitionLocation])]
+    (java.util.List[PartitionLocation], java.util.List[String])]
 
   // Threads
   private val forwardMessageThread =
@@ -36,7 +33,6 @@ private[deploy] class Master(
   // Configs
   private val CHUNK_SIZE = conf.getSizeAsKb("ess.partition.memory", "32m").toInt
   private val WORKER_TIMEOUT_MS = conf.getLong("ess.worker.timeout", 60) * 1000
-  private val REAPER_ITERATIONS = 15
 
   // States
   val workers = new util.ArrayList[WorkerInfo]()
@@ -84,39 +80,20 @@ private[deploy] class Master(
   }
 
   override def receive: PartialFunction[Any, Unit] = {
-
     case CheckForWorkerTimeOut =>
       timeOutDeadWorkers()
 
     case Heartbeat(host, port) =>
       logDebug(s"received heartbeat from ${host}:${port}")
-      var worker: WorkerInfo = null
       workers.synchronized {
         breakable({
           for (ind <- 0 until workers.size()) {
             if (workers.get(ind).host == host && workers.get(ind).port == port) {
-              worker = workers.get(ind)
+              workers.get(ind).lastHeartbeat = System.currentTimeMillis()
               break()
             }
           }
         })
-      }
-      if (worker != null) {
-        worker.lastHeartbeat = System.currentTimeMillis()
-      }
-
-    case RegisterWorker(host, port, memory, workerRef) =>
-      logInfo("Registering worker %s:%d with %s RAM".format(
-        host, port, Utils.megabytesToString(memory)))
-      if (workers.exists(w => w.host == host && w.port == port)) {
-        logError(s"Worker already registered! ${host}:${port}")
-        workerRef.send(RegisterWorkerFailed("Duplicate worker ID"))
-      } else {
-        val worker = new WorkerInfo(host, port, memory, CHUNK_SIZE, workerRef)
-        workers.synchronized {
-          workers.add(worker)
-        }
-        logInfo(s"registered worker ${worker}")
       }
   }
 
@@ -153,20 +130,23 @@ private[deploy] class Master(
   def clearBuffers(slots: WorkerResource): Unit = {
     slots.foreach(entry => {
       val res = entry._1.endpoint.askSync[ClearBuffersResponse](
-        ClearBuffers(entry._2._1.map(_.getUUID()), entry._2._2.map(_.getUUID()))
+        ClearBuffers(entry._2._1.map(_.getUUID()), entry._2._2)
       )
       if (res.success) {
         logInfo(s"ClearBuffers success for worker ${entry._1}")
       } else {
         logInfo(s"Failed to clear buffers for worker ${entry._1}, retry once")
         entry._1.endpoint.ask[ClearBuffersResponse](
-          ClearBuffers(entry._2._1.map(_.getUUID()), entry._2._2.map(_.getUUID()))
+          ClearBuffers(entry._2._1.map(_.getUUID()), entry._2._2)
         )
       }
     })
   }
 
   override def receiveAndReply(context: RpcCallContext): PartialFunction[Any, Unit] = {
+    case RegisterWorker(host, port, memory, worker) =>
+      logInfo(s"received RegisterWorker, ${host}:${port} ${memory}")
+      handleRegisterWorker(context, host, port, memory, worker)
     case RegisterShuffle(applicationId, shuffleId, numMappers, numPartitions) =>
       logInfo(s"received register shuffle, ${applicationId}, ${shuffleId}, ${numMappers}, ${numPartitions}")
       handleRegisterShuffle(context, applicationId, shuffleId, numMappers, numPartitions)
@@ -182,45 +162,37 @@ private[deploy] class Master(
       handleMapperEnd(context, applicationId, shuffleId, mapId, attemptId, partitionIds)
   }
 
-  private def choosePartitionLocation(
-      applicationId: String,
-      shuffleId: Int,
-      reduceId: Int): (WorkerInfo, WorkerInfo) = {
-    val available = workers.asScala.filter(w => {
-      if (w.freeMemory > CHUNK_SIZE && w.state == WorkerState.ALIVE) {
-        true
-      } else {
-        false
-      }
-    })
-
-    if (available.size < 2) {
-      null
-    } else {
-      val picked = Random.shuffle(available).take(2).toArray
-      (picked.head, picked(1))
-    }
-  }
-
   private def timeOutDeadWorkers() {
     val currentTime = System.currentTimeMillis()
-    val toRemove = workers.asScala
-      .filter(w => w.lastHeartbeat < currentTime - WORKER_TIMEOUT_MS)
-    for (worker <- toRemove) {
-      if (worker.state != WorkerState.DEAD) {
-        logWarning(s"Removing ${worker} because of timeout for ${WORKER_TIMEOUT_MS / 1000} seconds")
-        removeWorker(worker, s"Not receiving heartbeat for ${WORKER_TIMEOUT_MS / 1000} seconds")
+    var ind = 0
+    while (ind < workers.size()) {
+      if (workers.get(ind).lastHeartbeat < currentTime - WORKER_TIMEOUT_MS) {
+        logInfo(s"Worker ${workers.get(ind)} timeout! Trigger WorkerLost event")
+        // trigger WorkerLost event
+        self.ask[WorkerLostResponse](
+          WorkerLost(workers.get(ind).host, workers.get(ind).port)
+        )
       } else {
-        if (worker.lastHeartbeat < currentTime - ((REAPER_ITERATIONS + 1) * WORKER_TIMEOUT_MS)) {
-          workers.remove(worker)
-        }
+        ind += 1
       }
     }
   }
 
-  private def removeWorker(worker: WorkerInfo, msg: String) {
-    logInfo(s"Removing worker ${worker}")
-    worker.setState(WorkerState.DEAD)
+  def handleRegisterWorker(context: RpcCallContext, host: String, port: Int,
+    memory: Long, workerRef: RpcEndpointRef): Unit = {
+    logInfo("Registering worker %s:%d with %s RAM".format(
+      host, port, Utils.bytesToString(memory)))
+    if (workers.exists(w => w.host == host && w.port == port)) {
+      logError(s"Worker already registered! ${host}:${port}")
+      context.reply(RegisterWorkerResponse(false, "Worker already registered!"))
+    } else {
+      val worker = new WorkerInfo(host, port, memory, CHUNK_SIZE, workerRef)
+      workers.synchronized {
+        workers.add(worker)
+      }
+      context.reply(RegisterWorkerResponse(true, null))
+      logInfo(s"registered worker ${worker}")
+    }
   }
 
   def handleRegisterShuffle(context: RpcCallContext, applicationId: String,
@@ -235,7 +207,7 @@ private[deploy] class Master(
     }
 
     val slots = workers.synchronized {
-      MasterUtil.offerSlots(workers, CHUNK_SIZE, numPartitions)
+      MasterUtil.offerSlots(workers, numPartitions)
     }
 
     // reply false if offer slots failed
@@ -252,18 +224,31 @@ private[deploy] class Master(
     if (failed != null && !failed.isEmpty()) {
       logError("reserve buffers still fail after retry, clear buffers")
       clearBuffers(slots)
+      // update status
+      workers.synchronized {
+        slots.foreach(entry => {
+          val worker = entry._1
+          val masterLocations = entry._2._1
+          val slaveLocations = entry._2._2
+          masterLocations.foreach(loc => worker.removeMasterPartition(loc.getUUID))
+          slaveLocations.foreach(partitionId => worker.removeSlavePartition(partitionId))
+        })
+      }
       logInfo("fail to reserve buffers")
       context.reply(RegisterShuffleResponse(false, null))
       return
     }
 
     // register shuffle success, update status
+    registeredShuffle.synchronized {
+      registeredShuffle.add(shuffleKey)
+    }
     val locations: List[PartitionLocation] = slots.flatMap(_._2._1).toList
     workers.synchronized {
       slots.foreach(entry => {
-        entry._1.addMasterPartition()
+        entry._1.addMasterPartition(entry._2._1.map(_.getUUID))
+        entry._1.addSlavePartition(entry._2._2)
       })
-      shuffleResources.put(shuffleKey, slots)
     }
     shuffleMapperAttempts.synchronized {
       val attempts = new Array[Int](numMappers)
@@ -277,7 +262,7 @@ private[deploy] class Master(
   private def handleRevive(context: RpcCallContext, applicationId: String, shuffleId: Int): Unit = {
     // check whether shuffle has registered
     val shuffleKey = s"${applicationId}-${shuffleId}"
-    if (!shuffleResources.containsKey(shuffleKey)) {
+    if (!registeredShuffle.contains(shuffleKey)) {
       logError(s"shuffle ${shuffleKey} has not registered!")
       context.reply(ReviveResponse(false, null))
       return
@@ -285,7 +270,7 @@ private[deploy] class Master(
 
     // offer new slot
     val slots = workers.synchronized {
-      MasterUtil.offerSlots(workers, CHUNK_SIZE, 1)
+      MasterUtil.offerSlots(workers, 1)
     }
     // reply false if offer slots failed
     if (slots == null || slots.isEmpty()) {
@@ -306,14 +291,11 @@ private[deploy] class Master(
     }
 
     // update status
-    shuffleResources.synchronized {
-      val resource = shuffleResources.get(shuffleKey)
-      val workerInfo = slots.keySet().head
-      resource.putIfAbsent(workerInfo,
-        (new util.ArrayList[PartitionLocation](), new util.ArrayList[PartitionLocation]()))
-      val (masterLocations, slaveLocations) = resource.get(workerInfo)
-      masterLocations.addAll(slots.head._2._1)
-      slaveLocations.addAll(slots.head._2._2)
+    workers.synchronized {
+      slots.foreach(entry => {
+        entry._1.addMasterPartition(entry._2._1.map(_.getUUID))
+        entry._1.addSlavePartition(entry._2._2)
+      })
     }
 
     // reply success
@@ -323,7 +305,7 @@ private[deploy] class Master(
   private def handleOfferSlave(context: RpcCallContext, partitionId: String): Unit = {
     // offer slot
     val location = workers.synchronized {
-      MasterUtil.offerSlot(partitionId, workers, CHUNK_SIZE)
+      MasterUtil.offerSlaveSlot(partitionId, workers)
     }
     if (location == null) {
       logError("offer slot failed!");
@@ -332,8 +314,8 @@ private[deploy] class Master(
     }
 
     // reserve buffer
-    val slots = new util.HashMap[WorkerInfo, (util.List[PartitionLocation], util.List[PartitionLocation])]()
-    val locationList = new util.ArrayList[PartitionLocation]()
+    val slots = new util.HashMap[WorkerInfo, (util.List[PartitionLocation], util.List[String])]()
+    val locationList = new util.ArrayList[String]()
     locationList.add(location._2)
     slots.put(location._1, (new util.ArrayList[PartitionLocation](), locationList))
     val failed = reserveBuffersWithRetry(slots)
@@ -343,9 +325,17 @@ private[deploy] class Master(
       return
     }
 
+    // update status
+    location._1.addSlavePartition(location._2)
     // offer slave success
     logInfo(s"offer slave success, partition location ${location._2}")
-    context.reply(OfferSlaveResponse(true, location._2))
+    val partitionLocation = new PartitionLocation(
+      partitionId,
+      location._1.host,
+      location._1.port,
+      PartitionLocation.Mode.Slave
+    )
+    context.reply(OfferSlaveResponse(true, partitionLocation))
   }
 
   private def handleMapperEnd(
@@ -405,8 +395,8 @@ private[deploy] class Master(
       ClearBuffers(null, List(partitionLocation.getUUID))
     )
     if (res.success) {
-      worker.removeSlavePartition(partitionLocation)
-      context.reply(SlaveLostResponse(success))
+      worker.removeSlavePartition(partitionLocation.getUUID)
+      context.reply(SlaveLostResponse(true))
     }
   }
 
