@@ -475,4 +475,8 @@ object Utils extends Logging {
       inReader.close()
     }
   }
+
+  def makeShuffleKey(applicationId: String, shuffleId: Int): String = {
+    s"${applicationId}-${shuffleId}"
+  }
 }

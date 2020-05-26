@@ -11,6 +11,7 @@ import com.aliyun.emr.jss.common.EssConf
 import com.aliyun.emr.jss.protocol.{PartitionLocation, RpcNameConstants}
 import com.aliyun.emr.jss.protocol.message.ControlMessages._
 import com.aliyun.emr.jss.protocol.message.DataMessages.{SendData, SendDataResponse}
+import com.aliyun.emr.jss.protocol.message.ReturnCode
 import com.aliyun.emr.jss.service.deploy.master.{Master, MasterArguments}
 import com.aliyun.emr.jss.service.deploy.worker.{DoubleChunk, PartitionLocationWithDoubleChunks, Worker, WorkerArguments, WorkerInfo}
 import org.scalatest.FunSuite
@@ -104,6 +105,8 @@ class MessageHandlerSuite extends FunSuite {
    * ===============================
    */
   var partitionLocations: util.List[PartitionLocation] = _
+
+  // TODO each test has full pepeline
   test("RegisterShuffle") {
     val res = master.askSync[RegisterShuffleResponse](
       RegisterShuffle(
@@ -258,6 +261,22 @@ class MessageHandlerSuite extends FunSuite {
     assert(res.success)
     Thread.sleep(100)
     assert(file3.length() == 256)
+
+    val res2 = worker2.askSync[GetWorkerInfosResponse](GetWorkerInfos)
+    assert(res2.success)
+    val workerInfos = res2.workerInfos.asInstanceOf[util.List[WorkerInfo]]
+    assert(workerInfos.length == 1)
+    val worker = workerInfos.get(0)
+    assert(worker.masterPartitionLocations.size() == 1)
+    assert(worker.masterPartitionLocations.contains("appId-1"))
+    assert(worker.masterPartitionLocations.get("appId-1").contains(worker2Location2))
+    val partitionLocationWithDoubleChunks = worker.masterPartitionLocations.get("appId-1")
+      .get(worker2Location2)
+    val doubleChunk = partitionLocationWithDoubleChunks
+      .asInstanceOf[PartitionLocationWithDoubleChunks].getDoubleChunk
+    assert(doubleChunk.working == 0)
+    assert(doubleChunk.slaveState == DoubleChunk.ChunkState.Ready)
+    assert(doubleChunk.fileName.equals(worker2Location2.getUUID))
   }
 
   test("MapperEnd") {
@@ -277,6 +296,7 @@ class MessageHandlerSuite extends FunSuite {
     println(res)
   }
 
+  // TODO redesign
   test("SlaveLost") {
     val partitionId = "p1"
     val masterLocation = new PartitionLocation(
@@ -294,27 +314,27 @@ class MessageHandlerSuite extends FunSuite {
     )
     masterLocation.setPeer(slaveLocation)
     val res = master.askSync[SlaveLostResponse](
-      SlaveLost("appId-1", slaveLocation)
+      SlaveLost("appId-1", masterLocation, slaveLocation)
     )
     println(res)
   }
 
-  test("Destroy") {
+  test("Destroy-All") {
     val applicationId = "Destroy-Test"
     val shuffleId = 1
-    val shuffleKey = s"${applicationId}-${shuffleId}"
+    val shuffleKey = Utils.makeShuffleKey(applicationId, shuffleId)
     val res = master.askSync[RegisterShuffleResponse](
       RegisterShuffle(
         applicationId,
         shuffleId,
         3,
-        5
+        6
       )
     )
 
     assert(res.success)
     partitionLocations = res.partitionLocations
-    assert(partitionLocations.size() == 5)
+    assert(partitionLocations.size() == 6)
     partitionLocations.foreach(p => {
       assert(p.getMode == PartitionLocation.Mode.Master)
       assert(p.getPeer != null)
@@ -322,21 +342,96 @@ class MessageHandlerSuite extends FunSuite {
       println(p)
     })
 
-    Seq(worker1, worker2).foreach(worker => {
-      val workerSlavePartitions = partitionLocations
-        .filter(p => p.getPeer.getPort == worker.address.port)
-        .map(_.getPeer)
+    var res1 = worker1.askSync[GetWorkerInfosResponse](GetWorkerInfos)
+    assert(res1.success)
+    var workerInfos = res1.workerInfos.asInstanceOf[util.List[WorkerInfo]]
+    assert(workerInfos.size() == 1)
+    var workerInfo = workerInfos.get(0)
+    assert(workerInfo.masterPartitionLocations.contains(shuffleKey))
+    assert(workerInfo.masterPartitionLocations.get(shuffleKey).size() == 3)
+    var res2 = worker1.askSync[DestroyResponse](
+      Destroy(shuffleKey,
+        workerInfo.masterPartitionLocations.get(shuffleKey).keySet().toList,
+        workerInfo.slavePartitionLocations.get(shuffleKey).keySet().toList)
+    )
+    assert(res2.returnCode == ReturnCode.Success)
 
-      val destroyedPartitions =
-        worker.askSync[DestroyResponse](Destroy(shuffleKey, workerSlavePartitions)).destroyedLocations
+    res1 = worker1.askSync[GetWorkerInfosResponse](GetWorkerInfos)
+    assert(res1.success)
+    workerInfos = res1.workerInfos.asInstanceOf[util.List[WorkerInfo]]
+    assert(workerInfos.size() == 1)
+    workerInfo = workerInfos.get(0)
+    assert(workerInfo.masterPartitionLocations.get(shuffleKey) == null)
+    assert(workerInfo.slavePartitionLocations.get(shuffleKey) == null)
+    assert(workerInfo.memoryUsed == 0)
 
-      assert(workerSlavePartitions.length == destroyedPartitions.length)
+    res1 = worker2.askSync[GetWorkerInfosResponse](GetWorkerInfos)
+    assert(res1.success)
+    workerInfos = res1.workerInfos.asInstanceOf[util.List[WorkerInfo]]
+    workerInfo = workerInfos.get(0)
+    assert(workerInfo.masterPartitionLocations.get(shuffleKey).size() == 3)
+    assert(workerInfo.slavePartitionLocations.get(shuffleKey).size() == 3)
+    res2 = worker2.askSync[DestroyResponse](
+      Destroy(shuffleKey,
+        workerInfo.masterPartitionLocations.get(shuffleKey).keySet().toList,
+        workerInfo.slavePartitionLocations.get(shuffleKey).keySet().toList)
+    )
+    assert(res2.returnCode == ReturnCode.Success)
 
-      val workerInfos = worker.askSync[GetWorkerInfosResponse](GetWorkerInfos)
-        .workerInfos.asInstanceOf[util.List[WorkerInfo]]
-      assert(workerInfos.length == 1)
-
-      assert(workerInfos(0).slavePartitionLocations.get(shuffleKey).size() == 0)
-    })
+    res1 = worker2.askSync[GetWorkerInfosResponse](GetWorkerInfos)
+    assert(res1.success)
+    workerInfos = res1.workerInfos.asInstanceOf[util.List[WorkerInfo]]
+    workerInfo = workerInfos.get(0)
+    assert(workerInfo.masterPartitionLocations.get(shuffleKey) == null)
+    assert(workerInfo.slavePartitionLocations.get(shuffleKey) == null)
   }
+
+  test("Destroy-Some") {
+    val applicationId = "Destroy-Test"
+    val shuffleId = 1
+    val shuffleKey = Utils.makeShuffleKey(applicationId, shuffleId)
+    val res = master.askSync[RegisterShuffleResponse](
+      RegisterShuffle(
+        applicationId,
+        shuffleId,
+        3,
+        6
+      )
+    )
+
+    assert(res.success)
+    partitionLocations = res.partitionLocations
+    assert(partitionLocations.size() == 6)
+    partitionLocations.foreach(p => {
+      assert(p.getMode == PartitionLocation.Mode.Master)
+      assert(p.getPeer != null)
+      assert(p.getPeer.getMode == PartitionLocation.Mode.Slave)
+      println(p)
+    })
+
+    var res1 = worker1.askSync[GetWorkerInfosResponse](GetWorkerInfos)
+    assert(res1.success)
+    var workerInfos = res1.workerInfos.asInstanceOf[util.List[WorkerInfo]]
+    assert(workerInfos.size() == 1)
+    var workerInfo = workerInfos.get(0)
+    assert(workerInfo.masterPartitionLocations.contains(shuffleKey))
+    assert(workerInfo.masterPartitionLocations.get(shuffleKey).size() == 3)
+    val res2 = worker1.askSync[DestroyResponse](
+      Destroy(shuffleKey,
+        List(workerInfo.masterPartitionLocations.get(shuffleKey).keySet().head),
+        List(workerInfo.slavePartitionLocations.get(shuffleKey).keySet().head))
+    )
+    assert(res2.returnCode == ReturnCode.Success)
+
+    res1 = worker1.askSync[GetWorkerInfosResponse](GetWorkerInfos)
+    assert(res1.success)
+    workerInfos = res1.workerInfos.asInstanceOf[util.List[WorkerInfo]]
+    assert(workerInfos.size() == 1)
+    workerInfo = workerInfos.get(0)
+    assert(workerInfo.masterPartitionLocations.get(shuffleKey).size() == 2)
+    assert(workerInfo.slavePartitionLocations.get(shuffleKey).size() == 2)
+    assert(workerInfo.memoryUsed == 128 * 4)
+  }
+
+  // TODO test SlaveLost
 }

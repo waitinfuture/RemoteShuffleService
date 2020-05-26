@@ -69,6 +69,14 @@ public class Chunk {
         return false;
     }
 
+    public byte[] toBytes() {
+        byte[] data = new byte[(int)(currentAddress - startAddress)];
+        for (long addr = startAddress; addr < currentAddress; addr++) {
+            data[(int)(addr - startAddress)] = Platform.getByte(null, addr);
+        }
+        return data;
+    }
+
     public int getId() {
         return id;
     }

@@ -5,7 +5,6 @@ import io.netty.buffer.Unpooled;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.beans.Transient;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
@@ -15,9 +14,11 @@ public class DoubleChunk implements Serializable {
     private static final Logger logger = LoggerFactory.getLogger(DoubleChunk.class);
 
     transient Chunk[] chunks = new Chunk[2];
-    int working;
+    // exposed for test
+    public int working;
     transient MemoryPool memoryPool;
-    String fileName;
+    // exposed for test
+    public String fileName;
     // exposed for test
     public ChunkState slaveState = ChunkState.Ready;
 
@@ -31,6 +32,14 @@ public class DoubleChunk implements Serializable {
         this.memoryPool = memoryPool;
         this.fileName = fileName;
         working = 0;
+    }
+
+    public void initWithData(int working, byte[] masterData, byte[] slaveData) {
+        this.working = working;
+        chunks[working].clear();
+        chunks[working].append(masterData);
+        chunks[(working + 1) % 2].clear();
+        chunks[(working + 1) % 2].append(slaveData);
     }
 
     public synchronized boolean append(byte[] data) {
@@ -56,39 +65,39 @@ public class DoubleChunk implements Serializable {
             if (chunks[working].remaining() > data.readableBytes()) {
                 chunks[working].append(data);
                 return true;
-            } else if (slaveState == ChunkState.Ready){
-                // slave is empty, switch to slave
-                working = (working + 1) % 2;
-                chunks[working].append(data);
-                slaveState = ChunkState.Flushing;
-                Thread flushThread = new Thread() {
-                    public void run() {
-                        try {
-                            // TODO: construct output stream
-                            OutputStream ostream = new FileOutputStream(fileName, true);
-                            chunks[(working + 1) % 2].flushData(ostream, flush);
-                            slaveState = ChunkState.Ready;
-                        } catch (Exception e) {
-                            logger.error("create OutputStream failed!", e);
-                        }
-                    }
-                };
-                flushThread.start();
-                return true;
-            } else {
-                // slave is flusing, just flush, do not switch
-                logger.info("slave chunk is flushing, just flush data");
+            }
+            // if slave is flusing, wait for slave finish flushing
+            while (slaveState == ChunkState.Flushing) {
+                logger.info("slave chunk is flushing, wait for slave to finish...");
                 try {
-                    // TODO: construct output stream
-                    OutputStream ostream = new FileOutputStream(fileName, true);
-                    chunks[working].flushData(ostream, flush);
-                    chunks[working].append(data);
-                } catch (IOException e) {
-                    logger.error("create OutputStream failed!", e);
+                    Thread.sleep(500);
+                } catch (Exception e) {
+                    logger.error("sleep throws Exception", e);
                     return false;
                 }
-                return true;
             }
+            // now slave is empty, switch to slave and append data
+            working = (working + 1) % 2;
+            chunks[working].append(data);
+            // create new thread to flush the full chunk
+            slaveState = ChunkState.Flushing;
+            Thread flushThread = new Thread() {
+                public void run() {
+                    try {
+                        // TODO: construct output stream
+                        OutputStream ostream = new FileOutputStream(fileName, true);
+                        chunks[(working + 1) % 2].flushData(ostream, flush);
+                        ostream.close();
+                        // for test
+//                        Thread.sleep(2000);
+                        slaveState = ChunkState.Ready;
+                    } catch (Exception e) {
+                        logger.error("create OutputStream failed!", e);
+                    }
+                }
+            };
+            flushThread.start();
+            return true;
         }
     }
 
@@ -108,12 +117,21 @@ public class DoubleChunk implements Serializable {
                 // flush master chunk
                 OutputStream ostream = new FileOutputStream(fileName, true);
                 chunks[working].flushData(ostream);
+                ostream.close();
             } catch (IOException e) {
                 logger.error("construct outputstream failed!", e);
                 return false;
             }
             return true;
         }
+    }
+
+    public byte[] getMasterData() {
+        return chunks[working].toBytes();
+    }
+
+    public byte[] getSlaveData() {
+        return chunks[(working + 1) % 2].toBytes();
     }
 
     public void returnChunks() {

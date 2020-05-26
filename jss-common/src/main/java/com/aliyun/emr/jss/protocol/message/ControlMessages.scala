@@ -87,6 +87,16 @@ object ControlMessages {
   case class TriggerResponse(
     success: Boolean) extends MasterMessage
 
+  case class StageEnd(
+    applicationId: String,
+    shuffleId: Int
+  ) extends MasterMessage
+
+  case class StageEndResponse(
+    errorCode: ReturnCode,
+    lostFiles: util.List[String]
+  ) extends MasterMessage
+
 
   /** ==========================================
    *         handled by worker
@@ -112,26 +122,25 @@ object ControlMessages {
     success: Boolean
   ) extends WorkerMessage
 
-  case class ClearBuffers(
-    shuffleKey: String,
-    masterLocs: util.List[PartitionLocation],
-    slaveLocs: util.List[PartitionLocation]
-  ) extends WorkerMessage
-
-  case class ClearBuffersResponse(
-    success: Boolean
-  ) extends WorkerMessage
-
   case class CommitFiles(
     shuffleKey: String,
     commitLocations: util.List[PartitionLocation],
     mode: PartitionLocation.Mode) extends WorkerMessage
-  case class CommitFilesResponse(committedLocations: util.List[PartitionLocation]) extends WorkerMessage
+  case class CommitFilesResponse(
+    errorCode: ReturnCode,
+    failedLocations: util.List[PartitionLocation]
+  ) extends WorkerMessage
 
   case class Destroy(
     shuffleKey: String,
-    destroyLocations: util.List[PartitionLocation]) extends WorkerMessage
-  case class DestroyResponse(destroyedLocations: util.List[PartitionLocation]) extends WorkerMessage
+    masterLocations: util.List[PartitionLocation],
+    slaveLocation: util.List[PartitionLocation]
+  ) extends WorkerMessage
+  case class DestroyResponse(
+    returnCode: ReturnCode,
+    failedMasters: util.List[PartitionLocation],
+    failedSlaves: util.List[PartitionLocation]
+  ) extends WorkerMessage
 
   /** ==========================================
    *              common
@@ -139,11 +148,12 @@ object ControlMessages {
    */
   case class SlaveLost(
     shuffleKey: String,
+    masterLocation: PartitionLocation,
     slaveLocation: PartitionLocation
   ) extends Message
 
   case class SlaveLostResponse(
-    success: Boolean,
+    returnCode: ReturnCode,
     slaveLocation: PartitionLocation
   ) extends Message
 
@@ -182,4 +192,17 @@ object DataMessages {
     success: Boolean,
     msg: String
   ) extends ClientMessage
+
+  case class ReplicateData(
+    shuffleKey: String,
+    partitionLocation: PartitionLocation,
+    working: Int,
+    masterData: Array[Byte],
+    slaveData: Array[Byte]
+  ) extends WorkerMessage
+
+  case class ReplicateDataResponse(
+    returnCode: ReturnCode,
+    msg: String
+  ) extends WorkerMessage
 }

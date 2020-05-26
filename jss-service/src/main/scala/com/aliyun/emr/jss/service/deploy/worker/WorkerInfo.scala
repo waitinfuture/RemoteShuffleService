@@ -101,7 +101,7 @@ private[jss] class WorkerInfo(
   }
 
   def removeSlavePartition(shuffleKey: String, location: PartitionLocation): Unit = {
-    if (slavePartitionLocations.containsKey(shuffleKey)) {
+    if (!slavePartitionLocations.containsKey(shuffleKey)) {
       return
     }
     val slaveLocs = slavePartitionLocations.get(shuffleKey)
@@ -112,7 +112,7 @@ private[jss] class WorkerInfo(
   }
 
   def removeSlavePartition(shuffleKey: String, locations: util.List[PartitionLocation]): Unit = {
-    if (slavePartitionLocations.containsKey(shuffleKey)) {
+    if (!slavePartitionLocations.containsKey(shuffleKey)) {
       return
     }
     val slaveLocs = slavePartitionLocations.get(shuffleKey)
