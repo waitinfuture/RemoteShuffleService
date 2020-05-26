@@ -36,7 +36,7 @@ private[deploy] class Master(
   private val WORKER_TIMEOUT_MS = conf.getLong("ess.worker.timeout", 60) * 1000
 
   // States
-  val workers = new util.ArrayList[WorkerInfo]()
+  val workers: util.List[WorkerInfo] = new util.ArrayList[WorkerInfo]()
   val workersLock = new Object()
   private val partitionChunkIndex = new ConcurrentHashMap[String, Int]()
   // key: appid_shuffleid
@@ -184,6 +184,9 @@ private[deploy] class Master(
       ))
 
       context.reply(TriggerResponse(true))
+    case GetWorkerInfos =>
+      logInfo("received GetWorkerInfo request")
+      handleGetWorkerInfos(context)
   }
 
   private def timeOutDeadWorkers() {
@@ -214,8 +217,8 @@ private[deploy] class Master(
       workers.synchronized {
         workers.add(worker)
       }
-      context.reply(RegisterWorkerResponse(true, null))
       logInfo(s"registered worker ${worker}")
+      context.reply(RegisterWorkerResponse(true, null))
     }
   }
 
@@ -263,7 +266,6 @@ private[deploy] class Master(
       0 until numMappers foreach (idx => attempts(idx) = 0)
       shuffleMapperAttempts.put(shuffleKey, attempts)
     }
-    logInfo(s"going to reply register success, locations ${locations}")
     context.reply(RegisterShuffleResponse(true, locations))
   }
 
@@ -405,6 +407,10 @@ private[deploy] class Master(
 
     // handle SlaveLost success, reply
     context.reply(SlaveLostResponse(true, location._2))
+  }
+
+  private def handleGetWorkerInfos(context: RpcCallContext): Unit = {
+    context.reply(GetWorkerInfosResponse(true, workers))
   }
 
 }

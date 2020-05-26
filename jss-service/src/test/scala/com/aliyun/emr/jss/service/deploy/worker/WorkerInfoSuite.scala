@@ -6,8 +6,8 @@ import org.scalatest.FunSuite
 
 class WorkerInfoSuite extends FunSuite {
   test("equals") {
-    val workerInfo1 = new WorkerInfo("localhost", 8081, 1024, 32, null)
-    val workerInfo2 = new WorkerInfo("localhost", 8081, 1022, 32, null)
+    val workerInfo1 = new WorkerInfo("localhost", 9097, 1024, 32, null)
+    val workerInfo2 = new WorkerInfo("localhost", 9097, 1022, 32, null)
     assert(workerInfo1.equals(workerInfo2))
     assert(workerInfo1 == workerInfo2)
 

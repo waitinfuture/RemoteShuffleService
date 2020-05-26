@@ -45,10 +45,21 @@ public class Chunk {
     }
 
     public boolean flushData(OutputStream ostream) {
+        return flushData(ostream, true);
+    }
+    /**
+     *
+     * @param ostream
+     * @param flush whether to flush or just clear buffer
+     * @return
+     */
+    public boolean flushData(OutputStream ostream, boolean flush) {
         try {
-            for (long addr = startAddress; addr < currentAddress; addr++) {
-                ostream.write(Platform.getByte(null, addr));
-                ostream.flush();
+            if (flush) {
+                for (long addr = startAddress; addr < currentAddress; addr++) {
+                    ostream.write(Platform.getByte(null, addr));
+                    ostream.flush();
+                }
             }
             currentAddress = startAddress;
             return true;

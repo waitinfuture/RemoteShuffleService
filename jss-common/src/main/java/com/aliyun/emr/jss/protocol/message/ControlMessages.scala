@@ -1,18 +1,19 @@
 package com.aliyun.emr.jss.protocol.message
 
-import com.aliyun.emr.jss.protocol.PartitionLocation
 import java.util
 
 import com.aliyun.emr.jss.common.rpc.RpcEndpointRef
+import com.aliyun.emr.jss.protocol.PartitionLocation
 
 sealed trait Message extends Serializable
 sealed trait MasterMessage extends Message
 sealed trait WorkerMessage extends Message
+sealed trait ClientMessage extends Message
 
 object ControlMessages {
 
   /** ==========================================
-   *         handled by master messages
+   *         handled by master
    *  ==========================================
    */
   case object CheckForWorkerTimeOut
@@ -88,7 +89,7 @@ object ControlMessages {
 
 
   /** ==========================================
-   *         handled by worker messages
+   *         handled by worker
    *  ==========================================
    */
   case class RegisterWorkerResponse(
@@ -128,7 +129,7 @@ object ControlMessages {
   case class CommitFilesResponse(committedLocations: util.List[PartitionLocation]) extends WorkerMessage
 
   /** ==========================================
-   *              common messages
+   *              common
    *  ==========================================
    */
   case class SlaveLost(
@@ -141,4 +142,39 @@ object ControlMessages {
     slaveLocation: PartitionLocation
   ) extends Message
 
+  // for test
+  case object GetWorkerInfos extends Message
+  case class GetWorkerInfosResponse(
+    success: Boolean,
+    workerInfos: Any
+  ) extends Message
+}
+
+object DataMessages {
+/** ==========================================
+ *             handled by master
+ *  ==========================================
+ */
+
+  /** ==========================================
+   *             handled by worker
+   *  ==========================================
+   */
+  case class SendData(
+    shuffleKey: String,
+    partitionLocation: PartitionLocation,
+    mode: PartitionLocation.Mode,
+    flush: Boolean,
+//    data: ByteBuf
+    data: Array[Byte]
+  ) extends WorkerMessage
+
+  /** ==========================================
+   *             handled by client
+   *  ==========================================
+   */
+  case class SendDataResponse(
+    success: Boolean,
+    msg: String
+  ) extends ClientMessage
 }

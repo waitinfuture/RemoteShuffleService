@@ -7,10 +7,22 @@ import scala.Tuple2;
 import java.util.*;
 
 public class MasterUtil {
+    public static void releaseSlots(String shuffleKey, Map<WorkerInfo,
+        Tuple2<List<PartitionLocation>, List<PartitionLocation>>> slots) {
+        Iterator<WorkerInfo> workers = slots.keySet().iterator();
+        while (workers.hasNext()) {
+            WorkerInfo worker = workers.next();
+            Tuple2<List<PartitionLocation>, List<PartitionLocation>> allocatedSlots =
+                slots.get(worker);
+            worker.removeMasterPartition(shuffleKey, allocatedSlots._1);
+            worker.removeSlavePartition(shuffleKey, allocatedSlots._2);
+        }
+    }
+
     public static Map<WorkerInfo,
         Tuple2<List<PartitionLocation>, List<PartitionLocation>>> offerSlots(
             String shuffleKey,
-            ArrayList<WorkerInfo> workers,
+            List<WorkerInfo> workers,
             int numPartitions) {
         // master partition index
         int masterInd = 0;
@@ -23,7 +35,8 @@ public class MasterUtil {
             while (!workers.get(nextMasterInd).slotAvailable()) {
                 nextMasterInd = (nextMasterInd + 1) % workers.size();
                 if (nextMasterInd == masterInd) {
-                    // no available slot
+                    // no available slot, release allocated resource
+                    releaseSlots(shuffleKey, slots);
                     return null;
                 }
             }
@@ -32,12 +45,14 @@ public class MasterUtil {
             while (!workers.get(nextSlaveInd).slotAvailable()) {
                 nextSlaveInd = (nextSlaveInd + 1) % workers.size();
                 if (nextSlaveInd == nextMasterInd) {
-                    // no available slot
+                    // no available slot, release allocated resource
+                    releaseSlots(shuffleKey, slots);
                     return null;
                 }
             }
             if (nextSlaveInd == nextMasterInd) {
-                // no available slot
+                // no available slot, release allocated resource
+                releaseSlots(shuffleKey, slots);
                 return null;
             }
             // now nextMasterInd/nextSlaveInd point to
@@ -83,7 +98,7 @@ public class MasterUtil {
     }
 
     public static Tuple2<WorkerInfo, PartitionLocation> offerSlaveSlot(
-        PartitionLocation masterLocation, ArrayList<WorkerInfo> workers) {
+        PartitionLocation masterLocation, List<WorkerInfo> workers) {
         Random rand = new Random();
         int startInd = rand.nextInt(workers.size());
         int curInd;

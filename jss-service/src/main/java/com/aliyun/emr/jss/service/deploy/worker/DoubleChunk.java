@@ -1,22 +1,27 @@
 package com.aliyun.emr.jss.service.deploy.worker;
 
+import io.netty.buffer.ByteBuf;
+import io.netty.buffer.Unpooled;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.beans.Transient;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
+import java.io.Serializable;
 
-public class DoubleChunk {
+public class DoubleChunk implements Serializable {
     private static final Logger logger = LoggerFactory.getLogger(DoubleChunk.class);
 
-    Chunk[] chunks = new Chunk[2];
+    transient Chunk[] chunks = new Chunk[2];
     int working;
-    MemoryPool memoryPool;
+    transient MemoryPool memoryPool;
     String fileName;
-    ChunkState slaveState = ChunkState.Ready;
+    // exposed for test
+    public ChunkState slaveState = ChunkState.Ready;
 
-    enum ChunkState {
+    public enum ChunkState {
         Ready, Flushing;
     }
 
@@ -28,14 +33,27 @@ public class DoubleChunk {
         working = 0;
     }
 
+    public synchronized boolean append(byte[] data) {
+        return append(Unpooled.copiedBuffer(data), true);
+    }
+
+    public synchronized boolean append(byte[] data, boolean flush) {
+        return append(Unpooled.copiedBuffer(data), flush);
+    }
+
+    public synchronized boolean append(ByteBuf data) {
+        return append(data, true);
+    }
+
     /**
-     * assume data size is less than chunk size
+     * assume data size is less than chunk capacity
      * @param data
+     * @param flush whether to flush or just abandon
      * @return
      */
-    public boolean append(byte[] data) {
+    public synchronized  boolean append(ByteBuf data, boolean flush) {
         synchronized (this) {
-            if (chunks[working].remaining() > data.length) {
+            if (chunks[working].remaining() > data.readableBytes()) {
                 chunks[working].append(data);
                 return true;
             } else if (slaveState == ChunkState.Ready){
@@ -48,7 +66,7 @@ public class DoubleChunk {
                         try {
                             // TODO: construct output stream
                             OutputStream ostream = new FileOutputStream(fileName, true);
-                            chunks[(working + 1) % 2].flushData(ostream);
+                            chunks[(working + 1) % 2].flushData(ostream, flush);
                             slaveState = ChunkState.Ready;
                         } catch (Exception e) {
                             logger.error("create OutputStream failed!", e);
@@ -63,7 +81,7 @@ public class DoubleChunk {
                 try {
                     // TODO: construct output stream
                     OutputStream ostream = new FileOutputStream(fileName, true);
-                    chunks[working].flushData(ostream);
+                    chunks[working].flushData(ostream, flush);
                     chunks[working].append(data);
                 } catch (IOException e) {
                     logger.error("create OutputStream failed!", e);
@@ -74,8 +92,9 @@ public class DoubleChunk {
         }
     }
 
-    public boolean flush() {
+    public synchronized boolean flush() {
         synchronized (this) {
+            // wait for flush slave chunk to finish
             while (slaveState == ChunkState.Flushing) {
                 try {
                     Thread.sleep(500);
@@ -86,6 +105,7 @@ public class DoubleChunk {
             }
             // TODO construct OutputStream
             try {
+                // flush master chunk
                 OutputStream ostream = new FileOutputStream(fileName, true);
                 chunks[working].flushData(ostream);
             } catch (IOException e) {

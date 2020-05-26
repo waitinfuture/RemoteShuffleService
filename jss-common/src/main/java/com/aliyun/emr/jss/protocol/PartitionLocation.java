@@ -78,7 +78,7 @@ public class PartitionLocation implements Serializable
             return false;
         }
         PartitionLocation o = (PartitionLocation) other;
-        return host == o.host && port == o.port && UUID == o.UUID;
+        return host.equals(o.host) && port == o.port && UUID.equals(o.UUID);
     }
 
     public int hashCode() {

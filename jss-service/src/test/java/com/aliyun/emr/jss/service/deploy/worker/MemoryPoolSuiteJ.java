@@ -1,5 +1,7 @@
 package com.aliyun.emr.jss.service.deploy.worker;
 
+import io.netty.buffer.ByteBuf;
+import io.netty.buffer.Unpooled;
 import org.junit.Test;
 
 import java.io.File;
@@ -19,17 +21,24 @@ public class MemoryPoolSuiteJ {
                 file.delete();
             }
             DoubleChunk doubleChunk = new DoubleChunk(ch1, ch2, memoryPool, "tmp");
-            byte[] data = new byte[64];
+            byte[] bytes = new byte[64];
+            ByteBuf data = Unpooled.copiedBuffer(bytes);
             doubleChunk.append(data);
+            data.resetReaderIndex();
             doubleChunk.append(data);
+            data.resetReaderIndex();
             doubleChunk.append(data);
+            data.resetReaderIndex();
             doubleChunk.append(data);
+            data.resetReaderIndex();
             Thread.sleep(100);
+            System.out.println(file.length());
             assert file.length() == 128;
             doubleChunk.flush();
             Thread.sleep(100);
             assert file.length() == 256;
             doubleChunk.append(data);
+            data.resetReaderIndex();
             Thread.sleep(100);
             assert file.length() == 256;
             doubleChunk.flush();

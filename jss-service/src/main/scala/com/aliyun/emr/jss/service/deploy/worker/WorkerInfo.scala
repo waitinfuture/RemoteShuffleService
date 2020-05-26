@@ -20,10 +20,10 @@ private[jss] class WorkerInfo(
 
   var memoryUsed: Long = _
   var lastHeartbeat: Long = _
-  // key: shuffleid  value: master locations
+  // key: shuffleKey  value: master locations
   val masterPartitionLocations =
     new util.HashMap[String, util.Map[PartitionLocation, PartitionLocation]]()
-  // key: shuffleid  value: slave locations
+  // key: shuffleKey  value: slave locations
   val slavePartitionLocations =
     new util.HashMap[String, util.Map[PartitionLocation, PartitionLocation]]()
 

@@ -1,5 +1,6 @@
 package com.aliyun.emr.jss.service.deploy
 
+import java.io.File
 import java.util
 
 import scala.collection.JavaConversions._
@@ -9,8 +10,9 @@ import com.aliyun.emr.jss.common.util.Utils
 import com.aliyun.emr.jss.common.EssConf
 import com.aliyun.emr.jss.protocol.{PartitionLocation, RpcNameConstants}
 import com.aliyun.emr.jss.protocol.message.ControlMessages._
+import com.aliyun.emr.jss.protocol.message.DataMessages.{SendData, SendDataResponse}
 import com.aliyun.emr.jss.service.deploy.master.{Master, MasterArguments}
-import com.aliyun.emr.jss.service.deploy.worker.{Worker, WorkerArguments}
+import com.aliyun.emr.jss.service.deploy.worker.{DoubleChunk, PartitionLocationWithDoubleChunks, Worker, WorkerArguments, WorkerInfo}
 import org.scalatest.FunSuite
 
 class MessageHandlerSuite extends FunSuite {
@@ -20,8 +22,9 @@ class MessageHandlerSuite extends FunSuite {
    * ===============================
    */
   val conf = new EssConf()
+  conf.set("ess.partition.memory", "128")
   val masterArgs = new MasterArguments(Array.empty[String], conf)
-  val rpcEnvMaster = RpcEnv.create(
+  val rpcEnvMaster: RpcEnv = RpcEnv.create(
     RpcNameConstants.MASTER_SYS,
     masterArgs.host,
     masterArgs.port,
@@ -43,12 +46,12 @@ class MessageHandlerSuite extends FunSuite {
    * ===============================
    */
   val workerArgs = new WorkerArguments(Array.empty[String], conf)
-  val rpcEnvWorker1 = RpcEnv.create(RpcNameConstants.WORKER_SYS,
+  val rpcEnvWorker1: RpcEnv = RpcEnv.create(RpcNameConstants.WORKER_SYS,
     workerArgs.host,
-    workerArgs.port,
+    9097,
     conf)
 
-  val masterAddresses = RpcAddress.fromJindoURL(workerArgs.master)
+  val masterAddresses: RpcAddress = RpcAddress.fromJindoURL(workerArgs.master)
   rpcEnvWorker1.setupEndpoint(RpcNameConstants.WORKER_EP,
     new Worker(rpcEnvWorker1, workerArgs.memory,
       masterAddresses, RpcNameConstants.WORKER_EP, conf))
@@ -67,9 +70,9 @@ class MessageHandlerSuite extends FunSuite {
    * ===============================
    */
   val workerArgs2 = new WorkerArguments(Array.empty[String], conf)
-  val rpcEnvWorker2 = RpcEnv.create(RpcNameConstants.WORKER_SYS,
+  val rpcEnvWorker2: RpcEnv = RpcEnv.create(RpcNameConstants.WORKER_SYS,
     workerArgs2.host,
-    workerArgs2.port,
+    9098,
     conf)
 
   rpcEnvWorker2.setupEndpoint(RpcNameConstants.WORKER_EP,
@@ -89,15 +92,18 @@ class MessageHandlerSuite extends FunSuite {
     "MessageHandlerSuite",
     localhost,
     0,
-    new EssConf()
+    conf
   )
   val master = env.setupEndpointRef(new RpcAddress(localhost, 9099), RpcNameConstants.MASTER_EP)
+  val worker1 = env.setupEndpointRef(new RpcAddress(localhost, 9097), RpcNameConstants.WORKER_EP)
+  val worker2 = env.setupEndpointRef(new RpcAddress(localhost, 9098), RpcNameConstants.WORKER_EP)
 
   /**
    * ===============================
    *         start testing
    * ===============================
    */
+  var partitionLocations: util.List[PartitionLocation] = _
   test("RegisterShuffle") {
     val res = master.askSync[RegisterShuffleResponse](
       RegisterShuffle(
@@ -108,13 +114,150 @@ class MessageHandlerSuite extends FunSuite {
       )
     )
     assert(res.success)
-    val partitionLocations = res.partitionLocations
+    partitionLocations = res.partitionLocations
     assert(partitionLocations.size() == 10)
     partitionLocations.foreach(p => {
       assert(p.getMode == PartitionLocation.Mode.Master)
       assert(p.getPeer != null)
       assert(p.getPeer.getMode == PartitionLocation.Mode.Slave)
+      println(p)
     })
+  }
+
+  test("GetWorkerInfos") {
+    // Master
+    var res = master.askSync[GetWorkerInfosResponse](GetWorkerInfos)
+    assert(res.success)
+    val workerInfos = res.workerInfos.asInstanceOf[util.List[WorkerInfo]]
+    assert(workerInfos.length == 2)
+    assert(workerInfos(0).memoryUsed == 128 * 10)
+    assert(workerInfos.get(0).masterPartitionLocations.size() == 1)
+    assert(workerInfos.get(0).masterPartitionLocations.contains("appId-1"))
+    assert(workerInfos.get(0).masterPartitionLocations.get("appId-1").size() == 5)
+    assert(workerInfos.get(0).slavePartitionLocations.size() == 1)
+    assert(workerInfos.get(0).slavePartitionLocations.contains("appId-1"))
+    assert(workerInfos.get(0).slavePartitionLocations.get("appId-1").size() == 5)
+
+    assert(workerInfos(1).memoryUsed == 128 * 10)
+    assert(workerInfos.get(1).masterPartitionLocations.size() == 1)
+    assert(workerInfos.get(1).masterPartitionLocations.contains("appId-1"))
+    assert(workerInfos.get(1).masterPartitionLocations.get("appId-1").size() == 5)
+    assert(workerInfos.get(1).slavePartitionLocations.size() == 1)
+    assert(workerInfos.get(1).slavePartitionLocations.contains("appId-1"))
+    assert(workerInfos.get(1).slavePartitionLocations.get("appId-1").size() == 5)
+
+    // Worker
+    res = worker1.askSync[GetWorkerInfosResponse](GetWorkerInfos)
+    assert(res.success)
+    assert(res.workerInfos.asInstanceOf[util.List[WorkerInfo]].size() == 1)
+    val worker = res.workerInfos.asInstanceOf[util.List[WorkerInfo]].get(0)
+    assert(worker.memoryUsed == 1280)
+    assert(worker.masterPartitionLocations.size() == 1)
+    assert(worker.slavePartitionLocations.size() == 1)
+    assert(worker.masterPartitionLocations.contains("appId-1"))
+    assert(worker.slavePartitionLocations.contains("appId-1"))
+    assert(worker.masterPartitionLocations.get("appId-1").size() == 5)
+    assert(worker.slavePartitionLocations.get("appId-1").size() == 5)
+    val partitionLocationWithDoubleChunks =
+      worker.masterPartitionLocations.get("appId-1").valuesIterator.next()
+        .asInstanceOf[PartitionLocationWithDoubleChunks]
+    assert(partitionLocationWithDoubleChunks.getDoubleChunk.slaveState ==
+      DoubleChunk.ChunkState.Ready)
+  }
+
+  test("SendData") {
+    val bytes = new Array[Byte](64)
+    0 until bytes.length foreach (ind => bytes(ind) = 'a')
+    val worker1Location = partitionLocations.filter(p => p.getPort == 9097).toList(0)
+    val file1 = new File(worker1Location.getUUID)
+    assert(file1.length() == 0)
+    val sendDataMsg1 = SendData(
+      "appId-1",
+      worker1Location,
+      PartitionLocation.Mode.Master,
+      true,
+      bytes
+    )
+    var res = worker1.askSync[SendDataResponse](sendDataMsg1)
+    assert(res.success)
+    res = worker1.askSync[SendDataResponse](sendDataMsg1)
+    assert(res.success)
+    Thread.sleep(100)
+    assert(file1.length() == 0)
+    res = worker1.askSync[SendDataResponse](sendDataMsg1)
+    assert(res.success)
+    Thread.sleep(100)
+    assert(file1.length() == 128)
+    res = worker1.askSync[SendDataResponse](sendDataMsg1)
+    assert(res.success)
+    Thread.sleep(100)
+    assert(file1.length() == 128)
+    res = worker1.askSync[SendDataResponse](sendDataMsg1)
+    assert(res.success)
+    Thread.sleep(100)
+    assert(file1.length() == 256)
+
+    val worker2Location = partitionLocations.filter(p => p.getPort == 9098).toList(0)
+    val file2 = new File(worker2Location.getUUID)
+    assert(file2.length() == 0)
+    val sendDataMsg2 = SendData(
+      "appId-1",
+      worker2Location,
+      PartitionLocation.Mode.Master,
+      true,
+      bytes
+    )
+    res = worker2.askSync[SendDataResponse](sendDataMsg2)
+    assert(res.success)
+    Thread.sleep(100)
+    assert(file2.length() == 0)
+    res = worker2.askSync[SendDataResponse](sendDataMsg2)
+    assert(res.success)
+    Thread.sleep(100)
+    assert(file2.length() == 0)
+    res = worker2.askSync[SendDataResponse](sendDataMsg2)
+    assert(res.success)
+    Thread.sleep(100)
+    assert(file2.length() == 128)
+    res = worker2.askSync[SendDataResponse](sendDataMsg2)
+    assert(res.success)
+    Thread.sleep(100)
+    assert(file2.length() == 128)
+    res = worker2.askSync[SendDataResponse](sendDataMsg2)
+    assert(res.success)
+    Thread.sleep(100)
+    assert(file2.length() == 256)
+
+    val worker2Location2 = partitionLocations.filter(p => p.getPort == 9098).toList(1)
+    val file3 = new File(worker2Location2.getUUID)
+    assert(file3.length() == 0)
+    val sendDataMsg3 = SendData(
+      "appId-1",
+      worker2Location2,
+      PartitionLocation.Mode.Master,
+      true,
+      bytes
+    )
+    res = worker2.askSync[SendDataResponse](sendDataMsg3)
+    assert(res.success)
+    Thread.sleep(100)
+    assert(file3.length() == 0)
+    res = worker2.askSync[SendDataResponse](sendDataMsg3)
+    assert(res.success)
+    Thread.sleep(100)
+    assert(file3.length() == 0)
+    res = worker2.askSync[SendDataResponse](sendDataMsg3)
+    assert(res.success)
+    Thread.sleep(100)
+    assert(file3.length() == 128)
+    res = worker2.askSync[SendDataResponse](sendDataMsg3)
+    assert(res.success)
+    Thread.sleep(100)
+    assert(file3.length() == 128)
+    res = worker2.askSync[SendDataResponse](sendDataMsg3)
+    assert(res.success)
+    Thread.sleep(100)
+    assert(file3.length() == 256)
   }
 
   test("MapperEnd") {

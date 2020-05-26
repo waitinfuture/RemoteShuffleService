@@ -29,13 +29,16 @@ import com.aliyun.emr.jss.common.rpc._
 import com.aliyun.emr.jss.common.util.{ThreadUtils, Utils}
 import com.aliyun.emr.jss.protocol.{PartitionLocation, RpcNameConstants}
 import com.aliyun.emr.jss.protocol.message.ControlMessages._
+import com.aliyun.emr.jss.protocol.message.DataMessages.{SendData, SendDataResponse}
+import io.netty.buffer.ByteBuf
 
 private[deploy] class Worker(
-    override val rpcEnv: RpcEnv,
-    memory: Long, // In Byte format
-    masterRpcAddress: RpcAddress,
-    endpointName: String,
-    val conf: EssConf) extends RpcEndpoint with Logging {
+  override val rpcEnv: RpcEnv,
+  memory: Long, // In Byte format
+  masterRpcAddress: RpcAddress,
+  endpointName: String,
+  val conf: EssConf)
+  extends RpcEndpoint with Logging {
 
   private val host = rpcEnv.address.host
   private val port = rpcEnv.address.port
@@ -44,8 +47,12 @@ private[deploy] class Worker(
   val masterEndpoint: RpcEndpointRef =
     rpcEnv.setupEndpointRef(masterRpcAddress, RpcNameConstants.MASTER_EP)
 
+  // slave endpoints
+  val slaveEndpoints: util.Map[RpcAddress, RpcEndpointRef] =
+    new util.HashMap[RpcAddress, RpcEndpointRef]()
+
   Utils.checkHost(host)
-  assert (port > 0)
+  assert(port > 0)
 
   // Memory Pool
   private val MemoryPoolCapacity = conf.getSizeAsBytes("ess.memoryPool.capacity", "1G")
@@ -64,6 +71,7 @@ private[deploy] class Worker(
 
   // Structs
   var memoryUsed = 0
+
   def memoryFree: Long = memory - memoryUsed
 
   override def onStart(): Unit = {
@@ -84,7 +92,7 @@ private[deploy] class Worker(
   }
 
   override def onDisconnected(remoteAddress: RpcAddress): Unit = {
-    if (masterRpcAddress == remoteAddress)  {
+    if (masterRpcAddress == remoteAddress) {
       logInfo(s"Master $remoteAddress Disassociated !")
       reRegisterWithMaster()
     }
@@ -98,11 +106,21 @@ private[deploy] class Worker(
   // TODO
   override def receiveAndReply(context: RpcCallContext): PartialFunction[Any, Unit] = {
     case ReserveBuffers(shuffleKey, masterLocations, slaveLocations) =>
+      logInfo("receive ReserveBuffers request," +
+        s"${shuffleKey}, ${masterLocations}, ${slaveLocations}")
       handleReserveBuffers(context, shuffleKey, masterLocations, slaveLocations)
-    case ClearBuffers(shuffleKey, masterLocs, slaveLocs) =>
-      handleClearBuffers(context, shuffleKey, masterLocs, slaveLocs)
     case CommitFiles(shuffleKey, commitLocations, mode) =>
       handleCommitFiles(context, shuffleKey, commitLocations, mode)
+    case ClearBuffers(shuffleKey, masterLocations, slaveLocations) =>
+      handleClearBuffers(context, shuffleKey, masterLocations, slaveLocations)
+      logInfo("receive ClearBuffers request," +
+        s"${shuffleKey}, ${masterLocations}, ${slaveLocations}")
+    case SendData(shuffleKey, partitionLocation, mode, flush, data) =>
+      logInfo(s"receive SendData request, ${shuffleKey}")
+      handleSendData(context, shuffleKey, partitionLocation, mode, flush, data)
+    case GetWorkerInfos =>
+      logInfo("received GetWorkerInfos request")
+      handleGetWorkerInfos(context)
   }
 
   private def handleReserveBuffers(context: RpcCallContext, shuffleKey: String,
@@ -131,7 +149,7 @@ private[deploy] class Worker(
     if (masterDoubleChunks.size() < masterLocations.size()) {
       logInfo("not all master partition satisfied, return chunks")
       masterDoubleChunks.foreach(entry =>
-        entry.asInstanceOf[PartitionLocationWithDoubleChunks].doubleChunk.returnChunks())
+        entry.asInstanceOf[PartitionLocationWithDoubleChunks].getDoubleChunk.returnChunks())
       context.reply(ReserveBuffersResponse(false))
       return
     }
@@ -159,9 +177,9 @@ private[deploy] class Worker(
     if (slaveDoubleChunks.size() < slaveDoubleChunks.size()) {
       logInfo("not all slave partition satisfied, return chunks")
       masterDoubleChunks.foreach(entry =>
-        entry.asInstanceOf[PartitionLocationWithDoubleChunks].doubleChunk.returnChunks())
+        entry.asInstanceOf[PartitionLocationWithDoubleChunks].getDoubleChunk.returnChunks())
       slaveDoubleChunks.foreach(entry =>
-        entry.asInstanceOf[PartitionLocationWithDoubleChunks].doubleChunk.returnChunks())
+        entry.asInstanceOf[PartitionLocationWithDoubleChunks].getDoubleChunk.returnChunks())
       context.reply(ReserveBuffersResponse(false))
       return
     }
@@ -190,7 +208,7 @@ private[deploy] class Worker(
         masterLocs.foreach(loc => {
           val removed = masterLocations.remove(loc)
           if (removed != null) {
-            removed.asInstanceOf[PartitionLocationWithDoubleChunks].doubleChunk.returnChunks()
+            removed.asInstanceOf[PartitionLocationWithDoubleChunks].getDoubleChunk.returnChunks()
           }
         })
       }
@@ -201,7 +219,7 @@ private[deploy] class Worker(
         slaveLocs.foreach(loc => {
           val removed = slaveLocations.remove(loc)
           if (removed != null) {
-            removed.asInstanceOf[PartitionLocationWithDoubleChunks].doubleChunk.returnChunks()
+            removed.asInstanceOf[PartitionLocationWithDoubleChunks].getDoubleChunk.returnChunks()
           }
         })
       }
@@ -242,11 +260,11 @@ private[deploy] class Worker(
         locations.foreach(loc => {
           val target = locations.get(loc._1)
           if (target != null) {
-            if (target.asInstanceOf[PartitionLocationWithDoubleChunks].doubleChunk.flush()) {
-              target.asInstanceOf[PartitionLocationWithDoubleChunks].doubleChunk.returnChunks()
+            if (target.asInstanceOf[PartitionLocationWithDoubleChunks].getDoubleChunk.flush()) {
+              target.asInstanceOf[PartitionLocationWithDoubleChunks].getDoubleChunk.returnChunks()
               committedLocations.add(target)
             } else {
-              target.asInstanceOf[PartitionLocationWithDoubleChunks].doubleChunk.returnChunks()
+              target.asInstanceOf[PartitionLocationWithDoubleChunks].getDoubleChunk.returnChunks()
             }
           }
         })
@@ -255,6 +273,86 @@ private[deploy] class Worker(
 
     // reply
     context.reply(CommitFilesResponse(committedLocations))
+  }
+
+  private def handleSendData(
+    context: RpcCallContext,
+    shuffleKey: String,
+    partitionLocation: PartitionLocation,
+    mode: PartitionLocation.Mode,
+    flush: Boolean,
+//    data: ByteBuf): Unit = {
+    data: Array[Byte]): Unit = {
+    // find DoubleChunk responsible for the data
+    val shufflelocations = if (mode == PartitionLocation.Mode.Master) {
+      workerInfo.masterPartitionLocations.get(shuffleKey)
+    } else {
+      workerInfo.slavePartitionLocations.get(shuffleKey)
+    }
+    if (shufflelocations == null) {
+      val msg = "shuffle shufflelocations not found!"
+      logError(msg)
+      context.reply(SendDataResponse(false, msg))
+      return
+    }
+    val location = shufflelocations.get(partitionLocation)
+    if (location == null) {
+      val msg = "Partition Location not found!"
+      logError(msg)
+      context.reply(SendDataResponse(false, msg))
+      return
+    }
+    val doubleChunk = location.asInstanceOf[PartitionLocationWithDoubleChunks].getDoubleChunk
+
+    // append data
+    doubleChunk.append(data, flush)
+
+    // for master, send data to slave
+    if (mode == PartitionLocation.Mode.Master) {
+      val peer = location.getPeer
+      val slaveAddress = RpcAddress(peer.getHost, peer.getPort)
+      if (!slaveEndpoints.contains(slaveAddress)) {
+        slaveEndpoints.synchronized {
+          if (!slaveEndpoints.contains(slaveAddress)) {
+            var slaveEndpoint: RpcEndpointRef = null
+            try {
+              slaveEndpoint = rpcEnv.setupEndpointRef(slaveAddress, RpcNameConstants.WORKER_EP)
+            } catch {
+              case e: Exception => {
+                println(e.getStackTrace)
+                e.printStackTrace()
+              }
+            }
+            slaveEndpoints.putIfAbsent(slaveAddress, slaveEndpoint)
+          }
+        }
+      }
+      val slaveEndpoint = slaveEndpoints.get(slaveAddress)
+      var res = slaveEndpoint.askSync[SendDataResponse](
+        SendData(shuffleKey, peer, PartitionLocation.Mode.Slave, false, data)
+      )
+      if (res.success) {
+        // retry once
+        res = slaveEndpoint.askSync[SendDataResponse](
+          SendData(shuffleKey, peer, PartitionLocation.Mode.Slave, false, data)
+        )
+      }
+      if (res.success) {
+        context.reply(SendDataResponse(true, null))
+      } else {
+        val msg = s"send data to slave failed! ${res.msg}"
+        logError(msg)
+        context.reply(SendDataResponse(false, msg))
+      }
+    } else {
+      context.reply(SendDataResponse(true, null))
+    }
+  }
+
+  private def handleGetWorkerInfos(context: RpcCallContext): Unit = {
+    val list = new util.ArrayList[WorkerInfo]()
+    list.add(workerInfo)
+    context.reply(GetWorkerInfosResponse(true, list))
   }
 
   private def registerWithMaster() {
@@ -288,7 +386,8 @@ private[deploy] class Worker(
   }
 }
 
-private[deploy] object Worker extends Logging {
+private[deploy] object Worker
+  extends Logging {
   def main(args: Array[String]): Unit = {
     val conf = new EssConf
     val workerArgs = new WorkerArguments(args, conf)
@@ -301,7 +400,7 @@ private[deploy] object Worker extends Logging {
     val masterAddresses = RpcAddress.fromJindoURL(workerArgs.master)
     rpcEnv.setupEndpoint(RpcNameConstants.WORKER_EP,
       new Worker(rpcEnv, workerArgs.memory,
-      masterAddresses, RpcNameConstants.WORKER_EP, conf))
+        masterAddresses, RpcNameConstants.WORKER_EP, conf))
     rpcEnv.awaitTermination()
   }
 }
