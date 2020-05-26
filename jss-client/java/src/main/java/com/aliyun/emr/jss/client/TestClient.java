@@ -18,10 +18,12 @@ public class TestClient
             }
         }
 
-        PartitionLocation location = client.revive("appId", 1);
-        if (location != null) {
-            System.out.println("=====revive=========");
-            System.out.println(location);
-        }
+        client.trigger("appId", 1);
+
+//        PartitionLocation location = client.revive("appId", 1);
+//        if (location != null) {
+//            System.out.println("=====revive=========");
+//            System.out.println(location);
+//        }
     }
 }

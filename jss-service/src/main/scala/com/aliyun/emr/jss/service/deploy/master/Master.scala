@@ -175,6 +175,15 @@ private[deploy] class Master(
     case SlaveLost(shuffleKey, slaveLocation: PartitionLocation) =>
       logInfo(s"receive SlaveLost request, ${slaveLocation}")
       handleSlaveLost(context, shuffleKey, slaveLocation)
+    case Trigger(applicationId, shuffleId) =>
+
+      val result = workers(1).endpoint.askSync[CommitFilesResponse](CommitFiles(
+        s"${applicationId}-${shuffleId}",
+        workers(1).masterPartitionLocations.get(s"${applicationId}-${shuffleId}").keySet().toList,
+        PartitionLocation.Mode.Master
+      ))
+
+      context.reply(TriggerResponse(true))
   }
 
   private def timeOutDeadWorkers() {

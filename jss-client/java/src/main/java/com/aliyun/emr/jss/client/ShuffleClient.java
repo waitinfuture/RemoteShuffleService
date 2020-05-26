@@ -28,4 +28,6 @@ public abstract class ShuffleClient implements Cloneable
         int shuffleId,
         int reduceId
     );
+
+    public abstract void trigger(String applicationId, int shuffleId);
 }

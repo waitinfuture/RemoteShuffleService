@@ -79,6 +79,13 @@ object ControlMessages {
     success: Boolean
   ) extends MasterMessage
 
+  case class Trigger(
+    applicationId: String,
+    shuffleId: Int) extends MasterMessage
+
+  case class TriggerResponse(
+    success: Boolean) extends MasterMessage
+
 
   /** ==========================================
    *         handled by worker messages
@@ -113,6 +120,12 @@ object ControlMessages {
   case class ClearBuffersResponse(
     success: Boolean
   ) extends WorkerMessage
+
+  case class CommitFiles(
+    shuffleKey: String,
+    commitLocations: util.List[PartitionLocation],
+    mode: PartitionLocation.Mode) extends WorkerMessage
+  case class CommitFilesResponse(committedLocations: util.List[PartitionLocation]) extends WorkerMessage
 
   /** ==========================================
    *              common messages

@@ -101,6 +101,8 @@ private[deploy] class Worker(
       handleReserveBuffers(context, shuffleKey, masterLocations, slaveLocations)
     case ClearBuffers(shuffleKey, masterLocs, slaveLocs) =>
       handleClearBuffers(context, shuffleKey, masterLocs, slaveLocs)
+    case CommitFiles(shuffleKey, commitLocations, mode) =>
+      handleCommitFiles(context, shuffleKey, commitLocations, mode)
   }
 
   private def handleReserveBuffers(context: RpcCallContext, shuffleKey: String,
@@ -206,6 +208,53 @@ private[deploy] class Worker(
     }
     // reply
     context.reply(ClearBuffersResponse(true))
+  }
+
+  private def handleCommitFiles(context: RpcCallContext,
+    shuffleKey: String,
+    commitLocations: util.List[PartitionLocation],
+    mode: PartitionLocation.Mode): Unit = {
+    // return null if shuffleKey does not exist
+    if (mode == PartitionLocation.Mode.Master) {
+      if (!workerInfo.masterPartitionLocations.containsKey(shuffleKey)) {
+        logError(s"shuffle ${shuffleKey} doesn't exist!")
+        context.reply(CommitFilesResponse(null))
+        return
+      }
+    } else {
+      if (!workerInfo.slavePartitionLocations.containsKey(shuffleKey)) {
+        logError(s"shuffle ${shuffleKey} doesn't exist!")
+        context.reply(CommitFilesResponse(null))
+        return
+      }
+    }
+
+    val committedLocations = new util.ArrayList[PartitionLocation]()
+    val locations = mode match {
+      case PartitionLocation.Mode.Master =>
+        workerInfo.masterPartitionLocations.get(shuffleKey)
+      case PartitionLocation.Mode.Slave =>
+        workerInfo.slavePartitionLocations.get(shuffleKey)
+    }
+
+    if (commitLocations != null) {
+      locations.synchronized {
+        locations.foreach(loc => {
+          val target = locations.get(loc._1)
+          if (target != null) {
+            if (target.asInstanceOf[PartitionLocationWithDoubleChunks].doubleChunk.flush()) {
+              target.asInstanceOf[PartitionLocationWithDoubleChunks].doubleChunk.returnChunks()
+              committedLocations.add(target)
+            } else {
+              target.asInstanceOf[PartitionLocationWithDoubleChunks].doubleChunk.returnChunks()
+            }
+          }
+        })
+      }
+    }
+
+    // reply
+    context.reply(CommitFilesResponse(committedLocations))
   }
 
   private def registerWithMaster() {

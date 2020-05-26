@@ -72,4 +72,13 @@ public class ShuffleClientImpl extends ShuffleClient {
     {
         return null;
     }
+
+    @Override
+    public void trigger(String applicationId, int shuffleId)
+    {
+        TriggerResponse response = _master.askSync(
+            new Trigger(applicationId, shuffleId),
+            ClassTag$.MODULE$.apply(TriggerResponse.class)
+        );
+    }
 }
