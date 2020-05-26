@@ -128,6 +128,11 @@ object ControlMessages {
     mode: PartitionLocation.Mode) extends WorkerMessage
   case class CommitFilesResponse(committedLocations: util.List[PartitionLocation]) extends WorkerMessage
 
+  case class Destroy(
+    shuffleKey: String,
+    destroyLocations: util.List[PartitionLocation]) extends WorkerMessage
+  case class DestroyResponse(destroyedLocations: util.List[PartitionLocation]) extends WorkerMessage
+
   /** ==========================================
    *              common
    *  ==========================================

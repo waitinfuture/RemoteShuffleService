@@ -73,6 +73,7 @@ public class PartitionLocation implements Serializable
         this.peer = peer;
     }
 
+    @Override
     public boolean equals(Object other) {
         if (!(other instanceof PartitionLocation)) {
             return false;
@@ -81,10 +82,12 @@ public class PartitionLocation implements Serializable
         return host.equals(o.host) && port == o.port && UUID.equals(o.UUID);
     }
 
+    @Override
     public int hashCode() {
         return (host + port + UUID).hashCode();
     }
 
+    @Override
     public String toString() {
         return UUID + " " + host + ":" + port + " " + "Mode: " + mode;
     }

@@ -111,6 +111,8 @@ private[deploy] class Worker(
       handleReserveBuffers(context, shuffleKey, masterLocations, slaveLocations)
     case CommitFiles(shuffleKey, commitLocations, mode) =>
       handleCommitFiles(context, shuffleKey, commitLocations, mode)
+    case Destroy(shuffleKey, destroyLocations) =>
+      handleDestroy(context, shuffleKey, destroyLocations)
     case ClearBuffers(shuffleKey, masterLocations, slaveLocations) =>
       handleClearBuffers(context, shuffleKey, masterLocations, slaveLocations)
       logInfo("receive ClearBuffers request," +
@@ -257,14 +259,23 @@ private[deploy] class Worker(
 
     if (commitLocations != null) {
       locations.synchronized {
-        locations.foreach(loc => {
-          val target = locations.get(loc._1)
+        commitLocations.foreach(loc => {
+          val target = locations.get(loc)
           if (target != null) {
             if (target.asInstanceOf[PartitionLocationWithDoubleChunks].getDoubleChunk.flush()) {
+              // flush success
+              // 1. returnChunks
+              // 2. remove partitionLocation from workerInfo
+              // 3. add to committedLocations
               target.asInstanceOf[PartitionLocationWithDoubleChunks].getDoubleChunk.returnChunks()
+              locations.remove(loc)
               committedLocations.add(target)
             } else {
+              // flush failed
+              // 1. returnChunks
+              // 2. remove partitionLocation from workerInfo
               target.asInstanceOf[PartitionLocationWithDoubleChunks].getDoubleChunk.returnChunks()
+              locations.remove(loc)
             }
           }
         })
@@ -273,6 +284,41 @@ private[deploy] class Worker(
 
     // reply
     context.reply(CommitFilesResponse(committedLocations))
+  }
+
+  /**
+    * destroy only response to slave partition, to release it's chunks
+    * @param context
+    * @param shuffleKey
+    * @param destroyLocations
+    */
+  private def handleDestroy(context: RpcCallContext,
+    shuffleKey: String,
+    destroyLocations: util.List[PartitionLocation]): Unit = {
+    if (!workerInfo.slavePartitionLocations.containsKey(shuffleKey)) {
+      logError(s"shuffle ${shuffleKey} doesn't exist!")
+      context.reply(DestroyResponse(null))
+      return
+    }
+
+    val destroyedLocations = new util.ArrayList[PartitionLocation]()
+    val locations = workerInfo.slavePartitionLocations.get(shuffleKey)
+
+    if (destroyedLocations != null) {
+      locations.synchronized {
+        destroyLocations.foreach(loc => {
+          val target = locations.get(loc)
+          if (target != null) {
+            target.asInstanceOf[PartitionLocationWithDoubleChunks].getDoubleChunk.returnChunks()
+            locations.remove(loc)
+            destroyedLocations.add(target)
+          }
+        })
+      }
+    }
+
+    // reply
+    context.reply(DestroyResponse(destroyedLocations))
   }
 
   private def handleSendData(

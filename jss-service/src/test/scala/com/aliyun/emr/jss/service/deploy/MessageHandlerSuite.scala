@@ -298,4 +298,45 @@ class MessageHandlerSuite extends FunSuite {
     )
     println(res)
   }
+
+  test("Destroy") {
+    val applicationId = "Destroy-Test"
+    val shuffleId = 1
+    val shuffleKey = s"${applicationId}-${shuffleId}"
+    val res = master.askSync[RegisterShuffleResponse](
+      RegisterShuffle(
+        applicationId,
+        shuffleId,
+        3,
+        5
+      )
+    )
+
+    assert(res.success)
+    partitionLocations = res.partitionLocations
+    assert(partitionLocations.size() == 5)
+    partitionLocations.foreach(p => {
+      assert(p.getMode == PartitionLocation.Mode.Master)
+      assert(p.getPeer != null)
+      assert(p.getPeer.getMode == PartitionLocation.Mode.Slave)
+      println(p)
+    })
+
+    Seq(worker1, worker2).foreach(worker => {
+      val workerSlavePartitions = partitionLocations
+        .filter(p => p.getPeer.getPort == worker.address.port)
+        .map(_.getPeer)
+
+      val destroyedPartitions =
+        worker.askSync[DestroyResponse](Destroy(shuffleKey, workerSlavePartitions)).destroyedLocations
+
+      assert(workerSlavePartitions.length == destroyedPartitions.length)
+
+      val workerInfos = worker.askSync[GetWorkerInfosResponse](GetWorkerInfos)
+        .workerInfos.asInstanceOf[util.List[WorkerInfo]]
+      assert(workerInfos.length == 1)
+
+      assert(workerInfos(0).slavePartitionLocations.get(shuffleKey).size() == 0)
+    })
+  }
 }
