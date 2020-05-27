@@ -8,5 +8,7 @@ public enum ReturnCode {
     SlotNotAvailable,
     ReserveBufferFailed,
     PartitionNotFound,
+    MasterPartitionNotFound,
+    SlavePartitionNotFound,
     Failed
 }

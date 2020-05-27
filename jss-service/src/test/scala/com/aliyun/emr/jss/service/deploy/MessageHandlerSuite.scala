@@ -6,7 +6,7 @@ import java.util
 import scala.collection.JavaConversions._
 import scala.util.Random
 
-import com.aliyun.emr.jss.common.rpc.{RpcAddress, RpcEnv}
+import com.aliyun.emr.jss.common.rpc.{RpcAddress, RpcEndpointRef, RpcEnv}
 import com.aliyun.emr.jss.common.util.Utils
 import com.aliyun.emr.jss.common.EssConf
 import com.aliyun.emr.jss.protocol.{PartitionLocation, RpcNameConstants}
@@ -18,97 +18,113 @@ import com.aliyun.emr.jss.service.deploy.worker.{DoubleChunk, PartitionLocationW
 import org.scalatest.FunSuite
 
 class MessageHandlerSuite extends FunSuite {
-  /**
-   * ===============================
-   *         start master
-   * ===============================
-   */
-  val conf = new EssConf()
-  conf.set("ess.partition.memory", "128")
-  val masterArgs = new MasterArguments(Array.empty[String], conf)
-  val rpcEnvMaster: RpcEnv = RpcEnv.create(
-    RpcNameConstants.MASTER_SYS,
-    masterArgs.host,
-    masterArgs.port,
-    conf)
-  rpcEnvMaster.setupEndpoint(RpcNameConstants.MASTER_EP,
-    new Master(rpcEnvMaster, rpcEnvMaster.address, conf))
+  def init() {
+    /**
+     * ===============================
+     * start master
+     * ===============================
+     */
+    val conf = new EssConf()
+    conf.set("ess.partition.memory", "128")
+    val masterArgs = new MasterArguments(Array.empty[String], conf)
+    rpcEnvMaster = RpcEnv.create(
+      RpcNameConstants.MASTER_SYS,
+      masterArgs.host,
+      masterArgs.port,
+      conf)
+    rpcEnvMaster.setupEndpoint(RpcNameConstants.MASTER_EP,
+      new Master(rpcEnvMaster, rpcEnvMaster.address, conf))
 
-  new Thread() {
-    override def run(): Unit = {
-      rpcEnvMaster.awaitTermination()
-    }
-  }.start()
-  Thread.sleep(1000)
-  println("started master")
+    new Thread() {
+      override def run(): Unit = {
+        rpcEnvMaster.awaitTermination()
+      }
+    }.start()
+    Thread.sleep(1000)
+    println("started master")
 
-  /**
-   * ===============================
-   *         start worker1
-   * ===============================
-   */
-  val workerArgs = new WorkerArguments(Array.empty[String], conf)
-  val rpcEnvWorker1: RpcEnv = RpcEnv.create(RpcNameConstants.WORKER_SYS,
-    workerArgs.host,
-    9097,
-    conf)
+    /**
+     * ===============================
+     * start worker1
+     * ===============================
+     */
+    val workerArgs = new WorkerArguments(Array.empty[String], conf)
+    rpcEnvWorker1 = RpcEnv.create(RpcNameConstants.WORKER_SYS,
+      workerArgs.host,
+      9097,
+      conf)
 
-  val masterAddresses: RpcAddress = RpcAddress.fromJindoURL(workerArgs.master)
-  rpcEnvWorker1.setupEndpoint(RpcNameConstants.WORKER_EP,
-    new Worker(rpcEnvWorker1, workerArgs.memory,
-      masterAddresses, RpcNameConstants.WORKER_EP, conf))
+    val masterAddresses: RpcAddress = RpcAddress.fromJindoURL(workerArgs.master)
+    rpcEnvWorker1.setupEndpoint(RpcNameConstants.WORKER_EP,
+      new Worker(rpcEnvWorker1, workerArgs.memory,
+        masterAddresses, RpcNameConstants.WORKER_EP, conf))
 
-  new Thread() {
-    override def run(): Unit = {
-      rpcEnvWorker1.awaitTermination()
-    }
-  }.start()
-  Thread.sleep(1000)
-  println("started worker1")
+    new Thread() {
+      override def run(): Unit = {
+        rpcEnvWorker1.awaitTermination()
+      }
+    }.start()
+    Thread.sleep(1000)
+    println("started worker1")
 
-  /**
-   * ===============================
-   *         start worker2
-   * ===============================
-   */
-  val workerArgs2 = new WorkerArguments(Array.empty[String], conf)
-  val rpcEnvWorker2: RpcEnv = RpcEnv.create(RpcNameConstants.WORKER_SYS,
-    workerArgs2.host,
-    9098,
-    conf)
+    /**
+     * ===============================
+     * start worker2
+     * ===============================
+     */
+    val workerArgs2 = new WorkerArguments(Array.empty[String], conf)
+    rpcEnvWorker2 = RpcEnv.create(RpcNameConstants.WORKER_SYS,
+      workerArgs2.host,
+      9098,
+      conf)
 
-  rpcEnvWorker2.setupEndpoint(RpcNameConstants.WORKER_EP,
-    new Worker(rpcEnvWorker2, workerArgs.memory,
-      masterAddresses, RpcNameConstants.WORKER_EP, conf))
+    rpcEnvWorker2.setupEndpoint(RpcNameConstants.WORKER_EP,
+      new Worker(rpcEnvWorker2, workerArgs.memory,
+        masterAddresses, RpcNameConstants.WORKER_EP, conf))
 
-  new Thread() {
-    override def run(): Unit = {
-      rpcEnvWorker2.awaitTermination()
-    }
-  }.start()
-  Thread.sleep(1000)
-  println("started worker2")
+    new Thread() {
+      override def run(): Unit = {
+        rpcEnvWorker2.awaitTermination()
+      }
+    }.start()
+    Thread.sleep(1000)
+    println("started worker2")
 
-  val localhost = Utils.localHostName()
-  val env = RpcEnv.create(
-    "MessageHandlerSuite",
-    localhost,
-    0,
-    conf
-  )
-  val master = env.setupEndpointRef(new RpcAddress(localhost, 9099), RpcNameConstants.MASTER_EP)
-  val worker1 = env.setupEndpointRef(new RpcAddress(localhost, 9097), RpcNameConstants.WORKER_EP)
-  val worker2 = env.setupEndpointRef(new RpcAddress(localhost, 9098), RpcNameConstants.WORKER_EP)
+    val localhost = Utils.localHostName()
+    val env = RpcEnv.create(
+      "MessageHandlerSuite",
+      localhost,
+      0,
+      conf
+    )
+    master = env.setupEndpointRef(new RpcAddress(localhost, 9099), RpcNameConstants.MASTER_EP)
+    worker1 = env.setupEndpointRef(new RpcAddress(localhost, 9097), RpcNameConstants.WORKER_EP)
+    worker2 = env.setupEndpointRef(new RpcAddress(localhost, 9098), RpcNameConstants.WORKER_EP)
+  }
+
+  def stop(): Unit = {
+    rpcEnvWorker1.shutdown()
+    rpcEnvWorker2.shutdown()
+    rpcEnvMaster.shutdown()
+  }
+
+  var rpcEnvMaster: RpcEnv = _
+  var rpcEnvWorker1: RpcEnv = _
+  var rpcEnvWorker2: RpcEnv = _
+  var master: RpcEndpointRef = _
+  var worker1: RpcEndpointRef = _
+  var worker2: RpcEndpointRef = _
 
   /**
    * ===============================
    *         start testing
    * ===============================
    */
-  var partitionLocations: util.List[PartitionLocation] = _
 
   // TODO each test has full pepeline
   test("RegisterShuffle") {
+    init()
+
     val res = master.askSync[RegisterShuffleResponse](
       RegisterShuffle(
         "appId",
@@ -118,7 +134,7 @@ class MessageHandlerSuite extends FunSuite {
       )
     )
     assert(res.success)
-    partitionLocations = res.partitionLocations
+    val partitionLocations = res.partitionLocations
     assert(partitionLocations.size() == 10)
     partitionLocations.foreach(p => {
       assert(p.getMode == PartitionLocation.Mode.Master)
@@ -126,9 +142,21 @@ class MessageHandlerSuite extends FunSuite {
       assert(p.getPeer.getMode == PartitionLocation.Mode.Slave)
       println(p)
     })
+
+    stop()
   }
 
   test("GetWorkerInfos") {
+    init()
+
+    master.askSync[RegisterShuffleResponse](
+      RegisterShuffle(
+        "appId",
+        1,
+        10,
+        10
+      )
+    )
     // Master
     var res = master.askSync[GetWorkerInfosResponse](GetWorkerInfos)
     assert(res.success)
@@ -167,9 +195,23 @@ class MessageHandlerSuite extends FunSuite {
         .asInstanceOf[PartitionLocationWithDoubleChunks]
     assert(partitionLocationWithDoubleChunks.getDoubleChunk.slaveState ==
       DoubleChunk.ChunkState.Ready)
+
+    stop()
   }
 
   test("SendData") {
+    init()
+
+    val resReg = master.askSync[RegisterShuffleResponse](
+      RegisterShuffle(
+        "appId",
+        1,
+        10,
+        10
+      )
+    )
+    val partitionLocations = resReg.partitionLocations
+
     val bytes = new Array[Byte](64)
     0 until bytes.length foreach (ind => bytes(ind) = 'a')
     val worker1Location = partitionLocations.filter(p => p.getPort == 9097).toList(0)
@@ -278,26 +320,40 @@ class MessageHandlerSuite extends FunSuite {
     assert(doubleChunk.working == 0)
     assert(doubleChunk.slaveState == DoubleChunk.ChunkState.Ready)
     assert(doubleChunk.fileName.equals(worker2Location2.getUUID))
+
+    stop()
   }
 
   test("MapperEnd") {
-    val partitionIds = new util.ArrayList[String]()
-    partitionIds.add("p1")
-    partitionIds.add("p2")
+    init()
+
+    val resReg = master.askSync[RegisterShuffleResponse](
+      RegisterShuffle(
+        "appId",
+        1,
+        10,
+        10
+      )
+    )
+    val partitionLocations = resReg.partitionLocations
+
     val res = master.askSync[MapperEndResponse](
       MapperEnd(
         "appId",
         1,
         0,
         1,
-        partitionIds
+        partitionLocations.map(_.getUUID)
       )
     )
     assert(res.success)
-    println(res)
+
+    stop()
   }
 
   test("Destroy-All") {
+    init()
+
     val applicationId = "Destroy-Test"
     val shuffleId = 1
     val shuffleKey = Utils.makeShuffleKey(applicationId, shuffleId)
@@ -311,7 +367,7 @@ class MessageHandlerSuite extends FunSuite {
     )
 
     assert(res.success)
-    partitionLocations = res.partitionLocations
+    val partitionLocations = res.partitionLocations
     assert(partitionLocations.size() == 6)
     partitionLocations.foreach(p => {
       assert(p.getMode == PartitionLocation.Mode.Master)
@@ -362,9 +418,13 @@ class MessageHandlerSuite extends FunSuite {
     workerInfo = workerInfos.get(0)
     assert(workerInfo.masterPartitionLocations.get(shuffleKey) == null)
     assert(workerInfo.slavePartitionLocations.get(shuffleKey) == null)
+
+    stop()
   }
 
   test("Destroy-Some") {
+    init()
+
     val applicationId = "Destroy-Test"
     val shuffleId = 1
     val shuffleKey = Utils.makeShuffleKey(applicationId, shuffleId)
@@ -378,7 +438,7 @@ class MessageHandlerSuite extends FunSuite {
     )
 
     assert(res.success)
-    partitionLocations = res.partitionLocations
+    val partitionLocations = res.partitionLocations
     assert(partitionLocations.size() == 6)
     partitionLocations.foreach(p => {
       assert(p.getMode == PartitionLocation.Mode.Master)
@@ -409,9 +469,13 @@ class MessageHandlerSuite extends FunSuite {
     assert(workerInfo.masterPartitionLocations.get(shuffleKey).size() == 2)
     assert(workerInfo.slavePartitionLocations.get(shuffleKey).size() == 2)
     assert(workerInfo.memoryUsed == 128 * 4)
+
+    stop()
   }
 
   test("SlaveLost") {
+    init()
+
     // register shuffle
     val applicationId = "slavelost"
     val shuffleId = 2
@@ -460,7 +524,7 @@ class MessageHandlerSuite extends FunSuite {
     var res2 = worker1.send(
       SlaveLost(shuffleKey, lostSlave.getPeer, lostSlave)
     )
-    Thread.sleep(100)
+    Thread.sleep(500)
     res1 = worker1.askSync[GetWorkerInfosResponse](GetWorkerInfos)
     workerInfo = res1.workerInfos.asInstanceOf[util.List[WorkerInfo]].get(0)
     assert(workerInfo.memoryUsed == 128 * 10)
@@ -502,5 +566,7 @@ class MessageHandlerSuite extends FunSuite {
     assert(masterDoubleChunkInfo.working == 0)
     assert(masterDoubleChunkInfo.masterRemaining == 65)
     assert(masterDoubleChunkInfo.slaveRemaining == 128)
+
+    stop()
   }
 }

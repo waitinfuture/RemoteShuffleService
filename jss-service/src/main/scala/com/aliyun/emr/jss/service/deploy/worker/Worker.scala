@@ -343,7 +343,13 @@ private[deploy] class Worker(
     val doubleChunk = location.asInstanceOf[PartitionLocationWithDoubleChunks].getDoubleChunk
 
     // append data
-    doubleChunk.append(data, flush)
+    val appended = doubleChunk.append(data, flush)
+    if (!appended) {
+      val msg = "append data failed!"
+      logError(msg)
+      context.reply(SendDataResponse(false, msg))
+      return
+    }
 
     // for master, send data to slave
     if (mode == PartitionLocation.Mode.Master) {
@@ -384,7 +390,7 @@ private[deploy] class Worker(
     }
     val partition = workerInfo.slavePartitionLocations.get(shuffleKey).get(partitionLocation)
     if (partition == null) {
-      val msg = s"partition ${partitionLocation}not found!"
+      val msg = s"partition ${partitionLocation} not found!"
       logError(msg)
       context.reply(ReplicateDataResponse(ReturnCode.PartitionNotFound, msg))
       return
@@ -402,6 +408,18 @@ private[deploy] class Worker(
     val res = masterEndpoint.askSync[SlaveLostResponse](
       SlaveLost(shuffleKey, masterLocation, slaveLocation)
     )
+    // if Master doesn't know me, remove master location
+    if (res.returnCode == ReturnCode.MasterPartitionNotFound) {
+      logError("Master doesn't know me, remove myself")
+      val master = workerInfo.masterPartitionLocations.get(shuffleKey).get(masterLocation)
+          .asInstanceOf[PartitionLocationWithDoubleChunks]
+      master.getDoubleChunk.returnChunks()
+      workerInfo.synchronized {
+        workerInfo.removeMasterPartition(shuffleKey,
+          workerInfo.masterPartitionLocations.get(shuffleKey).keySet().toList)
+      }
+      return
+    }
     if (res.returnCode != ReturnCode.Success) {
       logError(s"Master process SlaveLost failed! ${res.returnCode}")
       return

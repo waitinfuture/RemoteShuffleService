@@ -22,6 +22,8 @@ public class DoubleChunk implements Serializable {
     public String fileName;
     // exposed for test
     public ChunkState slaveState = ChunkState.Ready;
+    // exposed for test
+    public boolean flushed = false;
 
     public enum ChunkState {
         Ready, Flushing;
@@ -44,14 +46,26 @@ public class DoubleChunk implements Serializable {
     }
 
     public synchronized boolean append(byte[] data) {
+        if (flushed) {
+            logger.error("already flushed!");
+            return false;
+        }
         return append(Unpooled.copiedBuffer(data), true);
     }
 
     public synchronized boolean append(byte[] data, boolean flush) {
+        if (flushed) {
+            logger.error("already flushed!");
+            return false;
+        }
         return append(Unpooled.copiedBuffer(data), flush);
     }
 
     public synchronized boolean append(ByteBuf data) {
+        if (flushed) {
+            logger.error("already flushed!");
+            return false;
+        }
         return append(data, true);
     }
 
@@ -62,6 +76,10 @@ public class DoubleChunk implements Serializable {
      * @return
      */
     public synchronized  boolean append(ByteBuf data, boolean flush) {
+        if (flushed) {
+            logger.error("already flushed!");
+            return false;
+        }
         synchronized (this) {
             if (chunks[working].remaining() >= data.readableBytes()) {
                 chunks[working].append(data);
@@ -103,6 +121,10 @@ public class DoubleChunk implements Serializable {
     }
 
     public synchronized boolean flush() {
+        if (flushed) {
+            logger.error("already flushed!");
+            return false;
+        }
         synchronized (this) {
             // wait for flush slave chunk to finish
             while (slaveState == ChunkState.Flushing) {
@@ -123,6 +145,7 @@ public class DoubleChunk implements Serializable {
                 logger.error("construct outputstream failed!", e);
                 return false;
             }
+            flushed = true;
             return true;
         }
     }

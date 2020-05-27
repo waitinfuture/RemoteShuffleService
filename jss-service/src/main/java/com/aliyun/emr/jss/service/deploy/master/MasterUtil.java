@@ -101,7 +101,7 @@ public class MasterUtil {
         PartitionLocation masterLocation, List<WorkerInfo> workers) {
         Random rand = new Random();
         int startInd = rand.nextInt(workers.size());
-        if (workers.get(startInd).hostPort().equals(masterLocation.getHost())) {
+        if (workers.get(startInd).hostPort().equals(masterLocation.hostPort())) {
             startInd = (startInd + 1) % workers.size();
         }
         int curInd;
