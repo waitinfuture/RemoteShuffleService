@@ -340,30 +340,29 @@ private[deploy] class Master(
   private def handleSlaveLost(context: RpcCallContext,
     shuffleKey: String, masterLocation: PartitionLocation,
     slaveLocation: PartitionLocation): Unit = {
-    // find worker
-    var worker: WorkerInfo = null
-    breakable({
-      for (ind <- 0 until workers.length) {
-        if (workers.get(ind).host == slaveLocation.getHost
-          && workers.get(ind).port == slaveLocation.getPort) {
-          worker = workers.get(ind)
-          break()
-        }
-      }
-    })
-    if (worker == null) {
+    // find slaveWorker
+    val slaveWorkerOpt = workers.find(w => w.host == slaveLocation.getHost &&
+      w.port == slaveLocation.getPort)
+    val masterWorkerOpt = workers.find(w => w.host == masterLocation.getHost &&
+      w.port == masterLocation.getPort)
+    if (!slaveWorkerOpt.isDefined || !masterWorkerOpt.isDefined) {
       logError("Worker not found!")
       context.reply(SlaveLostResponse(ReturnCode.WorkerNotFound, null))
       return
     }
+    val slaveWorker = slaveWorkerOpt.get
+    val masterWorker = masterWorkerOpt.get
+
     // send Destroy
-    val (_, failedSlave) = destroyBuffersWithRetry(shuffleKey, worker, null, List(slaveLocation))
+    val (_, failedSlave) = destroyBuffersWithRetry(shuffleKey, slaveWorker, null, List(slaveLocation))
     if (failedSlave == null || failedSlave.isEmpty) {
-      worker.synchronized {
-        // remove slave partition
-        worker.removeSlavePartition(shuffleKey, slaveLocation)
-        // update master locations's peer
-        worker.masterPartitionLocations.get(shuffleKey).get(masterLocation).setPeer(null)
+      // remove slave partition
+      slaveWorker.synchronized {
+        slaveWorker.removeSlavePartition(shuffleKey, slaveLocation)
+      }
+      // update master locations's peer
+      masterWorker.synchronized {
+        masterWorker.masterPartitionLocations.get(shuffleKey).get(masterLocation).setPeer(null)
       }
     }
     // offer new slot
@@ -385,15 +384,15 @@ private[deploy] class Master(
     if (failed != null && !failed.isEmpty()) {
       logError("reserve buffer failed!")
       // update status
-      workers.synchronized {
-        worker.removeSlavePartition(shuffleKey, location._2)
+      slaveWorker.synchronized {
+        slaveWorker.removeSlavePartition(shuffleKey, location._2)
       }
       context.reply(SlaveLostResponse(ReturnCode.ReserveBufferFailed, null))
       return
     }
     // update peer
-    worker.synchronized {
-      worker.masterPartitionLocations.get(shuffleKey).get(masterLocation).setPeer(location._2)
+    masterWorker.synchronized {
+      masterWorker.masterPartitionLocations.get(shuffleKey).get(masterLocation).setPeer(location._2)
     }
     // handle SlaveLost success, reply
     context.reply(SlaveLostResponse(ReturnCode.Success, location._2))

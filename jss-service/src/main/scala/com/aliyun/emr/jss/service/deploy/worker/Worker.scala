@@ -29,7 +29,7 @@ import com.aliyun.emr.jss.common.rpc._
 import com.aliyun.emr.jss.common.util.{ThreadUtils, Utils}
 import com.aliyun.emr.jss.protocol.{PartitionLocation, RpcNameConstants}
 import com.aliyun.emr.jss.protocol.message.ControlMessages._
-import com.aliyun.emr.jss.protocol.message.DataMessages.{ReplicateData, ReplicateDataResponse, SendData, SendDataResponse}
+import com.aliyun.emr.jss.protocol.message.DataMessages.{GetDoubleChunkInfo, GetDoubleChunkInfoResponse, ReplicateData, ReplicateDataResponse, SendData, SendDataResponse}
 import com.aliyun.emr.jss.protocol.message.ReturnCode
 import io.netty.buffer.ByteBuf
 
@@ -121,12 +121,14 @@ private[deploy] class Worker(
       logInfo(s"Worker ${host}:${port} receive SendData request, ${mode}, ${shuffleKey}")
       handleSendData(context, shuffleKey, partitionLocation, mode, flush, data)
     case ReplicateData(shuffleKey, partitionLocation, working, masterData, slaveData) =>
-      logInfo(s"received Replicate Data, ${shuffleKey}, ${partitionLocation}")
+      logInfo(s"received ReplicateData request, ${shuffleKey}, ${partitionLocation}")
       handleReplicateData(context, shuffleKey, partitionLocation, working, masterData, slaveData)
-
     case GetWorkerInfos =>
       logInfo("received GetWorkerInfos request")
       handleGetWorkerInfos(context)
+    case GetDoubleChunkInfo(shuffleKey, mode, partitionLocation) =>
+      logInfo("received GetDoubleChunkInfo request")
+      handleGetDoubleChunkInfo(context, shuffleKey, mode, partitionLocation)
   }
 
   private def handleReserveBuffers(context: RpcCallContext, shuffleKey: String,
@@ -404,23 +406,16 @@ private[deploy] class Worker(
       logError(s"Master process SlaveLost failed! ${res.returnCode}")
       return
     }
-    // update status
-    workerInfo.synchronized {
-      // remove old slave partition
-      workerInfo.removeSlavePartition(shuffleKey, slaveLocation)
-      // add new slave partition
-      workerInfo.addSlavePartition(shuffleKey, res.slaveLocation)
-      // update master location's peer
-      workerInfo.masterPartitionLocations.get(shuffleKey).get(masterLocation)
-        .setPeer(slaveLocation)
+    // update master location's peer
+    val master = workerInfo.masterPartitionLocations.get(shuffleKey).get(masterLocation)
+        .asInstanceOf[PartitionLocationWithDoubleChunks]
+    master.synchronized {
+      master.setPeer(slaveLocation)
     }
     // replicate data
-    val master = workerInfo.masterPartitionLocations.get(shuffleKey).get(masterLocation)
-      .asInstanceOf[PartitionLocationWithDoubleChunks]
+    val slaveEndpoint = getOrCreateEndpoint(slaveLocation.getHost, slaveLocation.getPort)
     val doubleChunk = master.getDoubleChunk
     doubleChunk.synchronized {
-      // get slave endpoint
-      val slaveEndpoint = getOrCreateEndpoint(slaveLocation.getHost, slaveLocation.getPort)
       // replicate data
       val res = slaveEndpoint.askSync[ReplicateDataResponse](
         ReplicateData(shuffleKey,
@@ -434,12 +429,36 @@ private[deploy] class Worker(
         self.send(SlaveLost(shuffleKey, masterLocation, slaveLocation))
       }
     }
+    logInfo("handle SlaveLost success")
   }
 
   private def handleGetWorkerInfos(context: RpcCallContext): Unit = {
     val list = new util.ArrayList[WorkerInfo]()
     list.add(workerInfo)
     context.reply(GetWorkerInfosResponse(true, list))
+  }
+
+  private def handleGetDoubleChunkInfo(context: RpcCallContext,
+    shuffleKey: String, mode: PartitionLocation.Mode,
+    loc: PartitionLocation): Unit = {
+    val location = if (mode == PartitionLocation.Mode.Master) {
+      workerInfo.masterPartitionLocations.get(shuffleKey).get(loc)
+    } else {
+      workerInfo.slavePartitionLocations.get(shuffleKey).get(loc)
+    }
+    if (location == null) {
+      context.reply(GetDoubleChunkInfoResponse(false, -1, -1, null, -1, null))
+      return
+    }
+    val doubleChunk = location.asInstanceOf[PartitionLocationWithDoubleChunks].getDoubleChunk
+    context.reply(GetDoubleChunkInfoResponse(
+      true,
+      doubleChunk.working,
+      doubleChunk.chunks(doubleChunk.working).remaining(),
+      doubleChunk.getSlaveData,
+      doubleChunk.chunks((doubleChunk.working + 1) % 2).remaining(),
+      doubleChunk.getMasterData
+    ))
   }
 
   private def registerWithMaster() {

@@ -13,7 +13,8 @@ import java.io.Serializable;
 public class DoubleChunk implements Serializable {
     private static final Logger logger = LoggerFactory.getLogger(DoubleChunk.class);
 
-    transient Chunk[] chunks = new Chunk[2];
+    // exposed for test
+    transient public Chunk[] chunks = new Chunk[2];
     // exposed for test
     public int working;
     transient MemoryPool memoryPool;
@@ -62,7 +63,7 @@ public class DoubleChunk implements Serializable {
      */
     public synchronized  boolean append(ByteBuf data, boolean flush) {
         synchronized (this) {
-            if (chunks[working].remaining() > data.readableBytes()) {
+            if (chunks[working].remaining() >= data.readableBytes()) {
                 chunks[working].append(data);
                 return true;
             }

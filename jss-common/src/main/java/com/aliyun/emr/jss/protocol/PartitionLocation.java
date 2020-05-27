@@ -57,6 +57,10 @@ public class PartitionLocation implements Serializable
         this.port = port;
     }
 
+    public String hostPort() {
+        return host + ":" + port;
+    }
+
     public Mode getMode() {
         return mode;
     }

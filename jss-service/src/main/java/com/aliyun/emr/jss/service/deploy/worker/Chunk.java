@@ -24,7 +24,7 @@ public class Chunk {
     }
 
     public int remaining() {
-        return (int)(endAddress - currentAddress + 1);
+        return (int)(endAddress - currentAddress);
     }
 
     public void append(byte[] data) {
@@ -79,5 +79,17 @@ public class Chunk {
 
     public int getId() {
         return id;
+    }
+
+    public long getStartAddress() {
+        return startAddress;
+    }
+
+    public long getEndAddress() {
+        return endAddress;
+    }
+
+    public long getCurrentAddress() {
+        return currentAddress;
     }
 }

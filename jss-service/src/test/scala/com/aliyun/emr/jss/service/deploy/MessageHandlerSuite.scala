@@ -4,13 +4,14 @@ import java.io.File
 import java.util
 
 import scala.collection.JavaConversions._
+import scala.util.Random
 
 import com.aliyun.emr.jss.common.rpc.{RpcAddress, RpcEnv}
 import com.aliyun.emr.jss.common.util.Utils
 import com.aliyun.emr.jss.common.EssConf
 import com.aliyun.emr.jss.protocol.{PartitionLocation, RpcNameConstants}
 import com.aliyun.emr.jss.protocol.message.ControlMessages._
-import com.aliyun.emr.jss.protocol.message.DataMessages.{SendData, SendDataResponse}
+import com.aliyun.emr.jss.protocol.message.DataMessages.{GetDoubleChunkInfo, GetDoubleChunkInfoResponse, SendData, SendDataResponse}
 import com.aliyun.emr.jss.protocol.message.ReturnCode
 import com.aliyun.emr.jss.service.deploy.master.{Master, MasterArguments}
 import com.aliyun.emr.jss.service.deploy.worker.{DoubleChunk, PartitionLocationWithDoubleChunks, Worker, WorkerArguments, WorkerInfo}
@@ -296,29 +297,6 @@ class MessageHandlerSuite extends FunSuite {
     println(res)
   }
 
-  // TODO redesign
-  test("SlaveLost") {
-    val partitionId = "p1"
-    val masterLocation = new PartitionLocation(
-      partitionId,
-      localhost,
-      11,
-      PartitionLocation.Mode.Master
-    )
-    val slaveLocation = new PartitionLocation(
-      partitionId,
-      localhost,
-      10,
-      PartitionLocation.Mode.Slave,
-      masterLocation
-    )
-    masterLocation.setPeer(slaveLocation)
-    val res = master.askSync[SlaveLostResponse](
-      SlaveLost("appId-1", masterLocation, slaveLocation)
-    )
-    println(res)
-  }
-
   test("Destroy-All") {
     val applicationId = "Destroy-Test"
     val shuffleId = 1
@@ -433,5 +411,96 @@ class MessageHandlerSuite extends FunSuite {
     assert(workerInfo.memoryUsed == 128 * 4)
   }
 
-  // TODO test SlaveLost
+  test("SlaveLost") {
+    // register shuffle
+    val applicationId = "slavelost"
+    val shuffleId = 2
+    val shuffleKey = Utils.makeShuffleKey(applicationId, shuffleId)
+    val res = master.askSync[RegisterShuffleResponse](
+      RegisterShuffle(applicationId, shuffleId, 10, 10)
+    )
+    assert(res.success)
+
+    // get partition info
+    var res1 = worker1.askSync[GetWorkerInfosResponse](GetWorkerInfos)
+    assert(res1.success)
+    assert(res1.workerInfos.asInstanceOf[util.List[WorkerInfo]].size() == 1)
+    var workerInfo = res1.workerInfos.asInstanceOf[util.List[WorkerInfo]].get(0)
+    assert(workerInfo.memoryUsed == 128 * 10)
+    assert(workerInfo.masterPartitionLocations.size() == 1)
+    assert(workerInfo.slavePartitionLocations.size() == 1)
+    assert(workerInfo.masterPartitionLocations.contains(shuffleKey))
+    var masterLocations = workerInfo.masterPartitionLocations.get(shuffleKey)
+
+    res1 = worker2.askSync[GetWorkerInfosResponse](GetWorkerInfos)
+    assert(res1.success)
+    workerInfo = res1.workerInfos.asInstanceOf[util.List[WorkerInfo]].get(0)
+    assert(workerInfo.memoryUsed == 128 * 10)
+    var slaveLocations = workerInfo.slavePartitionLocations.get(shuffleKey)
+
+    masterLocations.keySet().foreach(loc => assert(slaveLocations.contains(loc.getPeer)))
+
+    // send data before trigger SlaveLost
+    val lostSlave = masterLocations.head._1.getPeer
+    0 until 5 foreach (_ => {
+      val data = new Array[Byte](63)
+      Random.nextBytes(data)
+      worker1.askSync[SendDataResponse](
+        SendData(
+          shuffleKey,
+          lostSlave.getPeer,
+          PartitionLocation.Mode.Master,
+          true,
+          data
+        )
+      )
+    })
+
+    // trigger slave lost
+    var res2 = worker1.send(
+      SlaveLost(shuffleKey, lostSlave.getPeer, lostSlave)
+    )
+    Thread.sleep(100)
+    res1 = worker1.askSync[GetWorkerInfosResponse](GetWorkerInfos)
+    workerInfo = res1.workerInfos.asInstanceOf[util.List[WorkerInfo]].get(0)
+    assert(workerInfo.memoryUsed == 128 * 10)
+    masterLocations = workerInfo.masterPartitionLocations.get(shuffleKey)
+
+    res1 = worker2.askSync[GetWorkerInfosResponse](GetWorkerInfos)
+    workerInfo = res1.workerInfos.asInstanceOf[util.List[WorkerInfo]].get(0)
+    assert(workerInfo.memoryUsed == 128 * 10)
+    slaveLocations = workerInfo.slavePartitionLocations.get(shuffleKey)
+
+    assert(masterLocations.size() == 5)
+    assert(slaveLocations.size() == 5)
+
+    val masterLocation = masterLocations.get(lostSlave.getPeer)
+    val newPeer = masterLocation.getPeer
+    assert(slaveLocations.contains(newPeer))
+    // since we have only 2 workers, newPeer should be equal to lostSlave
+    assert(lostSlave.equals(newPeer))
+    assert(slaveLocations.contains(newPeer))
+    val masterDoubleChunkInfo = worker1.askSync[GetDoubleChunkInfoResponse](
+      GetDoubleChunkInfo(shuffleKey, PartitionLocation.Mode.Master, masterLocation)
+    )
+    val slaveDoubleChunkInfo = worker2.askSync[GetDoubleChunkInfoResponse](
+      GetDoubleChunkInfo(shuffleKey, PartitionLocation.Mode.Slave, newPeer)
+    )
+    assert(masterDoubleChunkInfo.success)
+    assert(slaveDoubleChunkInfo.success)
+    assert(masterDoubleChunkInfo.working == slaveDoubleChunkInfo.working)
+    assert(masterDoubleChunkInfo.masterRemaining == slaveDoubleChunkInfo.masterRemaining)
+    assert(masterDoubleChunkInfo.slaveRemaining == slaveDoubleChunkInfo.slaveRemaining)
+    assert(masterDoubleChunkInfo.masterData.size == slaveDoubleChunkInfo.masterData.size)
+    assert(masterDoubleChunkInfo.slaveData.size == slaveDoubleChunkInfo.slaveData.size)
+    masterDoubleChunkInfo.masterData.zipWithIndex.foreach(entry => {
+      assert(entry._1 == slaveDoubleChunkInfo.masterData(entry._2))
+    })
+    masterDoubleChunkInfo.slaveData.zipWithIndex.foreach(entry => {
+      assert(entry._1 == slaveDoubleChunkInfo.slaveData(entry._2))
+    })
+    assert(masterDoubleChunkInfo.working == 0)
+    assert(masterDoubleChunkInfo.masterRemaining == 65)
+    assert(masterDoubleChunkInfo.slaveRemaining == 128)
+  }
 }

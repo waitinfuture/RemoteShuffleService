@@ -184,15 +184,6 @@ object DataMessages {
     data: Array[Byte]
   ) extends WorkerMessage
 
-  /** ==========================================
-   *             handled by client
-   *  ==========================================
-   */
-  case class SendDataResponse(
-    success: Boolean,
-    msg: String
-  ) extends ClientMessage
-
   case class ReplicateData(
     shuffleKey: String,
     partitionLocation: PartitionLocation,
@@ -205,4 +196,28 @@ object DataMessages {
     returnCode: ReturnCode,
     msg: String
   ) extends WorkerMessage
+
+  case class GetDoubleChunkInfo(
+    shuffleKey: String,
+    mode: PartitionLocation.Mode,
+    partitionLocation: PartitionLocation
+  ) extends WorkerMessage
+
+  case class GetDoubleChunkInfoResponse(
+    success: Boolean,
+    working: Int,
+    masterRemaining: Int,
+    masterData: Array[Byte],
+    slaveRemaining: Int,
+    slaveData: Array[Byte]
+  ) extends WorkerMessage
+
+  /** ==========================================
+   *             handled by client
+   *  ==========================================
+   */
+  case class SendDataResponse(
+    success: Boolean,
+    msg: String
+  ) extends ClientMessage
 }
