@@ -28,7 +28,7 @@ import com.aliyun.emr.jss.common.rpc._
 import com.aliyun.emr.jss.common.util.{ThreadUtils, Utils}
 import com.aliyun.emr.jss.protocol.{PartitionLocation, RpcNameConstants}
 import com.aliyun.emr.jss.protocol.message.ControlMessages._
-import com.aliyun.emr.jss.protocol.message.DataMessages.{GetDoubleChunkInfo, GetDoubleChunkInfoResponse, ReplicateData, ReplicateDataResponse, SendData, SendDataResponse}
+import com.aliyun.emr.jss.protocol.message.DataMessages._
 import com.aliyun.emr.jss.protocol.message.ReturnCode
 import com.aliyun.emr.jss.service.deploy.common.EssPathUtil
 import io.netty.buffer.ByteBuf
@@ -104,7 +104,7 @@ private[deploy] class Worker(
       masterEndpoint.send(Heartbeat(host, port))
     case SlaveLost(shuffleKey, masterLocation, slaveLocation) =>
       logInfo(s"received SlaveLost ${shuffleKey}, ${masterLocation}, ${slaveLocation}")
-      handleSlaveLost(shuffleKey, masterLocation, slaveLocation)
+      handleSlaveLost(null, shuffleKey, masterLocation, slaveLocation)
   }
 
   // TODO
@@ -120,7 +120,7 @@ private[deploy] class Worker(
       logInfo(s"receive Destroy request, ${shuffleKey} ${masterLocations} ${slaveLocations}")
       handleDestroy(context, shuffleKey, masterLocations, slaveLocations)
     case SendData(shuffleKey, partitionLocation, mode, flush, data) =>
-      logInfo(s"Worker ${host}:${port} receive SendData request, ${mode}, ${shuffleKey}")
+      logInfo(s"Worker ${host}:${port} receive SendData request, ${mode}, ${shuffleKey}, ${partitionLocation.getUUID}")
       handleSendData(context, shuffleKey, partitionLocation, mode, flush, data)
     case ReplicateData(shuffleKey, partitionLocation, working, masterData, slaveData) =>
       logInfo(s"received ReplicateData request, ${shuffleKey}, ${partitionLocation}")
@@ -131,6 +131,9 @@ private[deploy] class Worker(
     case GetDoubleChunkInfo(shuffleKey, mode, partitionLocation) =>
       logInfo("received GetDoubleChunkInfo request")
       handleGetDoubleChunkInfo(context, shuffleKey, mode, partitionLocation)
+    case SlaveLost(shuffleKey, masterLocation, slaveLocation) =>
+      logInfo(s"received SlaveLost ${shuffleKey}, ${masterLocation}, ${slaveLocation}")
+      handleSlaveLost(context, shuffleKey, masterLocation, slaveLocation)
   }
 
   private def handleReserveBuffers(context: RpcCallContext, shuffleKey: String,
@@ -155,7 +158,7 @@ private[deploy] class Worker(
                   EssPathUtil.GetPartitionPath(conf,
                     shuffleKey.split("-").dropRight(1).mkString("-"),
                     shuffleKey.split("-").last.toInt,
-                    slaveLocations.get(ind).getUUID)
+                    masterLocations.get(ind).getUUID)
                 )
               )
             )
@@ -196,7 +199,7 @@ private[deploy] class Worker(
         }
       }
     })
-    if (slaveDoubleChunks.size() < slaveDoubleChunks.size()) {
+    if (slaveDoubleChunks.size() < slaveLocations.size()) {
       logInfo("not all slave partition satisfied, return chunks")
       masterDoubleChunks.foreach(entry =>
         entry.asInstanceOf[PartitionLocationWithDoubleChunks].getDoubleChunk.returnChunks())
@@ -293,11 +296,6 @@ private[deploy] class Worker(
       }
       // remove master locations from workerinfo
       workerInfo.removeMasterPartition(shuffleKey, masterLocations)
-      if (workerInfo.masterPartitionLocations.get(shuffleKey).isEmpty) {
-        workerInfo.synchronized {
-          workerInfo.masterPartitionLocations.remove(shuffleKey)
-        }
-      }
     }
     // destroy slave locations
     if (slaveLocations != null && !slaveLocations.isEmpty) {
@@ -413,7 +411,7 @@ private[deploy] class Worker(
     context.reply(ReplicateDataResponse(ReturnCode.Success, null))
   }
 
-  private def handleSlaveLost(shuffleKey: String,
+  private def handleSlaveLost(context: RpcCallContext, shuffleKey: String,
     masterLocation: PartitionLocation, slaveLocation: PartitionLocation): Unit = {
     // send peer to null
     workerInfo.masterPartitionLocations.get(shuffleKey).get(masterLocation).setPeer(null)
@@ -444,6 +442,7 @@ private[deploy] class Worker(
         workerInfo.removeMasterPartition(shuffleKey, masterLocation)
       }
       // flush data
+      logInfo(s"worker ${workerInfo} flush data")
       loc.getDoubleChunk.flush()
       // return chunks
       loc.getDoubleChunk.returnChunks()
@@ -463,6 +462,10 @@ private[deploy] class Worker(
     val slaveEndpoint = getOrCreateEndpoint(slaveLocation.getHost, slaveLocation.getPort)
     val doubleChunk = master.getDoubleChunk
     doubleChunk.synchronized {
+      // wait for slave finish flushing before replicate
+      while (doubleChunk.slaveState == DoubleChunk.ChunkState.Flushing) {
+        Thread.sleep(100)
+      }
       // replicate data
       val res = slaveEndpoint.askSync[ReplicateDataResponse](
         ReplicateData(shuffleKey,
@@ -477,6 +480,9 @@ private[deploy] class Worker(
       }
     }
     logInfo("handle SlaveLost success")
+    if (context != null) {
+      context.reply(SlaveLostResponse(ReturnCode.Success, slaveLocation))
+    }
   }
 
   private def handleGetWorkerInfos(context: RpcCallContext): Unit = {

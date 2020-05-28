@@ -93,7 +93,7 @@ object ControlMessages {
   ) extends MasterMessage
 
   case class StageEndResponse(
-    errorCode: ReturnCode,
+    returnCode: ReturnCode,
     lostFiles: util.List[String]
   ) extends MasterMessage
 

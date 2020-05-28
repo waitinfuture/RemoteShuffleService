@@ -58,7 +58,6 @@ public class Chunk {
             if (flush) {
                 for (long addr = startAddress; addr < currentAddress; addr++) {
                     ostream.write(Platform.getByte(null, addr));
-                    ostream.flush();
                 }
             }
             currentAddress = startAddress;

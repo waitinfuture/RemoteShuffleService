@@ -6,29 +6,27 @@ import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FSDataOutputStream;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.hdfs.DistributedFileSystem;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
-import java.io.Serializable;
 
-public class DoubleChunk implements Serializable {
+public class DoubleChunk {
     private static final Logger logger = LoggerFactory.getLogger(DoubleChunk.class);
 
     // exposed for test
-    transient public Chunk[] chunks = new Chunk[2];
+    public Chunk[] chunks = new Chunk[2];
     // exposed for test
     public int working;
-    transient MemoryPool memoryPool;
+    MemoryPool memoryPool;
     // exposed for test
     public Path fileName;
     // exposed for test
     public ChunkState slaveState = ChunkState.Ready;
     // exposed for test
     public boolean flushed = false;
-
-    private Configuration hadoopConf = new Configuration();
-    private FileSystem fs = null;
+    FileSystem fs;
 
     public enum ChunkState {
         Ready, Flushing;
@@ -41,6 +39,7 @@ public class DoubleChunk implements Serializable {
         this.memoryPool = memoryPool;
         this.fileName = fileName;
         working = 0;
+        Configuration hadoopConf = new Configuration();
         fs = fileName.getFileSystem(hadoopConf);
     }
 
@@ -82,12 +81,12 @@ public class DoubleChunk implements Serializable {
      * @param flush whether to flush or just abandon
      * @return
      */
-    public synchronized  boolean append(ByteBuf data, boolean flush) {
+    public boolean append(ByteBuf data, boolean flush) {
         if (flushed) {
             logger.error("already flushed!");
             return false;
         }
-        synchronized (this) {
+        synchronized (chunks) {
             if (chunks[working].remaining() >= data.readableBytes()) {
                 chunks[working].append(data);
                 return true;
@@ -96,7 +95,7 @@ public class DoubleChunk implements Serializable {
             while (slaveState == ChunkState.Flushing) {
                 logger.info("slave chunk is flushing, wait for slave to finish...");
                 try {
-                    Thread.sleep(500);
+                    Thread.sleep(50);
                 } catch (Exception e) {
                     logger.error("sleep throws Exception", e);
                     return false;
@@ -104,29 +103,32 @@ public class DoubleChunk implements Serializable {
             }
             // now slave is empty, switch to slave and append data
             working = (working + 1) % 2;
+            int slaveIndex = (working + 1) % 2;
             chunks[working].append(data);
-            // create new thread to flush the full chunk
-            slaveState = ChunkState.Flushing;
-            Thread flushThread = new Thread() {
-                @Override
-                public void run() {
-                    try {
-                        if (!fs.exists(fileName)) {
-                            fs.createNewFile(fileName);
-                        }
+            if (flush) {
+                // create new thread to flush the full chunk
+                slaveState = ChunkState.Flushing;
+                Thread flushThread = new Thread() {
+                    @Override
+                    public void run() {
+                        try {
+                            if (!fs.exists(fileName)) {
+                                fs.createNewFile(fileName);
+                            }
 
-                        FSDataOutputStream ostream = fs.append(fileName);
-                        chunks[(working + 1) % 2].flushData(ostream, flush);
-                        ostream.close();
-                        // for test
-//                        Thread.sleep(2000);
-                        slaveState = ChunkState.Ready;
-                    } catch (Exception e) {
-                        logger.error("create OutputStream failed!", e);
+                            FSDataOutputStream ostream = fs.append(fileName);
+                            chunks[slaveIndex].flushData(ostream, flush);
+                            ostream.close();
+                            slaveState = ChunkState.Ready;
+                        } catch (Exception e) {
+                            logger.error("create OutputStream failed!", e);
+                        }
                     }
-                }
-            };
-            flushThread.start();
+                };
+                flushThread.start();
+            } else {
+                chunks[slaveIndex].clear();
+            }
             return true;
         }
     }
@@ -140,7 +142,7 @@ public class DoubleChunk implements Serializable {
             // wait for flush slave chunk to finish
             while (slaveState == ChunkState.Flushing) {
                 try {
-                    Thread.sleep(500);
+                    Thread.sleep(50);
                 } catch(Exception e) {
                     logger.error("sleep throws Exception", e);
                     return false;
@@ -153,8 +155,21 @@ public class DoubleChunk implements Serializable {
                     if (!fs.exists(fileName)) {
                         fs.createNewFile(fileName);
                     }
-                    FSDataOutputStream ostream =
-                        fs.append(fileName);
+                    FSDataOutputStream ostream = null;
+                    boolean getLease = false;
+                    while (!getLease) {
+                        try {
+                            ostream = fs.append(fileName);
+                            getLease = true;
+                        } catch (Exception e) {
+                            logger.warn("append failed, try again");
+                            try {
+                                Thread.sleep(100);
+                            } catch (Exception ex) {
+                                logger.warn("Sleep caught exception");
+                            }
+                        }
+                    }
                     chunks[working].flushData(ostream);
                     ostream.close();
                 }

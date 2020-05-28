@@ -58,6 +58,7 @@ public class MasterUtil {
             // now nextMasterInd/nextSlaveInd point to
             // available master/slave partition respectively
             String partitionId = UUID.randomUUID().toString();
+//            String partitionId = "aaa";
 
             // new slave and master locations
             slots.putIfAbsent(workers.get(nextMasterInd),

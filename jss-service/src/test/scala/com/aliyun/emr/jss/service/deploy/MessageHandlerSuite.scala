@@ -1,6 +1,5 @@
 package com.aliyun.emr.jss.service.deploy
 
-import java.io.File
 import java.util
 
 import scala.collection.JavaConversions._
@@ -14,7 +13,9 @@ import com.aliyun.emr.jss.protocol.message.ControlMessages._
 import com.aliyun.emr.jss.protocol.message.DataMessages.{GetDoubleChunkInfo, GetDoubleChunkInfoResponse, SendData, SendDataResponse}
 import com.aliyun.emr.jss.protocol.message.ReturnCode
 import com.aliyun.emr.jss.service.deploy.master.{Master, MasterArguments}
-import com.aliyun.emr.jss.service.deploy.worker.{DoubleChunk, PartitionLocationWithDoubleChunks, Worker, WorkerArguments, WorkerInfo}
+import com.aliyun.emr.jss.service.deploy.worker._
+import org.apache.hadoop.conf.Configuration
+import org.apache.hadoop.fs.Path
 import org.scalatest.FunSuite
 
 class MessageHandlerSuite
@@ -27,6 +28,7 @@ class MessageHandlerSuite
      */
     val conf = new EssConf()
     conf.set("ess.partition.memory", "128")
+    conf.set("ess.worker.base.dir", "hdfs://11.158.199.162:9000/tmp/ess-test/")
     val masterArgs = new MasterArguments(Array.empty[String], conf)
     rpcEnvMaster = RpcEnv.create(
       RpcNameConstants.MASTER_SYS,
@@ -96,24 +98,26 @@ class MessageHandlerSuite
      * start worker3 if needed
      * ===============================
      */
-    val workerArgs3 = new WorkerArguments(Array.empty[String], conf)
-    rpcEnvWorker3 = RpcEnv.create(RpcNameConstants.WORKER_SYS,
-      workerArgs3.host,
-      port3,
-      conf)
+    if (numWorkers >= 3) {
+      val workerArgs3 = new WorkerArguments(Array.empty[String], conf)
+      rpcEnvWorker3 = RpcEnv.create(RpcNameConstants.WORKER_SYS,
+        workerArgs3.host,
+        port3,
+        conf)
 
-    rpcEnvWorker3.setupEndpoint(RpcNameConstants.WORKER_EP,
-      new Worker(rpcEnvWorker3, workerArgs.memory,
-        masterAddresses, RpcNameConstants.WORKER_EP, conf))
+      rpcEnvWorker3.setupEndpoint(RpcNameConstants.WORKER_EP,
+        new Worker(rpcEnvWorker3, workerArgs.memory,
+          masterAddresses, RpcNameConstants.WORKER_EP, conf))
 
-    new Thread() {
-      override def run(): Unit = {
-        rpcEnvWorker3.awaitTermination()
-      }
-    }.start()
-    Thread.sleep(1000)
-    println("started worker3")
+      new Thread() {
+        override def run(): Unit = {
+          rpcEnvWorker3.awaitTermination()
+        }
+      }.start()
+      Thread.sleep(1000)
+      println("started worker3")
 
+    }
 
     val localhost = Utils.localHostName()
     val env = RpcEnv.create(
@@ -164,6 +168,113 @@ class MessageHandlerSuite
   var worker1: RpcEndpointRef = _
   var worker2: RpcEndpointRef = _
   var worker3: RpcEndpointRef = _
+
+  var worker1InfoMaster: WorkerInfo = null
+  var worker2InfoMaster: WorkerInfo = null
+  var worker3InfoMaster: WorkerInfo = null
+
+  var worker1InfoWorker: WorkerInfo = null
+  var worker2InfoWorker: WorkerInfo = null
+  var worker3InfoWorker: WorkerInfo = null
+
+  def getInfosInMaster(): Unit = {
+    val workerInfosMaster = master.askSync[GetWorkerInfosResponse](GetWorkerInfos).workerInfos
+      .asInstanceOf[util.List[WorkerInfo]]
+    worker1InfoMaster = null
+    worker2InfoMaster = null
+    worker3InfoMaster = null
+    if (workerInfosMaster != null) {
+      workerInfosMaster.foreach(worker => {
+        if (worker.port == port1) {
+          worker1InfoMaster = worker
+        } else if (worker.port == port2) {
+          worker2InfoMaster = worker
+        } else if (worker.port == port3) {
+          worker3InfoMaster = worker
+        }
+      })
+    }
+  }
+
+  def getInfosInWorker(): Unit = {
+    worker1InfoWorker = worker1.askSync[GetWorkerInfosResponse](GetWorkerInfos).workerInfos
+      .asInstanceOf[util.List[WorkerInfo]].get(0)
+    worker2InfoWorker = worker2.askSync[GetWorkerInfosResponse](GetWorkerInfos).workerInfos
+      .asInstanceOf[util.List[WorkerInfo]].get(0)
+    worker3InfoWorker = worker3.askSync[GetWorkerInfosResponse](GetWorkerInfos).workerInfos
+      .asInstanceOf[util.List[WorkerInfo]].get(0)
+  }
+
+  def assertInfos(): Unit = {
+    getInfosInMaster()
+    getInfosInWorker()
+
+    // assert worker1 info same on both worker and master
+    if (worker1InfoMaster != null) {
+      assert(worker1InfoMaster.hasSameInfoWith(worker1InfoWorker))
+    }
+    if (worker2InfoMaster != null) {
+      assert(worker2InfoMaster.hasSameInfoWith(worker2InfoWorker))
+    }
+    if (worker3InfoMaster != null) {
+      assert(worker3InfoMaster.hasSameInfoWith(worker3InfoWorker))
+    }
+  }
+
+  def assertChunkInfo(shuffleKey: String, masterLocations: util.List[PartitionLocation]): Unit = {
+    masterLocations.foreach(loc => {
+      val peer = loc.getPeer
+      val worker1 = getWorker(loc)
+      val worker2 = getWorker(peer)
+      val info1 = worker1.askSync[GetDoubleChunkInfoResponse](
+        GetDoubleChunkInfo(shuffleKey, PartitionLocation.Mode.Master, loc)
+      )
+      assert(info1.success)
+      val info2 = worker2.askSync[GetDoubleChunkInfoResponse](
+        GetDoubleChunkInfo(shuffleKey, PartitionLocation.Mode.Slave, peer)
+      )
+      assert(info2.success)
+      assert(info1.working == info2.working)
+      System.out.println(info1.slaveRemaining)
+      System.out.println(info2.slaveRemaining)
+      assert(info1.slaveRemaining == info2.slaveRemaining)
+      assert(info1.masterRemaining == info2.masterRemaining)
+      val masterData1 = info1.masterData
+      val slaveData1 = info1.slaveData
+      val masterData2 = info2.masterData
+      val slaveData2 = info2.slaveData
+      assert(masterData1.length == masterData2.length)
+      masterData1.zipWithIndex.foreach(entry => {
+        assert(entry._1 == masterData2(entry._2))
+      })
+      assert(slaveData1.length == slaveData2.length)
+      slaveData1.zipWithIndex.foreach(entry => {
+        assert(entry._1 == slaveData2(entry._2))
+      })
+    })
+  }
+
+  def getFileLengh(shuffleKey: String, name: String): Long = {
+    val appId = shuffleKey.split("-").dropRight(1).mkString("-")
+    val shuffleId = shuffleKey.split("-").last
+    val file = new Path(String.format("%s/%s",
+      s"hdfs://11.158.199.162:9000/tmp/ess-test/${appId}/${shuffleId}/",
+      name))
+    val hadoopConf = new Configuration()
+    val fs = file.getFileSystem(hadoopConf)
+    if (!fs.exists(file)) {
+      0
+    } else {
+      val status = fs.getFileStatus(file)
+      status.getLen()
+    }
+  }
+
+  def assertFileLength(shuffleKey: String, locations: util.List[PartitionLocation], size: Int): Unit = {
+    locations.foreach(loc => {
+      assert(getFileLengh(shuffleKey, loc.getUUID).toInt == size)
+    })
+  }
 
   /**
    * ===============================
@@ -243,8 +354,6 @@ class MessageHandlerSuite
     val partitionLocationWithDoubleChunks =
       worker.masterPartitionLocations.get("appId-1").valuesIterator.next()
         .asInstanceOf[PartitionLocationWithDoubleChunks]
-    assert(partitionLocationWithDoubleChunks.getDoubleChunk.slaveState ==
-      DoubleChunk.ChunkState.Ready)
 
     stop()
   }
@@ -252,6 +361,9 @@ class MessageHandlerSuite
   test("SendData") {
     init()
 
+    val appId = "appId"
+    val shuffleId = 1
+    val shuffleKey = Utils.makeShuffleKey(appId, shuffleId)
     val resReg = master.askSync[RegisterShuffleResponse](
       RegisterShuffle(
         "appId",
@@ -265,10 +377,8 @@ class MessageHandlerSuite
     val bytes = new Array[Byte](64)
     0 until bytes.length foreach (ind => bytes(ind) = 'a')
     val worker1Location = partitionLocations.filter(p => p.getPort == port1).toList(0)
-    val file1 = new File(worker1Location.getUUID)
-    assert(file1.length() == 0)
     val sendDataMsg1 = SendData(
-      "appId-1",
+      shuffleKey,
       worker1Location,
       PartitionLocation.Mode.Master,
       true,
@@ -279,23 +389,23 @@ class MessageHandlerSuite
     res = worker1.askSync[SendDataResponse](sendDataMsg1)
     assert(res.success)
     Thread.sleep(100)
-    assert(file1.length() == 0)
+    assert(getFileLengh(shuffleKey, worker1Location.getUUID) == 0)
+    res = worker1.askSync[SendDataResponse](sendDataMsg1)
+    assert(res.success)
+    Thread.sleep(500)
+    println(worker1Location.getUUID)
+    assert(getFileLengh(shuffleKey, worker1Location.getUUID) == 128)
     res = worker1.askSync[SendDataResponse](sendDataMsg1)
     assert(res.success)
     Thread.sleep(100)
-    assert(file1.length() == 128)
+    assert(getFileLengh(shuffleKey, worker1Location.getUUID) == 128)
     res = worker1.askSync[SendDataResponse](sendDataMsg1)
     assert(res.success)
     Thread.sleep(100)
-    assert(file1.length() == 128)
-    res = worker1.askSync[SendDataResponse](sendDataMsg1)
-    assert(res.success)
-    Thread.sleep(100)
-    assert(file1.length() == 256)
+    assert(getFileLengh(shuffleKey, worker1Location.getUUID) == 256)
 
     val worker2Location = partitionLocations.filter(p => p.getPort == port2).toList(0)
-    val file2 = new File(worker2Location.getUUID)
-    assert(file2.length() == 0)
+    assert(getFileLengh(shuffleKey, worker2Location.getUUID) == 0)
     val sendDataMsg2 = SendData(
       "appId-1",
       worker2Location,
@@ -305,28 +415,27 @@ class MessageHandlerSuite
     )
     res = worker2.askSync[SendDataResponse](sendDataMsg2)
     assert(res.success)
-    Thread.sleep(100)
-    assert(file2.length() == 0)
+    Thread.sleep(1000)
+    assert(getFileLengh(shuffleKey, worker2Location.getUUID) == 0)
     res = worker2.askSync[SendDataResponse](sendDataMsg2)
     assert(res.success)
-    Thread.sleep(100)
-    assert(file2.length() == 0)
+    Thread.sleep(1000)
+    assert(getFileLengh(shuffleKey, worker2Location.getUUID) == 0)
     res = worker2.askSync[SendDataResponse](sendDataMsg2)
     assert(res.success)
-    Thread.sleep(100)
-    assert(file2.length() == 128)
+    Thread.sleep(1000)
+    assert(getFileLengh(shuffleKey, worker2Location.getUUID) == 128)
     res = worker2.askSync[SendDataResponse](sendDataMsg2)
     assert(res.success)
-    Thread.sleep(100)
-    assert(file2.length() == 128)
+    Thread.sleep(1000)
+    assert(getFileLengh(shuffleKey, worker2Location.getUUID) == 128)
     res = worker2.askSync[SendDataResponse](sendDataMsg2)
     assert(res.success)
-    Thread.sleep(100)
-    assert(file2.length() == 256)
+    Thread.sleep(1000)
+    assert(getFileLengh(shuffleKey, worker2Location.getUUID) == 256)
 
     val worker2Location2 = partitionLocations.filter(p => p.getPort == port2).toList(1)
-    val file3 = new File(worker2Location2.getUUID)
-    assert(file3.length() == 0)
+    assert(getFileLengh(shuffleKey, worker2Location2.getUUID) == 0)
     val sendDataMsg3 = SendData(
       "appId-1",
       worker2Location2,
@@ -336,24 +445,24 @@ class MessageHandlerSuite
     )
     res = worker2.askSync[SendDataResponse](sendDataMsg3)
     assert(res.success)
-    Thread.sleep(100)
-    assert(file3.length() == 0)
+    Thread.sleep(1000)
+    assert(getFileLengh(shuffleKey, worker2Location2.getUUID) == 0)
     res = worker2.askSync[SendDataResponse](sendDataMsg3)
     assert(res.success)
-    Thread.sleep(100)
-    assert(file3.length() == 0)
+    Thread.sleep(1000)
+    assert(getFileLengh(shuffleKey, worker2Location2.getUUID) == 0)
     res = worker2.askSync[SendDataResponse](sendDataMsg3)
     assert(res.success)
-    Thread.sleep(100)
-    assert(file3.length() == 128)
+    Thread.sleep(1000)
+    assert(getFileLengh(shuffleKey, worker2Location2.getUUID) == 128)
     res = worker2.askSync[SendDataResponse](sendDataMsg3)
     assert(res.success)
-    Thread.sleep(100)
-    assert(file3.length() == 128)
+    Thread.sleep(1000)
+    assert(getFileLengh(shuffleKey, worker2Location2.getUUID) == 128)
     res = worker2.askSync[SendDataResponse](sendDataMsg3)
     assert(res.success)
-    Thread.sleep(100)
-    assert(file3.length() == 256)
+    Thread.sleep(1000)
+    assert(getFileLengh(shuffleKey, worker2Location2.getUUID) == 256)
 
     val res2 = worker2.askSync[GetWorkerInfosResponse](GetWorkerInfos)
     assert(res2.success)
@@ -363,13 +472,10 @@ class MessageHandlerSuite
     assert(worker.masterPartitionLocations.size() == 1)
     assert(worker.masterPartitionLocations.contains("appId-1"))
     assert(worker.masterPartitionLocations.get("appId-1").contains(worker2Location2))
-    val partitionLocationWithDoubleChunks = worker.masterPartitionLocations.get("appId-1")
-      .get(worker2Location2)
-    val doubleChunk = partitionLocationWithDoubleChunks
-      .asInstanceOf[PartitionLocationWithDoubleChunks].getDoubleChunk
+    val doubleChunk = worker2.askSync[GetDoubleChunkInfoResponse](
+      GetDoubleChunkInfo("appId-1", PartitionLocation.Mode.Master, worker2Location2)
+    )
     assert(doubleChunk.working == 0)
-    assert(doubleChunk.slaveState == DoubleChunk.ChunkState.Ready)
-    assert(doubleChunk.fileName.equals(worker2Location2.getUUID))
 
     stop()
   }
@@ -571,7 +677,7 @@ class MessageHandlerSuite
     })
 
     // trigger slave lost
-    var res2 = worker1.send(
+    var res2 = worker1.askSync[SlaveLostResponse](
       SlaveLost(shuffleKey, lostSlave.getPeer, lostSlave)
     )
     Thread.sleep(500)
@@ -594,25 +700,14 @@ class MessageHandlerSuite
     // since we have only 2 workers, newPeer should be equal to lostSlave
     assert(lostSlave.equals(newPeer))
     assert(slaveLocations.contains(newPeer))
+
+    assertChunkInfo(shuffleKey, List(masterLocation))
+    masterLocation.setPeer(newPeer)
+    assertChunkInfo(shuffleKey, List(masterLocation))
+
     val masterDoubleChunkInfo = worker1.askSync[GetDoubleChunkInfoResponse](
       GetDoubleChunkInfo(shuffleKey, PartitionLocation.Mode.Master, masterLocation)
     )
-    val slaveDoubleChunkInfo = worker2.askSync[GetDoubleChunkInfoResponse](
-      GetDoubleChunkInfo(shuffleKey, PartitionLocation.Mode.Slave, newPeer)
-    )
-    assert(masterDoubleChunkInfo.success)
-    assert(slaveDoubleChunkInfo.success)
-    assert(masterDoubleChunkInfo.working == slaveDoubleChunkInfo.working)
-    assert(masterDoubleChunkInfo.masterRemaining == slaveDoubleChunkInfo.masterRemaining)
-    assert(masterDoubleChunkInfo.slaveRemaining == slaveDoubleChunkInfo.slaveRemaining)
-    assert(masterDoubleChunkInfo.masterData.size == slaveDoubleChunkInfo.masterData.size)
-    assert(masterDoubleChunkInfo.slaveData.size == slaveDoubleChunkInfo.slaveData.size)
-    masterDoubleChunkInfo.masterData.zipWithIndex.foreach(entry => {
-      assert(entry._1 == slaveDoubleChunkInfo.masterData(entry._2))
-    })
-    masterDoubleChunkInfo.slaveData.zipWithIndex.foreach(entry => {
-      assert(entry._1 == slaveDoubleChunkInfo.slaveData(entry._2))
-    })
     assert(masterDoubleChunkInfo.working == 0)
     assert(masterDoubleChunkInfo.masterRemaining == 65)
     assert(masterDoubleChunkInfo.slaveRemaining == 128)
@@ -635,34 +730,19 @@ class MessageHandlerSuite
 
     val locations = resReg.partitionLocations
 
-    0 until 5 foreach (ind => {
-      val data = new Array[Byte](63)
-      Random.nextBytes(data)
-      val res = worker1.askSync[SendDataResponse](
-        SendData(
-          shuffleKey,
-          locations.get(ind),
-          PartitionLocation.Mode.Master,
-          true,
-          data
-        )
-      )
-      assert(res.success)
+    locations.foreach(loc => {
+      assert(loc.getPort != loc.getPeer.getPort)
     })
 
-    5 until 10 foreach (ind => {
-      val data = new Array[Byte](63)
-      Random.nextBytes(data)
-      val res = worker2.askSync[SendDataResponse](
-        SendData(
-          shuffleKey,
-          locations.get(ind),
-          PartitionLocation.Mode.Master,
-          true,
-          data
+    0 until 5 foreach (_ => {
+      locations.foreach(loc => {
+        val worker = getWorker(loc)
+        val data = new Array[Byte](63)
+        val res = worker.askSync[SendDataResponse](
+          SendData(shuffleKey, loc, PartitionLocation.Mode.Master, true, data)
         )
-      )
-      assert(res.success)
+        assert(res.success)
+      })
     })
 
     val res = master.askSync[WorkerLostResponse](
@@ -675,23 +755,19 @@ class MessageHandlerSuite
     var workerInfos = res1.workerInfos.asInstanceOf[util.List[WorkerInfo]]
     assert(workerInfos.size() == 1)
     var workerInfo = workerInfos.get(0)
-    assert(workerInfo.masterPartitionLocations.get(shuffleKey).size() == 0)
-    assert(workerInfo.slavePartitionLocations.get(shuffleKey).size() == 0)
-    workerInfo.masterPartitionLocations.get(shuffleKey).keySet().foreach(loc => {
-      assert(loc.getPeer == null)
-    })
+    assert(!workerInfo.masterPartitionLocations.contains(shuffleKey))
+    assert(!workerInfo.slavePartitionLocations.contains(shuffleKey))
     assert(workerInfo.memoryUsed == 0)
 
     res1 = worker2.askSync[GetWorkerInfosResponse](GetWorkerInfos)
     workerInfos = res1.workerInfos.asInstanceOf[util.List[WorkerInfo]]
     assert(workerInfos.size() == 1)
     workerInfo = workerInfos.get(0)
-    assert(workerInfo.masterPartitionLocations.get(shuffleKey).size() == 0)
+    assert(!workerInfo.masterPartitionLocations.contains(shuffleKey))
     assert(!workerInfo.slavePartitionLocations.contains(shuffleKey))
-    workerInfo.masterPartitionLocations.get(shuffleKey).keySet().foreach(loc => {
-      assert(loc.getPeer == null)
-    })
     assert(workerInfo.memoryUsed == 0)
+
+    Thread.sleep(1000)
 
     stop()
   }
@@ -708,55 +784,7 @@ class MessageHandlerSuite
     )
     assert(resReg.success)
 
-    /**
-     * check worker info
-     */
-    var worker1InfoMaster: WorkerInfo = null
-    var worker2InfoMaster: WorkerInfo = null
-    var worker3InfoMaster: WorkerInfo = null
-
-    var worker1InfoWorker: WorkerInfo = null
-    var worker2InfoWorker: WorkerInfo = null
-    var worker3InfoWorker: WorkerInfo = null
-
-    def getInfosInMaster(): Unit = {
-      val workerInfosMaster = master.askSync[GetWorkerInfosResponse](GetWorkerInfos).workerInfos
-        .asInstanceOf[util.List[WorkerInfo]]
-      worker1InfoMaster = null
-      worker2InfoMaster = null
-      worker3InfoMaster = null
-      if (workerInfosMaster != null) {
-        workerInfosMaster.foreach(worker => {
-          if (worker.port == port1) {
-            worker1InfoMaster = worker
-          } else if (worker.port == port2) {
-            worker2InfoMaster = worker
-          } else if (worker.port == port3) {
-            worker3InfoMaster = worker
-          }
-        })
-      }
-    }
-
-    def getInfosInWorker(): Unit = {
-      worker1InfoWorker = worker1.askSync[GetWorkerInfosResponse](GetWorkerInfos).workerInfos
-        .asInstanceOf[util.List[WorkerInfo]].get(0)
-      worker2InfoWorker = worker2.askSync[GetWorkerInfosResponse](GetWorkerInfos).workerInfos
-        .asInstanceOf[util.List[WorkerInfo]].get(0)
-      worker3InfoWorker = worker3.askSync[GetWorkerInfosResponse](GetWorkerInfos).workerInfos
-        .asInstanceOf[util.List[WorkerInfo]].get(0)
-    }
-
-    def assertInfos(): Unit = {
-      getInfosInMaster()
-      getInfosInWorker()
-
-      // assert worker1 info same on both worker and master
-      assert(worker1InfoMaster.hasSameInfoWith(worker1InfoWorker))
-      assert(worker2InfoMaster.hasSameInfoWith(worker2InfoWorker))
-      assert(worker3InfoMaster.hasSameInfoWith(worker3InfoWorker))
-    }
-
+    // check worker info
     assertInfos()
 
     assert(worker1InfoMaster.masterPartitionLocations.get(shuffleKey).size() == 4)
@@ -804,15 +832,403 @@ class MessageHandlerSuite
     Thread.sleep(1000)
     getInfosInMaster()
     getInfosInWorker()
-    if (worker1InfoMaster != null) {
-      assert(worker1InfoMaster.hasSameInfoWith(worker1InfoWorker))
+    val (workerInfoMaster, workerInfoWorker) = if (worker1InfoMaster != null) {
+      (worker1InfoMaster, worker1InfoWorker)
+    } else if (worker2InfoMaster != null) {
+      (worker2InfoMaster, worker2InfoWorker)
+    } else {
+      (worker3InfoMaster, worker3InfoWorker)
     }
-    if (worker2InfoMaster != null) {
-      assert(worker2InfoMaster.hasSameInfoWith(worker2InfoWorker))
-    }
-    if (worker3InfoMaster != null) {
-      assert(worker3InfoMaster.hasSameInfoWith(worker3InfoWorker))
-    }
+    assert(workerInfoMaster.hasSameInfoWith(workerInfoWorker))
+    assert(workerInfoMaster.masterPartitionLocations.size() == 0)
+    assert(workerInfoMaster.slavePartitionLocations.size() == 0)
+
+    stop(3)
+  }
+
+  test("StageEnd-NoWorkerLost") {
+    init(3)
+
+    val appId = "appId"
+    val shuffleId = 1
+    val shuffleKey = Utils.makeShuffleKey(appId, shuffleId)
+    // register shuffle
+    val resReg = master.askSync[RegisterShuffleResponse](
+      RegisterShuffle(appId, shuffleId, 12, 12)
+    )
+
+    // send data
+    0 until 100 foreach (_ => {
+      resReg.partitionLocations.foreach(loc => {
+        val worker = getWorker(loc)
+        val data = new Array[Byte](63)
+        Random.nextBytes(data)
+        worker.askSync[SendDataResponse](
+          SendData(shuffleKey, loc, PartitionLocation.Mode.Master, true, data)
+        )
+      })
+    })
+
+    Thread.sleep(10000)
+
+    assertInfos()
+    assertChunkInfo(shuffleKey,
+      worker1InfoMaster.masterPartitionLocations.get(shuffleKey).keySet().toList)
+    assertChunkInfo(shuffleKey,
+      worker2InfoMaster.masterPartitionLocations.get(shuffleKey).keySet().toList)
+    assertChunkInfo(shuffleKey,
+      worker3InfoMaster.masterPartitionLocations.get(shuffleKey).keySet().toList)
+
+    // stage-end for shuffle-1
+    val res = master.askSync[StageEndResponse](
+      StageEnd(appId, shuffleId)
+    )
+    assert(res.returnCode == ReturnCode.Success)
+    assertInfos()
+    assert(worker1InfoMaster.masterPartitionLocations.size() == 0)
+    assert(worker1InfoMaster.slavePartitionLocations.size() == 0)
+    assert(worker2InfoMaster.masterPartitionLocations.size() == 0)
+    assert(worker2InfoMaster.slavePartitionLocations.size() == 0)
+    assert(worker3InfoMaster.masterPartitionLocations.size() == 0)
+    assert(worker3InfoMaster.slavePartitionLocations.size() == 0)
+    assert(worker1InfoMaster.memoryUsed == 0)
+    assert(worker2InfoMaster.memoryUsed == 0)
+    assert(worker3InfoMaster.memoryUsed == 0)
+    assertFileLength(shuffleKey, resReg.partitionLocations, 63 * 100)
+
+    /**
+     * register shuffle-2
+     */
+    val shuffleId2 = 2
+    val shuffleKey2 = Utils.makeShuffleKey(appId, shuffleId2)
+    val resReg2 = master.askSync[RegisterShuffleResponse](
+      RegisterShuffle(appId, shuffleId2, 10, 15)
+    )
+
+    // send data
+    0 until 50 foreach (_ => {
+      resReg2.partitionLocations.foreach(loc => {
+        val worker = getWorker(loc)
+        val data = new Array[Byte](63)
+        Random.nextBytes(data)
+        val res = worker.askSync[SendDataResponse](
+          SendData(shuffleKey2, loc, PartitionLocation.Mode.Master, true, data)
+        )
+        assert(res.success)
+      })
+    })
+
+    Thread.sleep(5000)
+    assertInfos()
+    assertChunkInfo(shuffleKey2,
+      worker1InfoWorker.masterPartitionLocations.get(shuffleKey2).keySet().toList)
+    assertChunkInfo(shuffleKey2,
+      worker2InfoWorker.masterPartitionLocations.get(shuffleKey2).keySet().toList)
+    assertChunkInfo(shuffleKey2,
+      worker3InfoWorker.masterPartitionLocations.get(shuffleKey2).keySet().toList)
+
+    /**
+     * register shuffle-3
+     */
+    val shuffleId3 = 3
+    val shuffleKey3 = Utils.makeShuffleKey(appId, shuffleId3)
+    val resReg3 = master.askSync[RegisterShuffleResponse](
+      RegisterShuffle(appId, shuffleId3, 20, 22)
+    )
+
+    // send data
+    0 until 80 foreach (_ => {
+      resReg3.partitionLocations.foreach(loc => {
+        val worker = getWorker(loc)
+        val data = new Array[Byte](63)
+        Random.nextBytes(data)
+        val res = worker.askSync[SendDataResponse](
+          SendData(shuffleKey3, loc, PartitionLocation.Mode.Master, true, data)
+        )
+        assert(res.success)
+      })
+    })
+
+    Thread.sleep(5000)
+    assertInfos()
+    assertChunkInfo(shuffleKey3,
+      worker1InfoMaster.masterPartitionLocations.get(shuffleKey3).keySet().toList)
+    assertChunkInfo(shuffleKey3,
+      worker2InfoMaster.masterPartitionLocations.get(shuffleKey3).keySet().toList)
+    assertChunkInfo(shuffleKey3,
+      worker2InfoMaster.masterPartitionLocations.get(shuffleKey3).keySet().toList)
+
+    /**
+     * stage end for shuffle-3
+     */
+    val stageEndRes3 = master.askSync[StageEndResponse](
+      StageEnd(appId, shuffleId3)
+    )
+    assert(stageEndRes3.returnCode == ReturnCode.Success)
+
+    Thread.sleep(5000)
+    assertInfos()
+    assertChunkInfo(shuffleKey2,
+      worker1InfoMaster.masterPartitionLocations.get(shuffleKey2).keySet().toList)
+    assertChunkInfo(shuffleKey2,
+      worker2InfoMaster.masterPartitionLocations.get(shuffleKey2).keySet().toList)
+    assertChunkInfo(shuffleKey2,
+      worker2InfoMaster.masterPartitionLocations.get(shuffleKey2).keySet().toList)
+    assert(worker1InfoMaster.masterPartitionLocations.size() == 1)
+    assert(worker1InfoMaster.masterPartitionLocations.contains(shuffleKey2))
+    assert(worker1InfoMaster.masterPartitionLocations.get(shuffleKey2).size() == 5)
+    assert(worker1InfoMaster.slavePartitionLocations.get(shuffleKey2).size() == 5)
+    assertFileLength(shuffleKey3, resReg3.partitionLocations, 63 * 80)
+
+    /**
+     * stage end for shuffle-2
+     */
+    val stageEndRes2 = master.askSync[StageEndResponse](
+      StageEnd(appId, shuffleId2)
+    )
+    assert(stageEndRes2.returnCode == ReturnCode.Success)
+
+    Thread.sleep(5000)
+    assertInfos()
+    assert(worker1InfoMaster.masterPartitionLocations.size() == 0)
+    assert(worker2InfoMaster.masterPartitionLocations.size() == 0)
+    assert(worker3InfoMaster.masterPartitionLocations.size() == 0)
+    assert(worker3InfoMaster.slavePartitionLocations.size() == 0)
+    assertFileLength(shuffleKey2, resReg2.partitionLocations, 63 * 50)
+
+    stop(3)
+  }
+
+  test("StageEnd-WithWorkerLost") {
+    init(3)
+
+    val appId = "appId"
+    val shuffleId1 = 1
+    val shuffleKey1 = Utils.makeShuffleKey(appId, shuffleId1)
+    // register shuffle
+    val resReg = master.askSync[RegisterShuffleResponse](
+      RegisterShuffle(appId, shuffleId1, 10, 12)
+    )
+    assert(resReg.success)
+
+    // send data
+    0 until 100 foreach (_ => {
+      resReg.partitionLocations.foreach(loc => {
+        val worker = getWorker(loc)
+        val data = new Array[Byte](63)
+        Random.nextBytes(data)
+        val res = worker.askSync[SendDataResponse](
+          SendData(shuffleKey1, loc, PartitionLocation.Mode.Master, true, data)
+        )
+        assert(res.success)
+      })
+    })
+
+    Thread.sleep(4000)
+
+    assertInfos()
+    assertFileLength(shuffleKey1, resReg.partitionLocations, 63 * 98)
+
+    // trigger worker lost
+    val resWorkerLost = master.askSync[WorkerLostResponse](
+      WorkerLost(worker1.address.host, worker1.address.port)
+    )
+    assert(resWorkerLost.success)
+    Thread.sleep(100)
+
+    assertFileLength(
+      shuffleKey1,
+      worker1InfoMaster.masterPartitionLocations.get(shuffleKey1).keySet().toList,
+      63 * 100)
+    assertFileLength(
+      shuffleKey1,
+      worker2InfoMaster.masterPartitionLocations.get(shuffleKey1).keySet().toList,
+      63 * 98
+    )
+    assertFileLength(
+      shuffleKey1,
+      worker2InfoMaster.masterPartitionLocations.get(shuffleKey1).keySet().toList,
+      63 * 98
+    )
+
+    Thread.sleep(4000)
+    assertInfos()
+    assert(worker2InfoMaster.masterPartitionLocations.size() == 1)
+    assert(worker2InfoMaster.masterPartitionLocations.get(shuffleKey1).size() == 4)
+    assert(worker2InfoMaster.slavePartitionLocations.get(shuffleKey1).size() == 4)
+    assert(worker2InfoMaster.memoryUsed == 8 * 128)
+
+    assert(worker3InfoMaster.masterPartitionLocations.size() == 1)
+    assert(worker3InfoMaster.masterPartitionLocations.get(shuffleKey1).size() == 4)
+    assert(worker3InfoMaster.slavePartitionLocations.get(shuffleKey1).size() == 4)
+    assert(worker3InfoMaster.memoryUsed == 8 * 128)
+
+    // trigger stage end for shuffle-1
+    val resStageEnd = master.askSync[StageEndResponse](
+      StageEnd(appId, shuffleId1)
+    )
+    assert(resStageEnd.returnCode == ReturnCode.Success)
+    assertFileLength(shuffleKey1, resReg.partitionLocations, 63 * 100)
+    assertInfos()
+    assert(worker1InfoMaster == null)
+    assert(worker2InfoMaster.memoryUsed == 0)
+    assert(worker2InfoMaster.masterPartitionLocations.size() == 0)
+    assert(worker3InfoMaster.memoryUsed == 0)
+    assert(worker3InfoMaster.masterPartitionLocations.size() == 0)
+
+    stop(3)
+  }
+
+  test("StageEnd-WithWorkerLost-3Stages") {
+    init(3)
+
+    val appId = "appId"
+
+    // register shuffle-1
+    val shuffleId1 = 1
+    val shuffleKey1 = Utils.makeShuffleKey(appId, shuffleId1)
+    val resReg1 = master.askSync[RegisterShuffleResponse](
+      RegisterShuffle(appId, shuffleId1, 10, 12)
+    )
+    assert(resReg1.success)
+    // send data
+    0 until 70 foreach (_ => {
+      resReg1.partitionLocations.foreach(loc => {
+        val worker = getWorker(loc)
+        val data = new Array[Byte](63)
+        Random.nextBytes(data)
+        val res = worker.askSync[SendDataResponse](
+          SendData(shuffleKey1, loc, PartitionLocation.Mode.Master, true, data)
+        )
+        assert(res.success)
+      })
+    })
+
+    // register shuffle-2
+    val shuffleId2 = 2
+    val shuffleKey2 = Utils.makeShuffleKey(appId, shuffleId2)
+    val resReg2 = master.askSync[RegisterShuffleResponse](
+      RegisterShuffle(appId, shuffleId2, 12, 14)
+    )
+    assert(resReg2.success)
+    // send data
+    0 until 90 foreach (_ => {
+      resReg2.partitionLocations.foreach(loc => {
+        val worker = getWorker(loc)
+        val data = new Array[Byte](63)
+        Random.nextBytes(data)
+        val res = worker.askSync[SendDataResponse](
+          SendData(shuffleKey2, loc, PartitionLocation.Mode.Master, true, data)
+        )
+        assert(res.success)
+      })
+    })
+
+    // register shuffle-3
+    val shuffleId3 = 3
+    val shuffleKey3 = Utils.makeShuffleKey(appId, shuffleId3)
+    val resReg3 = master.askSync[RegisterShuffleResponse](
+      RegisterShuffle(appId, shuffleId3, 12, 29)
+    )
+    assert(resReg3.success)
+    // send data
+    0 until 173 foreach (_ => {
+      resReg3.partitionLocations.foreach(loc => {
+        val worker = getWorker(loc)
+        val data = new Array[Byte](63)
+        Random.nextBytes(data)
+        val res = worker.askSync[SendDataResponse](
+          SendData(shuffleKey3, loc, PartitionLocation.Mode.Master, true, data)
+        )
+        assert(res.success)
+      })
+    })
+
+    Thread.sleep(4000)
+    assertInfos()
+    assertChunkInfo(shuffleKey1, resReg1.partitionLocations)
+    assertChunkInfo(shuffleKey2, resReg2.partitionLocations)
+    assertChunkInfo(shuffleKey3, resReg3.partitionLocations)
+
+    assertFileLength(shuffleKey1, resReg1.partitionLocations, 63 * 68)
+    assertFileLength(shuffleKey2, resReg2.partitionLocations, 63 * 88)
+    assertFileLength(shuffleKey3, resReg3.partitionLocations, 63 * 172)
+
+    // trigger WorkerLost
+    val resWorkerLost = master.askSync[WorkerLostResponse](
+      WorkerLost(worker2.address.host, worker2.address.port)
+    )
+    assert(resWorkerLost.success)
+    assertFileLength(
+      shuffleKey1,
+      worker3InfoMaster.masterPartitionLocations.get(shuffleKey1).keySet().toList,
+      63 * 68
+    )
+    assertFileLength(
+      shuffleKey2,
+      worker3InfoMaster.masterPartitionLocations.get(shuffleKey2).keySet().toList,
+      63 * 88
+    )
+    assertFileLength(
+      shuffleKey3,
+      worker3InfoMaster.masterPartitionLocations.get(shuffleKey3).keySet().toList,
+      63 * 172
+    )
+
+    assertFileLength(
+      shuffleKey1,
+      worker3InfoMaster.slavePartitionLocations.get(shuffleKey1).keySet().toList,
+      63 * 70
+    )
+    assertFileLength(
+      shuffleKey2,
+      worker3InfoMaster.slavePartitionLocations.get(shuffleKey2).keySet().toList,
+      63 * 90
+    )
+    assertFileLength(
+      shuffleKey3,
+      worker3InfoMaster.slavePartitionLocations.get(shuffleKey3).keySet().toList,
+      63 * 173
+    )
+
+    Thread.sleep(4000)
+
+    assertInfos()
+    assertChunkInfo(shuffleKey1,
+      worker1InfoWorker.masterPartitionLocations.get(shuffleKey1).keySet().toList)
+    assertChunkInfo(shuffleKey2,
+      worker1InfoWorker.masterPartitionLocations.get(shuffleKey2).keySet().toList)
+    assertChunkInfo(shuffleKey3,
+      worker1InfoWorker.masterPartitionLocations.get(shuffleKey3).keySet().toList)
+
+    assertChunkInfo(shuffleKey1,
+      worker3InfoWorker.masterPartitionLocations.get(shuffleKey1).keySet().toList)
+    assertChunkInfo(shuffleKey2,
+      worker3InfoWorker.masterPartitionLocations.get(shuffleKey2).keySet().toList)
+    assertChunkInfo(shuffleKey3,
+      worker3InfoWorker.masterPartitionLocations.get(shuffleKey3).keySet().toList)
+
+    var stageEnd = master.askSync[StageEndResponse](
+      StageEnd(appId, shuffleId1)
+    )
+    assert(stageEnd.returnCode == ReturnCode.Success)
+    stageEnd = master.askSync[StageEndResponse](
+      StageEnd(appId, shuffleId2)
+    )
+    assert(stageEnd.returnCode == ReturnCode.Success)
+    stageEnd = master.askSync[StageEndResponse](
+      StageEnd(appId, shuffleId3)
+    )
+    assert(stageEnd.returnCode == ReturnCode.Success)
+
+    assertFileLength(shuffleKey1, resReg1.partitionLocations, 63 * 70)
+    assertFileLength(shuffleKey2, resReg2.partitionLocations, 63 * 90)
+    assertFileLength(shuffleKey3, resReg3.partitionLocations, 63 * 173)
+
+    assertInfos()
+    assert(worker1InfoMaster.memoryUsed == 0)
+    assert(worker2InfoMaster == null)
+    assert(worker3InfoMaster.memoryUsed == 0)
 
     stop(3)
   }

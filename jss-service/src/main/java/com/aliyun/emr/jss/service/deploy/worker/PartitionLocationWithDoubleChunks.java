@@ -3,7 +3,7 @@ package com.aliyun.emr.jss.service.deploy.worker;
 import com.aliyun.emr.jss.protocol.PartitionLocation;
 
 public class PartitionLocationWithDoubleChunks extends PartitionLocation {
-    private DoubleChunk doubleChunk;
+    transient private DoubleChunk doubleChunk;
 
     public PartitionLocationWithDoubleChunks(
         PartitionLocation partitionLocation,

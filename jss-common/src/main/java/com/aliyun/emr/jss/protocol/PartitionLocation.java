@@ -41,6 +41,10 @@ public class PartitionLocation implements Serializable
         return UUID;
     }
 
+    public void setUUID(String uuid) {
+        UUID = uuid;
+    }
+
     public String getHost() {
         return host;
     }

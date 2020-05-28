@@ -527,7 +527,7 @@ private[deploy] class Master(
     applicationId: String, shuffleId: Int): Unit = {
     val shuffleKey = Utils.makeShuffleKey(applicationId, shuffleId)
     // check whether shuffle has registered
-    if (registeredShuffle.contains(shuffleKey)) {
+    if (!registeredShuffle.contains(shuffleKey)) {
       logInfo(s"shuffle ${shuffleKey} not reigstered!")
       context.reply(StageEndResponse(ReturnCode.ShuffleNotRegistered, null))
       return
@@ -623,11 +623,15 @@ private[deploy] class Master(
     // check if committed files contains all files mappers written
     val lostFiles = new util.ArrayList[String]()
     val committedPartitions = shuffleCommittedPartitions.get(shuffleKey)
-    shufflePartitionsWritten.get(shuffleKey).foreach(id => {
-      if (!committedPartitions.contains(id)) {
-        lostFiles.add(id)
-      }
-    })
+    if (shufflePartitionsWritten.contains(shuffleKey)) {
+      shufflePartitionsWritten.get(shuffleKey).foreach(id => {
+        if (!committedPartitions.contains(id)) {
+          lostFiles.add(id)
+        }
+      })
+    } else {
+      logWarning(s"No written partitions found for shuffle ${shuffleKey}!")
+    }
 
     // clear shufflePartitionsWritten for current shuffle
     shufflePartitionsWritten.synchronized {
