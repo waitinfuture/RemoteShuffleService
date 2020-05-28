@@ -2,12 +2,14 @@ package com.aliyun.emr.jss.service.deploy.worker;
 
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
+import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.FSDataOutputStream;
+import org.apache.hadoop.fs.FileSystem;
+import org.apache.hadoop.fs.Path;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.io.FileOutputStream;
 import java.io.IOException;
-import java.io.OutputStream;
 import java.io.Serializable;
 
 public class DoubleChunk implements Serializable {
@@ -19,22 +21,27 @@ public class DoubleChunk implements Serializable {
     public int working;
     transient MemoryPool memoryPool;
     // exposed for test
-    public String fileName;
+    public Path fileName;
     // exposed for test
     public ChunkState slaveState = ChunkState.Ready;
     // exposed for test
     public boolean flushed = false;
 
+    private Configuration hadoopConf = new Configuration();
+    private FileSystem fs = null;
+
     public enum ChunkState {
         Ready, Flushing;
     }
 
-    public DoubleChunk(Chunk ch1, Chunk ch2, MemoryPool memoryPool, String fileName) {
+    public DoubleChunk(Chunk ch1, Chunk ch2, MemoryPool memoryPool, Path fileName) throws IOException
+    {
         chunks[0] = ch1;
         chunks[1] = ch2;
         this.memoryPool = memoryPool;
         this.fileName = fileName;
         working = 0;
+        fs = fileName.getFileSystem(hadoopConf);
     }
 
     public void initWithData(int working, byte[] masterData, byte[] slaveData) {
@@ -101,10 +108,14 @@ public class DoubleChunk implements Serializable {
             // create new thread to flush the full chunk
             slaveState = ChunkState.Flushing;
             Thread flushThread = new Thread() {
+                @Override
                 public void run() {
                     try {
-                        // TODO: construct output stream
-                        OutputStream ostream = new FileOutputStream(fileName, true);
+                        if (!fs.exists(fileName)) {
+                            fs.createNewFile(fileName);
+                        }
+
+                        FSDataOutputStream ostream = fs.append(fileName);
                         chunks[(working + 1) % 2].flushData(ostream, flush);
                         ostream.close();
                         // for test
@@ -139,7 +150,11 @@ public class DoubleChunk implements Serializable {
             try {
                 // flush master chunk
                 if (chunks[working].hasData()) {
-                    OutputStream ostream = new FileOutputStream(fileName, true);
+                    if (!fs.exists(fileName)) {
+                        fs.createNewFile(fileName);
+                    }
+                    FSDataOutputStream ostream =
+                        fs.append(fileName);
                     chunks[working].flushData(ostream);
                     ostream.close();
                 }

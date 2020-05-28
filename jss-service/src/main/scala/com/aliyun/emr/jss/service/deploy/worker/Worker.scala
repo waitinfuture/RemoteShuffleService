@@ -22,7 +22,6 @@ import java.util.concurrent.TimeUnit
 
 import scala.collection.JavaConversions._
 import scala.util.control.Breaks._
-
 import com.aliyun.emr.jss.common.EssConf
 import com.aliyun.emr.jss.common.internal.Logging
 import com.aliyun.emr.jss.common.rpc._
@@ -31,6 +30,7 @@ import com.aliyun.emr.jss.protocol.{PartitionLocation, RpcNameConstants}
 import com.aliyun.emr.jss.protocol.message.ControlMessages._
 import com.aliyun.emr.jss.protocol.message.DataMessages.{GetDoubleChunkInfo, GetDoubleChunkInfoResponse, ReplicateData, ReplicateDataResponse, SendData, SendDataResponse}
 import com.aliyun.emr.jss.protocol.message.ReturnCode
+import com.aliyun.emr.jss.service.deploy.common.EssPathUtil
 import io.netty.buffer.ByteBuf
 
 private[deploy] class Worker(
@@ -151,7 +151,14 @@ private[deploy] class Worker(
             masterDoubleChunks.add(
               new PartitionLocationWithDoubleChunks(
                 masterLocations.get(ind),
-                new DoubleChunk(ch1, ch2, memoryPool, masterLocations.get(ind).getUUID)))
+                new DoubleChunk(ch1, ch2, memoryPool,
+                  EssPathUtil.GetPartitionPath(conf,
+                    shuffleKey.split("-").dropRight(1).mkString("-"),
+                    shuffleKey.split("-").last.toInt,
+                    slaveLocations.get(ind).getUUID)
+                )
+              )
+            )
           }
         }
       }
@@ -177,7 +184,12 @@ private[deploy] class Worker(
             slaveDoubleChunks.add(
               new PartitionLocationWithDoubleChunks(
                 slaveLocations.get(ind),
-                new DoubleChunk(ch1, ch2, memoryPool, slaveLocations.get(ind).getUUID)
+                new DoubleChunk(ch1, ch2, memoryPool,
+                  EssPathUtil.GetPartitionPath(conf,
+                    shuffleKey.split("-").dropRight(1).mkString("-"),
+                    shuffleKey.split("-").last.toInt,
+                    slaveLocations.get(ind).getUUID)
+                )
               )
             )
           }
