@@ -17,8 +17,9 @@ import com.aliyun.emr.jss.service.deploy.master.{Master, MasterArguments}
 import com.aliyun.emr.jss.service.deploy.worker.{DoubleChunk, PartitionLocationWithDoubleChunks, Worker, WorkerArguments, WorkerInfo}
 import org.scalatest.FunSuite
 
-class MessageHandlerSuite extends FunSuite {
-  def init() {
+class MessageHandlerSuite
+  extends FunSuite {
+  def init(numWorkers: Int = 2) {
     /**
      * ===============================
      * start master
@@ -51,7 +52,7 @@ class MessageHandlerSuite extends FunSuite {
     val workerArgs = new WorkerArguments(Array.empty[String], conf)
     rpcEnvWorker1 = RpcEnv.create(RpcNameConstants.WORKER_SYS,
       workerArgs.host,
-      9097,
+      port1,
       conf)
 
     val masterAddresses: RpcAddress = RpcAddress.fromJindoURL(workerArgs.master)
@@ -75,7 +76,7 @@ class MessageHandlerSuite extends FunSuite {
     val workerArgs2 = new WorkerArguments(Array.empty[String], conf)
     rpcEnvWorker2 = RpcEnv.create(RpcNameConstants.WORKER_SYS,
       workerArgs2.host,
-      9098,
+      port2,
       conf)
 
     rpcEnvWorker2.setupEndpoint(RpcNameConstants.WORKER_EP,
@@ -90,6 +91,30 @@ class MessageHandlerSuite extends FunSuite {
     Thread.sleep(1000)
     println("started worker2")
 
+    /**
+     * ===============================
+     * start worker3 if needed
+     * ===============================
+     */
+    val workerArgs3 = new WorkerArguments(Array.empty[String], conf)
+    rpcEnvWorker3 = RpcEnv.create(RpcNameConstants.WORKER_SYS,
+      workerArgs3.host,
+      port3,
+      conf)
+
+    rpcEnvWorker3.setupEndpoint(RpcNameConstants.WORKER_EP,
+      new Worker(rpcEnvWorker3, workerArgs.memory,
+        masterAddresses, RpcNameConstants.WORKER_EP, conf))
+
+    new Thread() {
+      override def run(): Unit = {
+        rpcEnvWorker3.awaitTermination()
+      }
+    }.start()
+    Thread.sleep(1000)
+    println("started worker3")
+
+
     val localhost = Utils.localHostName()
     val env = RpcEnv.create(
       "MessageHandlerSuite",
@@ -97,27 +122,52 @@ class MessageHandlerSuite extends FunSuite {
       0,
       conf
     )
-    master = env.setupEndpointRef(new RpcAddress(localhost, 9099), RpcNameConstants.MASTER_EP)
-    worker1 = env.setupEndpointRef(new RpcAddress(localhost, 9097), RpcNameConstants.WORKER_EP)
-    worker2 = env.setupEndpointRef(new RpcAddress(localhost, 9098), RpcNameConstants.WORKER_EP)
+    master = env.setupEndpointRef(new RpcAddress(localhost, masterPort), RpcNameConstants.MASTER_EP)
+    worker1 = env.setupEndpointRef(new RpcAddress(localhost, port1), RpcNameConstants.WORKER_EP)
+    worker2 = env.setupEndpointRef(new RpcAddress(localhost, port2), RpcNameConstants.WORKER_EP)
+    if (numWorkers == 3) {
+      worker3 = env.setupEndpointRef(new RpcAddress(localhost, port3), RpcNameConstants.WORKER_EP)
+    }
   }
 
-  def stop(): Unit = {
+  def stop(numWorkers: Int = 2): Unit = {
     rpcEnvWorker1.shutdown()
     rpcEnvWorker2.shutdown()
+    if (numWorkers == 3) {
+      rpcEnvWorker3.shutdown()
+    }
     rpcEnvMaster.shutdown()
   }
+
+  def getWorker(loc: PartitionLocation): RpcEndpointRef = {
+    if (loc.getPort == port1) {
+      worker1
+    } else if (loc.getPort == port2) {
+      worker2
+    } else if (loc.getPort == port3) {
+      worker3
+    } else {
+      null
+    }
+  }
+
+  val masterPort = 9099
+  val port1 = 9090
+  val port2 = 9091
+  val port3 = 9092
 
   var rpcEnvMaster: RpcEnv = _
   var rpcEnvWorker1: RpcEnv = _
   var rpcEnvWorker2: RpcEnv = _
+  var rpcEnvWorker3: RpcEnv = _
   var master: RpcEndpointRef = _
   var worker1: RpcEndpointRef = _
   var worker2: RpcEndpointRef = _
+  var worker3: RpcEndpointRef = _
 
   /**
    * ===============================
-   *         start testing
+   * start testing
    * ===============================
    */
 
@@ -214,7 +264,7 @@ class MessageHandlerSuite extends FunSuite {
 
     val bytes = new Array[Byte](64)
     0 until bytes.length foreach (ind => bytes(ind) = 'a')
-    val worker1Location = partitionLocations.filter(p => p.getPort == 9097).toList(0)
+    val worker1Location = partitionLocations.filter(p => p.getPort == port1).toList(0)
     val file1 = new File(worker1Location.getUUID)
     assert(file1.length() == 0)
     val sendDataMsg1 = SendData(
@@ -243,7 +293,7 @@ class MessageHandlerSuite extends FunSuite {
     Thread.sleep(100)
     assert(file1.length() == 256)
 
-    val worker2Location = partitionLocations.filter(p => p.getPort == 9098).toList(0)
+    val worker2Location = partitionLocations.filter(p => p.getPort == port2).toList(0)
     val file2 = new File(worker2Location.getUUID)
     assert(file2.length() == 0)
     val sendDataMsg2 = SendData(
@@ -274,7 +324,7 @@ class MessageHandlerSuite extends FunSuite {
     Thread.sleep(100)
     assert(file2.length() == 256)
 
-    val worker2Location2 = partitionLocations.filter(p => p.getPort == 9098).toList(1)
+    val worker2Location2 = partitionLocations.filter(p => p.getPort == port2).toList(1)
     val file3 = new File(worker2Location2.getUUID)
     assert(file3.length() == 0)
     val sendDataMsg3 = SendData(
@@ -568,5 +618,202 @@ class MessageHandlerSuite extends FunSuite {
     assert(masterDoubleChunkInfo.slaveRemaining == 128)
 
     stop()
+  }
+
+  test("WorkerLost-2Workers") {
+    init()
+
+    val shuffleKey = Utils.makeShuffleKey("appId", 0)
+    val resReg = master.askSync[RegisterShuffleResponse](
+      RegisterShuffle(
+        "appId",
+        0,
+        10,
+        10
+      )
+    )
+
+    val locations = resReg.partitionLocations
+
+    0 until 5 foreach (ind => {
+      val data = new Array[Byte](63)
+      Random.nextBytes(data)
+      val res = worker1.askSync[SendDataResponse](
+        SendData(
+          shuffleKey,
+          locations.get(ind),
+          PartitionLocation.Mode.Master,
+          true,
+          data
+        )
+      )
+      assert(res.success)
+    })
+
+    5 until 10 foreach (ind => {
+      val data = new Array[Byte](63)
+      Random.nextBytes(data)
+      val res = worker2.askSync[SendDataResponse](
+        SendData(
+          shuffleKey,
+          locations.get(ind),
+          PartitionLocation.Mode.Master,
+          true,
+          data
+        )
+      )
+      assert(res.success)
+    })
+
+    val res = master.askSync[WorkerLostResponse](
+      WorkerLost(locations.head.getHost, port1)
+    )
+    assert(res.success)
+    Thread.sleep(1000)
+
+    var res1 = master.askSync[GetWorkerInfosResponse](GetWorkerInfos)
+    var workerInfos = res1.workerInfos.asInstanceOf[util.List[WorkerInfo]]
+    assert(workerInfos.size() == 1)
+    var workerInfo = workerInfos.get(0)
+    assert(workerInfo.masterPartitionLocations.get(shuffleKey).size() == 0)
+    assert(workerInfo.slavePartitionLocations.get(shuffleKey).size() == 0)
+    workerInfo.masterPartitionLocations.get(shuffleKey).keySet().foreach(loc => {
+      assert(loc.getPeer == null)
+    })
+    assert(workerInfo.memoryUsed == 0)
+
+    res1 = worker2.askSync[GetWorkerInfosResponse](GetWorkerInfos)
+    workerInfos = res1.workerInfos.asInstanceOf[util.List[WorkerInfo]]
+    assert(workerInfos.size() == 1)
+    workerInfo = workerInfos.get(0)
+    assert(workerInfo.masterPartitionLocations.get(shuffleKey).size() == 0)
+    assert(!workerInfo.slavePartitionLocations.contains(shuffleKey))
+    workerInfo.masterPartitionLocations.get(shuffleKey).keySet().foreach(loc => {
+      assert(loc.getPeer == null)
+    })
+    assert(workerInfo.memoryUsed == 0)
+
+    stop()
+  }
+
+  test("WorkerLost-3Workers") {
+    init(3)
+
+    // register shuffle
+    val appId = "appId"
+    val shuffleId = 1
+    val shuffleKey = Utils.makeShuffleKey(appId, shuffleId)
+    val resReg = master.askSync[RegisterShuffleResponse](
+      RegisterShuffle(appId, shuffleId, 10, 12)
+    )
+    assert(resReg.success)
+
+    /**
+     * check worker info
+     */
+    var worker1InfoMaster: WorkerInfo = null
+    var worker2InfoMaster: WorkerInfo = null
+    var worker3InfoMaster: WorkerInfo = null
+
+    var worker1InfoWorker: WorkerInfo = null
+    var worker2InfoWorker: WorkerInfo = null
+    var worker3InfoWorker: WorkerInfo = null
+
+    def getInfosInMaster(): Unit = {
+      val workerInfosMaster = master.askSync[GetWorkerInfosResponse](GetWorkerInfos).workerInfos
+        .asInstanceOf[util.List[WorkerInfo]]
+      worker1InfoMaster = null
+      worker2InfoMaster = null
+      worker3InfoMaster = null
+      if (workerInfosMaster != null) {
+        workerInfosMaster.foreach(worker => {
+          if (worker.port == port1) {
+            worker1InfoMaster = worker
+          } else if (worker.port == port2) {
+            worker2InfoMaster = worker
+          } else if (worker.port == port3) {
+            worker3InfoMaster = worker
+          }
+        })
+      }
+    }
+
+    def getInfosInWorker(): Unit = {
+      worker1InfoWorker = worker1.askSync[GetWorkerInfosResponse](GetWorkerInfos).workerInfos
+        .asInstanceOf[util.List[WorkerInfo]].get(0)
+      worker2InfoWorker = worker2.askSync[GetWorkerInfosResponse](GetWorkerInfos).workerInfos
+        .asInstanceOf[util.List[WorkerInfo]].get(0)
+      worker3InfoWorker = worker3.askSync[GetWorkerInfosResponse](GetWorkerInfos).workerInfos
+        .asInstanceOf[util.List[WorkerInfo]].get(0)
+    }
+
+    def assertInfos(): Unit = {
+      getInfosInMaster()
+      getInfosInWorker()
+
+      // assert worker1 info same on both worker and master
+      assert(worker1InfoMaster.hasSameInfoWith(worker1InfoWorker))
+      assert(worker2InfoMaster.hasSameInfoWith(worker2InfoWorker))
+      assert(worker3InfoMaster.hasSameInfoWith(worker3InfoWorker))
+    }
+
+    assertInfos()
+
+    assert(worker1InfoMaster.masterPartitionLocations.get(shuffleKey).size() == 4)
+    assert(worker2InfoMaster.masterPartitionLocations.get(shuffleKey).size() == 4)
+    assert(worker3InfoMaster.masterPartitionLocations.get(shuffleKey).size() == 4)
+    assert(worker1InfoMaster.slavePartitionLocations.get(shuffleKey).size() == 4)
+    assert(worker2InfoMaster.slavePartitionLocations.get(shuffleKey).size() == 4)
+    assert(worker3InfoMaster.slavePartitionLocations.get(shuffleKey).size() == 4)
+
+    // send data
+    0 until 5 foreach (_ => {
+      resReg.partitionLocations.foreach(loc => {
+        val data = new Array[Byte](63)
+        Random.nextBytes(data)
+        val res = getWorker(loc).askSync[SendDataResponse](
+          SendData(shuffleKey, loc, PartitionLocation.Mode.Master, true, data)
+        )
+        assert(res.success)
+      })
+    })
+
+    assertInfos()
+
+    // trigger worker lost
+    master.askSync[WorkerLostResponse](
+      WorkerLost(worker1.address.host, worker1.address.port)
+    )
+    Thread.sleep(500)
+    getInfosInMaster()
+    getInfosInWorker()
+    if (worker1InfoMaster != null) {
+      assert(worker1InfoMaster.hasSameInfoWith(worker1InfoWorker))
+    }
+    if (worker2InfoMaster != null) {
+      assert(worker2InfoMaster.hasSameInfoWith(worker2InfoWorker))
+    }
+    if (worker3InfoMaster != null) {
+      assert(worker3InfoMaster.hasSameInfoWith(worker3InfoWorker))
+    }
+
+    // trigger another worker lost
+    master.askSync[WorkerLostResponse](
+      WorkerLost(worker2.address.host, worker2.address.port)
+    )
+    Thread.sleep(1000)
+    getInfosInMaster()
+    getInfosInWorker()
+    if (worker1InfoMaster != null) {
+      assert(worker1InfoMaster.hasSameInfoWith(worker1InfoWorker))
+    }
+    if (worker2InfoMaster != null) {
+      assert(worker2InfoMaster.hasSameInfoWith(worker2InfoWorker))
+    }
+    if (worker3InfoMaster != null) {
+      assert(worker3InfoMaster.hasSameInfoWith(worker3InfoWorker))
+    }
+
+    stop(3)
   }
 }

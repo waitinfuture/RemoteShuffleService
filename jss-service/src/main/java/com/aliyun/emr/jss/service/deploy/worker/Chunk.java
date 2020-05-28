@@ -77,6 +77,10 @@ public class Chunk {
         return data;
     }
 
+    public boolean hasData() {
+        return (currentAddress > startAddress);
+    }
+
     public int getId() {
         return id;
     }

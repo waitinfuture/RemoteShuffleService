@@ -114,8 +114,10 @@ private[deploy] class Worker(
         s"${shuffleKey}, ${masterLocations}, ${slaveLocations}")
       handleReserveBuffers(context, shuffleKey, masterLocations, slaveLocations)
     case CommitFiles(shuffleKey, commitLocations, mode) =>
+      logInfo(s"receive CommitFiles request, ${shuffleKey}, ${mode}")
       handleCommitFiles(context, shuffleKey, commitLocations, mode)
     case Destroy(shuffleKey, masterLocations, slaveLocations) =>
+      logInfo(s"receive Destroy request, ${shuffleKey} ${masterLocations} ${slaveLocations}")
       handleDestroy(context, shuffleKey, masterLocations, slaveLocations)
     case SendData(shuffleKey, partitionLocation, mode, flush, data) =>
       logInfo(s"Worker ${host}:${port} receive SendData request, ${mode}, ${shuffleKey}")
@@ -243,6 +245,7 @@ private[deploy] class Worker(
     if (failedLocations.isEmpty) {
       context.reply(CommitFilesResponse(ReturnCode.Success, null))
     } else {
+      logInfo("CommitFiles success!")
       context.reply(CommitFilesResponse(ReturnCode.PartialSuccess, failedLocations))
     }
   }
@@ -299,14 +302,10 @@ private[deploy] class Worker(
       }
       // remove slave locations from worker info
       workerInfo.removeSlavePartition(shuffleKey, slaveLocations)
-      if (workerInfo.slavePartitionLocations.get(shuffleKey).isEmpty) {
-        workerInfo.synchronized {
-          workerInfo.slavePartitionLocations.remove(shuffleKey)
-        }
-      }
     }
     // reply
     if (failedMasters.isEmpty && failedSlaves.isEmpty) {
+      logInfo("finished handle destroy")
       context.reply(DestroyResponse(ReturnCode.Success, null, null))
     } else {
       context.reply(DestroyResponse(ReturnCode.PartialSuccess, failedMasters, failedSlaves))
@@ -404,6 +403,8 @@ private[deploy] class Worker(
 
   private def handleSlaveLost(shuffleKey: String,
     masterLocation: PartitionLocation, slaveLocation: PartitionLocation): Unit = {
+    // send peer to null
+    workerInfo.masterPartitionLocations.get(shuffleKey).get(masterLocation).setPeer(null)
     // send SlaveLost to Master to get new Slave
     val res = masterEndpoint.askSync[SlaveLostResponse](
       SlaveLost(shuffleKey, masterLocation, slaveLocation)
@@ -420,8 +421,24 @@ private[deploy] class Worker(
       }
       return
     }
+    // if Master offer slave failed, flush and destroy self
     if (res.returnCode != ReturnCode.Success) {
-      logError(s"Master process SlaveLost failed! ${res.returnCode}")
+      logError(s"Master process SlaveLost failed! ${res.returnCode}," +
+        " flush and destroy master location")
+      // remove master location
+      val loc = workerInfo.masterPartitionLocations.get(shuffleKey).get(masterLocation)
+          .asInstanceOf[PartitionLocationWithDoubleChunks]
+      workerInfo.synchronized {
+        workerInfo.removeMasterPartition(shuffleKey, masterLocation)
+      }
+      // flush data
+      loc.getDoubleChunk.flush()
+      // return chunks
+      loc.getDoubleChunk.returnChunks()
+      // tell master that the partition suicide
+      masterEndpoint.askSync[MasterPartitionSuicideResponse](
+        MasterPartitionSuicide(shuffleKey, masterLocation)
+      )
       return
     }
     // update master location's peer

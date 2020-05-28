@@ -138,9 +138,11 @@ public class DoubleChunk implements Serializable {
             // TODO construct OutputStream
             try {
                 // flush master chunk
-                OutputStream ostream = new FileOutputStream(fileName, true);
-                chunks[working].flushData(ostream);
-                ostream.close();
+                if (chunks[working].hasData()) {
+                    OutputStream ostream = new FileOutputStream(fileName, true);
+                    chunks[working].flushData(ostream);
+                    ostream.close();
+                }
             } catch (IOException e) {
                 logger.error("construct outputstream failed!", e);
                 return false;

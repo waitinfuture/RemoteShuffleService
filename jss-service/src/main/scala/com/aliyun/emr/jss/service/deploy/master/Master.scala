@@ -90,7 +90,7 @@ private[deploy] class Master(
       handleHeartBeat(host, port)
     case WorkerLost(host, port) =>
       logInfo(s"received WorkerLost, ${host}:port")
-      handleWorkerLost(host, port)
+      handleWorkerLost(null, host, port)
   }
 
   def reserveBuffers(shuffleKey: String, slots: WorkerResource): util.List[WorkerInfo] = {
@@ -100,7 +100,7 @@ private[deploy] class Master(
       val res = entry._1.endpoint.askSync[ReserveBuffersResponse](
         ReserveBuffers(shuffleKey, entry._2._1, entry._2._2))
       if (res.success) {
-        logInfo(s"Successfully allocated partition buffer from worker ${entry._1.hostPort}")
+        logInfo(s"Successfully allocated partitions buffer from worker ${entry._1.hostPort}")
       } else {
         logInfo(s"Failed to reserve buffers from worker ${entry._1.hostPort}")
         failed.add(entry._1)
@@ -169,6 +169,12 @@ private[deploy] class Master(
     case StageEnd(applicationId, shuffleId) =>
       logInfo(s"receive StageEnd request, ${applicationId}, ${shuffleId}")
       handleStageEnd(context, applicationId, shuffleId)
+    case WorkerLost(host, port) =>
+      logInfo((s"receive WorkerLost request, ${host}:${port}"))
+      handleWorkerLost(context, host, port)
+    case MasterPartitionSuicide(shuffleKey, location) =>
+      logInfo(s"receive MasterPartitionSuicide, ${location}")
+      handleMasterPartitionSuicide(context, shuffleKey, location)
   }
 
   private def timeOutDeadWorkers() {
@@ -199,7 +205,7 @@ private[deploy] class Master(
     }
   }
 
-  private def handleWorkerLost(host: String, port: Int): Unit = {
+  private def handleWorkerLost(context: RpcCallContext, host: String, port: Int): Unit = {
     // find worker
     val worker: WorkerInfo = workers.find(w => w.host == host && w.port == port).orNull
     if (worker == null) {
@@ -235,6 +241,7 @@ private[deploy] class Master(
             )
           }
         }
+        logInfo("recorded committed files")
         // destroy slave partitions
         val resDestroy = worker.endpoint.askSync[DestroyResponse](
           Destroy(shuffleKey, null, elem._2.toList)
@@ -245,9 +252,14 @@ private[deploy] class Master(
             Destroy(shuffleKey, null, resDestroy.failedSlaves)
           )
         }
+        // remove slave partitions
+        worker.synchronized {
+          worker.removeSlavePartition(shuffleKey, elem._2.toList)
+        }
       })
     })
 
+    logInfo("send SlaveLost to all master locations")
     // for all slave partitions on the lost worker, send SlaveLost to their master locations
     worker.slavePartitionLocations.foreach(entry => {
       val shuffleKey = entry._1
@@ -257,14 +269,39 @@ private[deploy] class Master(
         val worker: WorkerInfo = workers.find(w => w.hostPort == entry._1).orNull
         // send SlaveLost to all master locations
         entry._2.foreach(loc => {
-          worker.endpoint.askSync[SlaveLostResponse](
-            SlaveLost(shuffleKey, loc, loc.getPeer)
-          )
+          worker.endpoint.send(SlaveLost(shuffleKey, loc, loc.getPeer))
         })
       })
     })
 
     logInfo("Finished to process WorkerLost!")
+    if (context != null) {
+      context.reply(WorkerLostResponse(true))
+    }
+  }
+
+  def handleMasterPartitionSuicide(context: RpcCallContext,
+    shuffleKey: String, location: PartitionLocation): Unit = {
+    val worker: WorkerInfo = workers.find(w => w.hostPort == location.hostPort()).orNull
+    if (worker == null) {
+      logError(s"worker not found for the location ${location} !")
+      context.reply(MasterPartitionSuicideResponse(ReturnCode.WorkerNotFound))
+      return
+    }
+    if (!worker.masterPartitionLocations.contains(shuffleKey)) {
+      logError(s"shuffle ${shuffleKey} not registered!")
+      context.reply(MasterPartitionSuicideResponse(ReturnCode.ShuffleNotRegistered))
+      return
+    }
+    if (!worker.masterPartitionLocations.get(shuffleKey).contains(location)) {
+      logError(s"location ${location} not found!")
+      context.reply(MasterPartitionSuicideResponse(ReturnCode.MasterPartitionNotFound))
+      return
+    }
+    worker.synchronized {
+      worker.removeMasterPartition(shuffleKey, location)
+    }
+    context.reply(MasterPartitionSuicideResponse(ReturnCode.Success))
   }
 
   def handleRegisterWorker(context: RpcCallContext, host: String, port: Int,
@@ -333,6 +370,10 @@ private[deploy] class Master(
       val attempts = new Array[Int](numMappers)
       0 until numMappers foreach (idx => attempts(idx) = 0)
       shuffleMapperAttempts.put(shuffleKey, attempts)
+    }
+    shuffleCommittedPartitions.synchronized {
+      val commitedPartitions = new util.HashSet[String]()
+      shuffleCommittedPartitions.put(shuffleKey, commitedPartitions)
     }
     context.reply(RegisterShuffleResponse(true, locations))
   }
@@ -424,18 +465,20 @@ private[deploy] class Master(
       return
     }
     // send Destroy
-    val (_, failedSlave) = destroyBuffersWithRetry(shuffleKey, slaveWorker, null, List(slaveLocation))
-    if (failedSlave == null || failedSlave.isEmpty) {
-      // remove slave partition
-      if (slaveWorker != null) {
-        slaveWorker.synchronized {
-          slaveWorker.removeSlavePartition(shuffleKey, slaveLocation)
+    if (slaveWorker != null) {
+      val (_, failedSlave) = destroyBuffersWithRetry(shuffleKey, slaveWorker, null, List(slaveLocation))
+      if (failedSlave == null || failedSlave.isEmpty) {
+        // remove slave partition
+        if (slaveWorker != null) {
+          slaveWorker.synchronized {
+            slaveWorker.removeSlavePartition(shuffleKey, slaveLocation)
+          }
         }
       }
-      // update master locations's peer
-      masterWorker.synchronized {
-        masterWorker.masterPartitionLocations.get(shuffleKey).get(masterLocation).setPeer(null)
-      }
+    }
+    // update master locations's peer
+    masterWorker.synchronized {
+      masterWorker.masterPartitionLocations.get(shuffleKey).get(masterLocation).setPeer(null)
     }
     // offer new slot
     val location = workers.synchronized {
@@ -463,6 +506,10 @@ private[deploy] class Master(
       }
       context.reply(SlaveLostResponse(ReturnCode.ReserveBufferFailed, null))
       return
+    }
+    // add slave partition
+    location._1.synchronized {
+      location._1.addSlavePartition(shuffleKey, location._2)
     }
     // update peer
     masterWorker.synchronized {

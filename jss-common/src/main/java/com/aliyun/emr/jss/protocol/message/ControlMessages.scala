@@ -97,6 +97,13 @@ object ControlMessages {
     lostFiles: util.List[String]
   ) extends MasterMessage
 
+  case class MasterPartitionSuicide(
+    shuffleKey: String,
+    location: PartitionLocation
+  ) extends MasterMessage
+  case class MasterPartitionSuicideResponse(
+    returnCode: ReturnCode
+  ) extends MasterMessage
 
   /** ==========================================
    *         handled by worker
