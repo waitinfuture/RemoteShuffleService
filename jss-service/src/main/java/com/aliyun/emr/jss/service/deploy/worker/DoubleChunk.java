@@ -24,6 +24,7 @@ public class DoubleChunk {
     public Path fileName;
     // exposed for test
     public ChunkState slaveState = ChunkState.Ready;
+    public ChunkState masterState = ChunkState.Ready;
     // exposed for test
     public boolean flushed = false;
     FileSystem fs;
@@ -51,7 +52,7 @@ public class DoubleChunk {
         chunks[(working + 1) % 2].append(slaveData);
     }
 
-    public synchronized boolean append(byte[] data) {
+    public boolean append(byte[] data) {
         if (flushed) {
             logger.error("already flushed!");
             return false;
@@ -59,7 +60,7 @@ public class DoubleChunk {
         return append(Unpooled.copiedBuffer(data), true);
     }
 
-    public synchronized boolean append(byte[] data, boolean flush) {
+    public boolean append(byte[] data, boolean flush) {
         if (flushed) {
             logger.error("already flushed!");
             return false;
@@ -67,7 +68,7 @@ public class DoubleChunk {
         return append(Unpooled.copiedBuffer(data), flush);
     }
 
-    public synchronized boolean append(ByteBuf data) {
+    public boolean append(ByteBuf data) {
         if (flushed) {
             logger.error("already flushed!");
             return false;
@@ -86,7 +87,7 @@ public class DoubleChunk {
             logger.error("already flushed!");
             return false;
         }
-        synchronized (chunks) {
+        synchronized (this) {
             if (chunks[working].remaining() >= data.readableBytes()) {
                 chunks[working].append(data);
                 return true;
@@ -133,7 +134,7 @@ public class DoubleChunk {
         }
     }
 
-    public synchronized boolean flush() {
+    public boolean flush() {
         if (flushed) {
             logger.error("already flushed!");
             return false;
@@ -148,7 +149,7 @@ public class DoubleChunk {
                     return false;
                 }
             }
-            // TODO construct OutputStream
+            masterState = ChunkState.Flushing;
             try {
                 // flush master chunk
                 if (chunks[working].hasData()) {
@@ -172,11 +173,13 @@ public class DoubleChunk {
                     }
                     chunks[working].flushData(ostream);
                     ostream.close();
+                    masterState = ChunkState.Flushing;
                 }
             } catch (IOException e) {
-                logger.error("construct outputstream failed!", e);
+                logger.error("flush data failed!", e);
                 return false;
             }
+            masterState = ChunkState.Ready;
             flushed = true;
             return true;
         }

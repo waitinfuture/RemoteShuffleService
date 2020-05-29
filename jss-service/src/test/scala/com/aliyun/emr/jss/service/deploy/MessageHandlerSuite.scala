@@ -235,8 +235,6 @@ class MessageHandlerSuite
       )
       assert(info2.success)
       assert(info1.working == info2.working)
-      System.out.println(info1.slaveRemaining)
-      System.out.println(info2.slaveRemaining)
       assert(info1.slaveRemaining == info2.slaveRemaining)
       assert(info1.masterRemaining == info2.masterRemaining)
       val masterData1 = info1.masterData
@@ -276,6 +274,19 @@ class MessageHandlerSuite
     })
   }
 
+  def waitUntilDataFinishFlushing(worker: RpcEndpointRef, shuffleKey: String): Unit = {
+    var res = worker.askSync[GetShuffleStatusResponse](
+      GetShuffleStatus(shuffleKey)
+    )
+    while (res.dataWriting) {
+      println("data is writing")
+      Thread.sleep(500)
+      res = worker.askSync[GetShuffleStatusResponse](
+        GetShuffleStatus(shuffleKey)
+      )
+    }
+  }
+
   /**
    * ===============================
    * start testing
@@ -301,7 +312,6 @@ class MessageHandlerSuite
       assert(p.getMode == PartitionLocation.Mode.Master)
       assert(p.getPeer != null)
       assert(p.getPeer.getMode == PartitionLocation.Mode.Slave)
-      println(p)
     })
 
     stop()
@@ -388,20 +398,19 @@ class MessageHandlerSuite
     assert(res.success)
     res = worker1.askSync[SendDataResponse](sendDataMsg1)
     assert(res.success)
-    Thread.sleep(100)
+    waitUntilDataFinishFlushing(worker1, shuffleKey)
     assert(getFileLengh(shuffleKey, worker1Location.getUUID) == 0)
     res = worker1.askSync[SendDataResponse](sendDataMsg1)
     assert(res.success)
-    Thread.sleep(500)
-    println(worker1Location.getUUID)
+    waitUntilDataFinishFlushing(worker1, shuffleKey)
     assert(getFileLengh(shuffleKey, worker1Location.getUUID) == 128)
     res = worker1.askSync[SendDataResponse](sendDataMsg1)
     assert(res.success)
-    Thread.sleep(100)
+    waitUntilDataFinishFlushing(worker1, shuffleKey)
     assert(getFileLengh(shuffleKey, worker1Location.getUUID) == 128)
     res = worker1.askSync[SendDataResponse](sendDataMsg1)
     assert(res.success)
-    Thread.sleep(100)
+    waitUntilDataFinishFlushing(worker1, shuffleKey)
     assert(getFileLengh(shuffleKey, worker1Location.getUUID) == 256)
 
     val worker2Location = partitionLocations.filter(p => p.getPort == port2).toList(0)
@@ -415,23 +424,23 @@ class MessageHandlerSuite
     )
     res = worker2.askSync[SendDataResponse](sendDataMsg2)
     assert(res.success)
-    Thread.sleep(1000)
+    waitUntilDataFinishFlushing(worker2, shuffleKey)
     assert(getFileLengh(shuffleKey, worker2Location.getUUID) == 0)
     res = worker2.askSync[SendDataResponse](sendDataMsg2)
     assert(res.success)
-    Thread.sleep(1000)
+    waitUntilDataFinishFlushing(worker2, shuffleKey)
     assert(getFileLengh(shuffleKey, worker2Location.getUUID) == 0)
     res = worker2.askSync[SendDataResponse](sendDataMsg2)
     assert(res.success)
-    Thread.sleep(1000)
+    waitUntilDataFinishFlushing(worker2, shuffleKey)
     assert(getFileLengh(shuffleKey, worker2Location.getUUID) == 128)
     res = worker2.askSync[SendDataResponse](sendDataMsg2)
     assert(res.success)
-    Thread.sleep(1000)
+    waitUntilDataFinishFlushing(worker2, shuffleKey)
     assert(getFileLengh(shuffleKey, worker2Location.getUUID) == 128)
     res = worker2.askSync[SendDataResponse](sendDataMsg2)
     assert(res.success)
-    Thread.sleep(1000)
+    waitUntilDataFinishFlushing(worker2, shuffleKey)
     assert(getFileLengh(shuffleKey, worker2Location.getUUID) == 256)
 
     val worker2Location2 = partitionLocations.filter(p => p.getPort == port2).toList(1)
@@ -445,23 +454,23 @@ class MessageHandlerSuite
     )
     res = worker2.askSync[SendDataResponse](sendDataMsg3)
     assert(res.success)
-    Thread.sleep(1000)
+    waitUntilDataFinishFlushing(worker2, shuffleKey)
     assert(getFileLengh(shuffleKey, worker2Location2.getUUID) == 0)
     res = worker2.askSync[SendDataResponse](sendDataMsg3)
     assert(res.success)
-    Thread.sleep(1000)
+    waitUntilDataFinishFlushing(worker2, shuffleKey)
     assert(getFileLengh(shuffleKey, worker2Location2.getUUID) == 0)
     res = worker2.askSync[SendDataResponse](sendDataMsg3)
     assert(res.success)
-    Thread.sleep(1000)
+    waitUntilDataFinishFlushing(worker2, shuffleKey)
     assert(getFileLengh(shuffleKey, worker2Location2.getUUID) == 128)
     res = worker2.askSync[SendDataResponse](sendDataMsg3)
     assert(res.success)
-    Thread.sleep(1000)
+    waitUntilDataFinishFlushing(worker2, shuffleKey)
     assert(getFileLengh(shuffleKey, worker2Location2.getUUID) == 128)
     res = worker2.askSync[SendDataResponse](sendDataMsg3)
     assert(res.success)
-    Thread.sleep(1000)
+    waitUntilDataFinishFlushing(worker2, shuffleKey)
     assert(getFileLengh(shuffleKey, worker2Location2.getUUID) == 256)
 
     val res2 = worker2.askSync[GetWorkerInfosResponse](GetWorkerInfos)
@@ -529,7 +538,6 @@ class MessageHandlerSuite
       assert(p.getMode == PartitionLocation.Mode.Master)
       assert(p.getPeer != null)
       assert(p.getPeer.getMode == PartitionLocation.Mode.Slave)
-      println(p)
     })
 
     var res1 = worker1.askSync[GetWorkerInfosResponse](GetWorkerInfos)
@@ -600,7 +608,6 @@ class MessageHandlerSuite
       assert(p.getMode == PartitionLocation.Mode.Master)
       assert(p.getPeer != null)
       assert(p.getPeer.getMode == PartitionLocation.Mode.Slave)
-      println(p)
     })
 
     var res1 = worker1.askSync[GetWorkerInfosResponse](GetWorkerInfos)
@@ -680,7 +687,7 @@ class MessageHandlerSuite
     var res2 = worker1.askSync[SlaveLostResponse](
       SlaveLost(shuffleKey, lostSlave.getPeer, lostSlave)
     )
-    Thread.sleep(500)
+    waitUntilDataFinishFlushing(worker1, shuffleKey)
     res1 = worker1.askSync[GetWorkerInfosResponse](GetWorkerInfos)
     workerInfo = res1.workerInfos.asInstanceOf[util.List[WorkerInfo]].get(0)
     assert(workerInfo.memoryUsed == 128 * 10)
@@ -749,6 +756,7 @@ class MessageHandlerSuite
       WorkerLost(locations.head.getHost, port1)
     )
     assert(res.success)
+    waitUntilDataFinishFlushing(worker2, shuffleKey)
     Thread.sleep(1000)
 
     var res1 = master.askSync[GetWorkerInfosResponse](GetWorkerInfos)
@@ -766,8 +774,6 @@ class MessageHandlerSuite
     assert(!workerInfo.masterPartitionLocations.contains(shuffleKey))
     assert(!workerInfo.slavePartitionLocations.contains(shuffleKey))
     assert(workerInfo.memoryUsed == 0)
-
-    Thread.sleep(1000)
 
     stop()
   }
@@ -869,7 +875,9 @@ class MessageHandlerSuite
       })
     })
 
-    Thread.sleep(10000)
+    waitUntilDataFinishFlushing(worker1, shuffleKey)
+    waitUntilDataFinishFlushing(worker2, shuffleKey)
+    waitUntilDataFinishFlushing(worker3, shuffleKey)
 
     assertInfos()
     assertChunkInfo(shuffleKey,
@@ -918,7 +926,9 @@ class MessageHandlerSuite
       })
     })
 
-    Thread.sleep(5000)
+    waitUntilDataFinishFlushing(worker1, shuffleKey2)
+    waitUntilDataFinishFlushing(worker2, shuffleKey2)
+    waitUntilDataFinishFlushing(worker3, shuffleKey2)
     assertInfos()
     assertChunkInfo(shuffleKey2,
       worker1InfoWorker.masterPartitionLocations.get(shuffleKey2).keySet().toList)
@@ -949,7 +959,9 @@ class MessageHandlerSuite
       })
     })
 
-    Thread.sleep(5000)
+    waitUntilDataFinishFlushing(worker1, shuffleKey3)
+    waitUntilDataFinishFlushing(worker2, shuffleKey3)
+    waitUntilDataFinishFlushing(worker3, shuffleKey3)
     assertInfos()
     assertChunkInfo(shuffleKey3,
       worker1InfoMaster.masterPartitionLocations.get(shuffleKey3).keySet().toList)
@@ -966,7 +978,9 @@ class MessageHandlerSuite
     )
     assert(stageEndRes3.returnCode == ReturnCode.Success)
 
-    Thread.sleep(5000)
+    waitUntilDataFinishFlushing(worker1, shuffleKey3)
+    waitUntilDataFinishFlushing(worker2, shuffleKey3)
+    waitUntilDataFinishFlushing(worker3, shuffleKey3)
     assertInfos()
     assertChunkInfo(shuffleKey2,
       worker1InfoMaster.masterPartitionLocations.get(shuffleKey2).keySet().toList)
@@ -988,7 +1002,9 @@ class MessageHandlerSuite
     )
     assert(stageEndRes2.returnCode == ReturnCode.Success)
 
-    Thread.sleep(5000)
+    waitUntilDataFinishFlushing(worker1, shuffleKey2)
+    waitUntilDataFinishFlushing(worker2, shuffleKey2)
+    waitUntilDataFinishFlushing(worker3, shuffleKey2)
     assertInfos()
     assert(worker1InfoMaster.masterPartitionLocations.size() == 0)
     assert(worker2InfoMaster.masterPartitionLocations.size() == 0)
@@ -1024,7 +1040,9 @@ class MessageHandlerSuite
       })
     })
 
-    Thread.sleep(4000)
+    waitUntilDataFinishFlushing(worker1, shuffleKey1)
+    waitUntilDataFinishFlushing(worker2, shuffleKey1)
+    waitUntilDataFinishFlushing(worker3, shuffleKey1)
 
     assertInfos()
     assertFileLength(shuffleKey1, resReg.partitionLocations, 63 * 98)
@@ -1051,7 +1069,9 @@ class MessageHandlerSuite
       63 * 98
     )
 
-    Thread.sleep(4000)
+    waitUntilDataFinishFlushing(worker1, shuffleKey1)
+    waitUntilDataFinishFlushing(worker2, shuffleKey1)
+    waitUntilDataFinishFlushing(worker3, shuffleKey1)
     assertInfos()
     assert(worker2InfoMaster.masterPartitionLocations.size() == 1)
     assert(worker2InfoMaster.masterPartitionLocations.get(shuffleKey1).size() == 4)
@@ -1144,7 +1164,9 @@ class MessageHandlerSuite
       })
     })
 
-    Thread.sleep(4000)
+    waitUntilDataFinishFlushing(worker1, shuffleKey3)
+    waitUntilDataFinishFlushing(worker2, shuffleKey3)
+    waitUntilDataFinishFlushing(worker3, shuffleKey3)
     assertInfos()
     assertChunkInfo(shuffleKey1, resReg1.partitionLocations)
     assertChunkInfo(shuffleKey2, resReg2.partitionLocations)
@@ -1191,7 +1213,15 @@ class MessageHandlerSuite
       63 * 173
     )
 
-    Thread.sleep(4000)
+    waitUntilDataFinishFlushing(worker1, shuffleKey1)
+    waitUntilDataFinishFlushing(worker2, shuffleKey1)
+    waitUntilDataFinishFlushing(worker3, shuffleKey1)
+    waitUntilDataFinishFlushing(worker1, shuffleKey2)
+    waitUntilDataFinishFlushing(worker2, shuffleKey2)
+    waitUntilDataFinishFlushing(worker3, shuffleKey2)
+    waitUntilDataFinishFlushing(worker1, shuffleKey3)
+    waitUntilDataFinishFlushing(worker2, shuffleKey3)
+    waitUntilDataFinishFlushing(worker3, shuffleKey3)
 
     assertInfos()
     assertChunkInfo(shuffleKey1,
@@ -1229,6 +1259,72 @@ class MessageHandlerSuite
     assert(worker1InfoMaster.memoryUsed == 0)
     assert(worker2InfoMaster == null)
     assert(worker3InfoMaster.memoryUsed == 0)
+
+    stop(3)
+  }
+
+  test("Revive") {
+    init(3)
+
+    val appId = "appId"
+    val shuffleId = 1
+    val shuffleKey = Utils.makeShuffleKey(appId, shuffleId)
+    // register shuffle
+    val resReg = master.askSync[RegisterShuffleResponse](
+      RegisterShuffle(appId, shuffleId, 10, 12)
+    )
+    assert(resReg.success)
+
+    // send data
+    0 until 10 foreach (_ => {
+      resReg.partitionLocations.foreach(loc => {
+        val worker = getWorker(loc)
+        val data = new Array[Byte](63)
+        Random.nextBytes(data)
+        worker.askSync[SendDataResponse](
+          SendData(shuffleKey, loc, PartitionLocation.Mode.Master, true, data)
+        )
+      })
+    })
+
+    waitUntilDataFinishFlushing(worker1, shuffleKey)
+    waitUntilDataFinishFlushing(worker2, shuffleKey)
+    waitUntilDataFinishFlushing(worker3, shuffleKey)
+    assertInfos()
+
+    // revive
+    val resRev = master.askSync[ReviveResponse](
+      Revive(appId, shuffleId)
+    )
+    assert(resRev.success)
+    val newLoc = resRev.newLocation
+    // send data to new location
+    val worker = getWorker(newLoc)
+    val data = new Array[Byte](63)
+    Random.nextBytes(data)
+    0 until 1 foreach (_ => {
+      val resSend = worker.askSync[SendDataResponse](
+        SendData(shuffleKey, newLoc, PartitionLocation.Mode.Master, true, data)
+      )
+      assert(resSend.success)
+    })
+    waitUntilDataFinishFlushing(worker, shuffleKey)
+
+    assertInfos()
+
+    // stage end
+    val resStageEnd = master.askSync[StageEndResponse](
+      StageEnd(appId, shuffleId)
+    )
+    assert(resStageEnd.returnCode == ReturnCode.Success)
+
+    waitUntilDataFinishFlushing(worker1, shuffleKey)
+    waitUntilDataFinishFlushing(worker2, shuffleKey)
+    waitUntilDataFinishFlushing(worker3, shuffleKey)
+
+    assertInfos()
+    assertFileLength(shuffleKey, resReg.partitionLocations, 63 * 10)
+    assertFileLength(shuffleKey, List(newLoc), 63 * 1)
 
     stop(3)
   }

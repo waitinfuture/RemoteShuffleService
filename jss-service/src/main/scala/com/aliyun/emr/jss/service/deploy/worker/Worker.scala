@@ -22,6 +22,7 @@ import java.util.concurrent.TimeUnit
 
 import scala.collection.JavaConversions._
 import scala.util.control.Breaks._
+
 import com.aliyun.emr.jss.common.EssConf
 import com.aliyun.emr.jss.common.internal.Logging
 import com.aliyun.emr.jss.common.rpc._
@@ -31,7 +32,6 @@ import com.aliyun.emr.jss.protocol.message.ControlMessages._
 import com.aliyun.emr.jss.protocol.message.DataMessages._
 import com.aliyun.emr.jss.protocol.message.ReturnCode
 import com.aliyun.emr.jss.service.deploy.common.EssPathUtil
-import io.netty.buffer.ByteBuf
 
 private[deploy] class Worker(
   override val rpcEnv: RpcEnv,
@@ -107,7 +107,6 @@ private[deploy] class Worker(
       handleSlaveLost(null, shuffleKey, masterLocation, slaveLocation)
   }
 
-  // TODO
   override def receiveAndReply(context: RpcCallContext): PartialFunction[Any, Unit] = {
     case ReserveBuffers(shuffleKey, masterLocations, slaveLocations) =>
       logInfo("receive ReserveBuffers request," +
@@ -134,6 +133,9 @@ private[deploy] class Worker(
     case SlaveLost(shuffleKey, masterLocation, slaveLocation) =>
       logInfo(s"received SlaveLost ${shuffleKey}, ${masterLocation}, ${slaveLocation}")
       handleSlaveLost(context, shuffleKey, masterLocation, slaveLocation)
+    case GetShuffleStatus(shuffleKey) =>
+      logInfo(s"received GetShuffleStatus request, ${shuffleKey}")
+      handleGetShuffleStatus(context, shuffleKey)
   }
 
   private def handleReserveBuffers(context: RpcCallContext, shuffleKey: String,
@@ -423,7 +425,7 @@ private[deploy] class Worker(
     if (res.returnCode == ReturnCode.MasterPartitionNotFound) {
       logError("Master doesn't know me, remove myself")
       val master = workerInfo.masterPartitionLocations.get(shuffleKey).get(masterLocation)
-          .asInstanceOf[PartitionLocationWithDoubleChunks]
+        .asInstanceOf[PartitionLocationWithDoubleChunks]
       master.getDoubleChunk.returnChunks()
       workerInfo.synchronized {
         workerInfo.removeMasterPartition(shuffleKey,
@@ -437,7 +439,7 @@ private[deploy] class Worker(
         " flush and destroy master location")
       // remove master location
       val loc = workerInfo.masterPartitionLocations.get(shuffleKey).get(masterLocation)
-          .asInstanceOf[PartitionLocationWithDoubleChunks]
+        .asInstanceOf[PartitionLocationWithDoubleChunks]
       workerInfo.synchronized {
         workerInfo.removeMasterPartition(shuffleKey, masterLocation)
       }
@@ -454,7 +456,7 @@ private[deploy] class Worker(
     }
     // update master location's peer
     val master = workerInfo.masterPartitionLocations.get(shuffleKey).get(masterLocation)
-        .asInstanceOf[PartitionLocationWithDoubleChunks]
+      .asInstanceOf[PartitionLocationWithDoubleChunks]
     master.synchronized {
       master.setPeer(slaveLocation)
     }
@@ -512,6 +514,29 @@ private[deploy] class Worker(
       doubleChunk.chunks((doubleChunk.working + 1) % 2).remaining(),
       doubleChunk.getMasterData
     ))
+  }
+
+  private def handleGetShuffleStatus(context: RpcCallContext, shuffleKey: String): Unit = {
+    val masterIdle = if (!workerInfo.masterPartitionLocations.contains(shuffleKey)) {
+      true
+    } else {
+      workerInfo.masterPartitionLocations.get(shuffleKey).keySet().forall(loc => {
+        val locDb = loc.asInstanceOf[PartitionLocationWithDoubleChunks]
+        locDb.getDoubleChunk.slaveState == DoubleChunk.ChunkState.Ready &&
+          locDb.getDoubleChunk.masterState == DoubleChunk.ChunkState.Ready
+      })
+    }
+    val slaveIdle = if (!workerInfo.slavePartitionLocations.contains(shuffleKey)) {
+      true
+    } else {
+      workerInfo.slavePartitionLocations.get(shuffleKey).keySet().forall(loc => {
+        val locDb = loc.asInstanceOf[PartitionLocationWithDoubleChunks]
+        locDb.getDoubleChunk.slaveState == DoubleChunk.ChunkState.Ready &&
+          locDb.getDoubleChunk.masterState == DoubleChunk.ChunkState.Ready
+      })
+    }
+
+    context.reply(GetShuffleStatusResponse(!masterIdle || !slaveIdle))
   }
 
   private def registerWithMaster() {

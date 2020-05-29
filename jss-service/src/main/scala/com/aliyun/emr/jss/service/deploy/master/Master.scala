@@ -4,11 +4,10 @@ import java.util
 import java.util.concurrent.{ConcurrentHashMap, ScheduledFuture, TimeUnit}
 
 import scala.collection.JavaConversions._
-import scala.collection.JavaConverters._
 
 import com.aliyun.emr.jss.common.EssConf
 import com.aliyun.emr.jss.common.internal.Logging
-import com.aliyun.emr.jss.common.rpc.{RpcAddress, RpcCallContext, RpcEndpoint, RpcEndpointRef, RpcEnv}
+import com.aliyun.emr.jss.common.rpc._
 import com.aliyun.emr.jss.common.util.{ThreadUtils, Utils}
 import com.aliyun.emr.jss.protocol.{PartitionLocation, RpcNameConstants}
 import com.aliyun.emr.jss.protocol.message.ControlMessages._
@@ -415,7 +414,12 @@ private[deploy] class Master(
     }
 
     // reply success
-    context.reply(ReviveResponse(true, slots.head._2._1.head))
+    val (masters, slaves) = slots.head._2
+    if (masters != null && masters.size() > 0) {
+      context.reply(ReviveResponse(true, masters.head))
+    } else {
+      context.reply(ReviveResponse(true, slaves.head.getPeer))
+    }
   }
 
   private def handleMapperEnd(

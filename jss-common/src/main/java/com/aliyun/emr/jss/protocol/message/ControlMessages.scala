@@ -101,6 +101,7 @@ object ControlMessages {
     shuffleKey: String,
     location: PartitionLocation
   ) extends MasterMessage
+
   case class MasterPartitionSuicideResponse(
     returnCode: ReturnCode
   ) extends MasterMessage
@@ -133,6 +134,7 @@ object ControlMessages {
     shuffleKey: String,
     commitLocations: util.List[PartitionLocation],
     mode: PartitionLocation.Mode) extends WorkerMessage
+
   case class CommitFilesResponse(
     errorCode: ReturnCode,
     failedLocations: util.List[PartitionLocation]
@@ -143,10 +145,19 @@ object ControlMessages {
     masterLocations: util.List[PartitionLocation],
     slaveLocation: util.List[PartitionLocation]
   ) extends WorkerMessage
+
   case class DestroyResponse(
     returnCode: ReturnCode,
     failedMasters: util.List[PartitionLocation],
     failedSlaves: util.List[PartitionLocation]
+  ) extends WorkerMessage
+
+  case class GetShuffleStatus(
+    shuffleKey: String
+  ) extends WorkerMessage
+
+  case class GetShuffleStatusResponse(
+    dataWriting: Boolean
   ) extends WorkerMessage
 
   /** ==========================================
