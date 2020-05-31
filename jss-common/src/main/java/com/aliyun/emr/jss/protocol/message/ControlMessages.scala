@@ -18,6 +18,8 @@ object ControlMessages {
    */
   case object CheckForWorkerTimeOut
 
+  case object CheckForApplicationTimeOut
+
   case class RegisterWorker(
     host: String,
     port: Int,
@@ -30,7 +32,9 @@ object ControlMessages {
     memory: Long,
     worker: RpcEndpointRef) extends MasterMessage
 
-  case class Heartbeat(host: String, port: Int) extends MasterMessage
+  case class HeartbeatFromWorker(
+    host: String, port: Int
+  ) extends MasterMessage
 
   case class RegisterShuffle(
       applicationId: String,
@@ -104,6 +108,27 @@ object ControlMessages {
 
   case class MasterPartitionSuicideResponse(
     returnCode: ReturnCode
+  ) extends MasterMessage
+
+  case class UnregisterShuffle(
+    appId: String,
+    shuffleId: Int
+  ) extends MasterMessage
+
+  case class UnregisterShuffleResponse(
+    returnCode: ReturnCode
+  ) extends MasterMessage
+
+  case class ApplicationLost(
+    appId: String
+  ) extends MasterMessage
+
+  case class ApplicationLostResponse(
+    success: Boolean
+  ) extends MasterMessage
+
+  case class HeartBeatFromApplication(
+    appId: String
   ) extends MasterMessage
 
   /** ==========================================

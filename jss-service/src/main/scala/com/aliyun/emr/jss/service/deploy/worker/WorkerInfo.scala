@@ -90,7 +90,8 @@ private[jss] class WorkerInfo(
     }
   }
 
-  def removeMasterPartition(shuffleKey: String, locations: util.List[PartitionLocation]): Unit = {
+  def removeMasterPartition(shuffleKey: String,
+    locations: util.Collection[PartitionLocation]): Unit = {
     if (!masterPartitionLocations.containsKey(shuffleKey)) {
       return
     }
@@ -120,7 +121,8 @@ private[jss] class WorkerInfo(
     }
   }
 
-  def removeSlavePartition(shuffleKey: String, locations: util.List[PartitionLocation]): Unit = {
+  def removeSlavePartition(shuffleKey: String,
+    locations: util.Collection[PartitionLocation]): Unit = {
     if (!slavePartitionLocations.containsKey(shuffleKey)) {
       return
     }

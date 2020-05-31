@@ -10,5 +10,7 @@ public enum ReturnCode {
     PartitionNotFound,
     MasterPartitionNotFound,
     SlavePartitionNotFound,
+    DeleteFilesFailed,
+    PartitionExists,
     Failed
 }

@@ -12,7 +12,9 @@ import com.aliyun.emr.jss.common.util.{ThreadUtils, Utils}
 import com.aliyun.emr.jss.protocol.{PartitionLocation, RpcNameConstants}
 import com.aliyun.emr.jss.protocol.message.ControlMessages._
 import com.aliyun.emr.jss.protocol.message.ReturnCode
+import com.aliyun.emr.jss.service.deploy.common.EssPathUtil
 import com.aliyun.emr.jss.service.deploy.worker.WorkerInfo
+import org.apache.hadoop.conf.Configuration
 
 private[deploy] class Master(
   override val rpcEnv: RpcEnv,
@@ -27,14 +29,20 @@ private[deploy] class Master(
   private val forwardMessageThread =
     ThreadUtils.newDaemonSingleThreadScheduledExecutor("master-forward-message-thread")
   private var checkForWorkerTimeOutTask: ScheduledFuture[_] = _
+  private var checkForApplicationTimeOutTask: ScheduledFuture[_] = _
   private val registerShufflePartitionThreadPool = ThreadUtils.newDaemonCachedThreadPool(
     "register-shuffle-partition-threadpool",
     8
   )
 
+  // file system
+  val basePath = EssPathUtil.GetBaseDir(conf)
+  val fs = basePath.getFileSystem(new Configuration())
+
   // Configs
   private val CHUNK_SIZE = conf.getSizeAsBytes("ess.partition.memory", "32m")
   private val WORKER_TIMEOUT_MS = conf.getLong("ess.worker.timeout", 60) * 1000
+  private val APPLICATION_TIMEOUT_MS = conf.getLong("ess.application.timeout", 180) * 1000
 
   // States
   val workers: util.List[WorkerInfo] = new util.ArrayList[WorkerInfo]()
@@ -45,6 +53,7 @@ private[deploy] class Master(
   private val shuffleMapperAttempts = new util.HashMap[String, Array[Int]]()
   private val shuffleCommittedPartitions = new util.HashMap[String, util.Set[String]]()
   private val shufflePartitionsWritten = new util.HashMap[String, util.Set[String]]()
+  private val appHeartbeatTime = new util.HashMap[String, Long]()
 
   private def getChunkIndex(applicationId: String,
     shuffleId: Int,
@@ -62,12 +71,19 @@ private[deploy] class Master(
     s"${uniqueId}_${newIndex}"
   }
 
+  // start threads to check timeout for workers and applications
   override def onStart(): Unit = {
     checkForWorkerTimeOutTask = forwardMessageThread.scheduleAtFixedRate(new Runnable {
       override def run(): Unit = Utils.tryLogNonFatalError {
         self.send(CheckForWorkerTimeOut)
       }
     }, 0, WORKER_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+
+    checkForApplicationTimeOutTask = forwardMessageThread.scheduleAtFixedRate(new Runnable {
+      override def run(): Unit = Utils.tryLogNonFatalError {
+        self.send(CheckForApplicationTimeOut)
+      }
+    }, 0, APPLICATION_TIMEOUT_MS, TimeUnit.MILLISECONDS)
   }
 
   override def onStop(): Unit = {
@@ -84,12 +100,16 @@ private[deploy] class Master(
 
   override def receive: PartialFunction[Any, Unit] = {
     case CheckForWorkerTimeOut =>
-      timeOutDeadWorkers()
-    case Heartbeat(host, port) =>
-      handleHeartBeat(host, port)
+      timeoutDeadWorkers()
+    case CheckForApplicationTimeOut =>
+      timeoutDeadApplications()
+    case HeartbeatFromWorker(host, port) =>
+      handleHeartBeatFromWorker(host, port)
     case WorkerLost(host, port) =>
       logInfo(s"received WorkerLost, ${host}:port")
       handleWorkerLost(null, host, port)
+    case HeartBeatFromApplication(appId) =>
+      handleHeartBeatFromApplication(appId)
   }
 
   def reserveBuffers(shuffleKey: String, slots: WorkerResource): util.List[WorkerInfo] = {
@@ -174,9 +194,15 @@ private[deploy] class Master(
     case MasterPartitionSuicide(shuffleKey, location) =>
       logInfo(s"receive MasterPartitionSuicide, ${location}")
       handleMasterPartitionSuicide(context, shuffleKey, location)
+    case UnregisterShuffle(appId, shuffleId) =>
+      logInfo(s"receive UnregisterShuffle request, ${appId}-${shuffleId}")
+      handleUnregisterShuffle(context, appId, shuffleId)
+    case ApplicationLost(appId) =>
+      logInfo(s"received ApplicationLost, ${appId}")
+      handleApplicationLost(context, appId)
   }
 
-  private def timeOutDeadWorkers() {
+  private def timeoutDeadWorkers() {
     val currentTime = System.currentTimeMillis()
     var ind = 0
     while (ind < workers.size()) {
@@ -192,7 +218,21 @@ private[deploy] class Master(
     }
   }
 
-  private def handleHeartBeat(host: String, port: Int): Unit = {
+  private def timeoutDeadApplications(): Unit = {
+    val currentTime = System.currentTimeMillis()
+    val keys = appHeartbeatTime.keySet()
+    keys.foreach(key => {
+      if (appHeartbeatTime.get(key) < currentTime - APPLICATION_TIMEOUT_MS) {
+        logError(s"Application ${key} timeout! Trigger ApplicationLost event")
+        self.send(
+          ApplicationLost(key)
+        )
+        appHeartbeatTime.remove(key)
+      }
+    })
+  }
+
+  private def handleHeartBeatFromWorker(host: String, port: Int): Unit = {
     logDebug(s"received heartbeat from ${host}:${port}")
     val worker: WorkerInfo = workers.find(w => w.host == host && w.port == port).orNull
     if (worker == null) {
@@ -264,7 +304,7 @@ private[deploy] class Master(
       val shuffleKey = entry._1
       val masterLocations = entry._2.keySet().map(_.getPeer)
       val groupedByWorker = masterLocations.groupBy(loc => loc.hostPort())
-      groupedByWorker.foreach (entry => {
+      groupedByWorker.foreach(entry => {
         val worker: WorkerInfo = workers.find(w => w.hostPort == entry._1).orNull
         // send SlaveLost to all master locations
         entry._2.foreach(loc => {
@@ -648,6 +688,90 @@ private[deploy] class Master(
     } else {
       context.reply(StageEndResponse(ReturnCode.PartialSuccess, null))
     }
+  }
+
+  def handleUnregisterShuffle(context: RpcCallContext,
+    appId: String, shuffleId: Int): Unit = {
+    val shuffleKey = Utils.makeShuffleKey(appId, shuffleId)
+    // if PartitionLocations exists for the shuffle, return fail
+    if (partitionExists(shuffleKey)) {
+      logError(s"Partition exists for shuffle ${shuffleKey}!")
+      context.reply(UnregisterShuffleResponse(ReturnCode.PartitionExists))
+      return
+    }
+    // delete shuffle files
+    val shuffleDir = EssPathUtil.GetShuffleDir(conf, appId, shuffleId)
+    val success = fs.delete(shuffleDir, true)
+    if (success) {
+      context.reply(UnregisterShuffleResponse(ReturnCode.Success))
+    } else {
+      logError("delete files failed!")
+      context.reply(UnregisterShuffleResponse(ReturnCode.DeleteFilesFailed))
+    }
+  }
+
+  def handleApplicationLost(context: RpcCallContext, appId: String): Unit = {
+    def getNextShufflePartitions(worker: WorkerInfo):
+    (String, util.List[PartitionLocation], util.List[PartitionLocation]) = {
+      val shuffleKeys = new util.HashSet[String]()
+      shuffleKeys.addAll(worker.masterPartitionLocations.keySet())
+      shuffleKeys.addAll(worker.slavePartitionLocations.keySet())
+      val nextShuffleKey = shuffleKeys.find(_.startsWith(appId)).orNull
+      if (nextShuffleKey == null) {
+        return null
+      }
+
+      (nextShuffleKey, worker.masterPartitionLocations.get(nextShuffleKey).keySet().toList,
+        worker.slavePartitionLocations.get(nextShuffleKey).keySet().toList)
+    }
+
+    // destroy partition buffers in workers, then update info in master
+    workers.foreach(worker => {
+      var nextShufflePartitions = getNextShufflePartitions(worker)
+      while(nextShufflePartitions != null) {
+        if (nextShufflePartitions != null) {
+          val (shuffleKey, masterLocs, slaveLocs) = nextShufflePartitions
+          // destroy partition buffers on worker
+          val res = worker.endpoint.askSync[DestroyResponse](
+            Destroy(shuffleKey, masterLocs, slaveLocs)
+          )
+          // retry once
+          if (res.returnCode != ReturnCode.Success) {
+            worker.endpoint.askSync[DestroyResponse](
+              Destroy(shuffleKey, res.failedMasters, res.failedSlaves)
+            )
+          }
+          // remove partitions from workerinfo
+          worker.synchronized {
+            worker.removeMasterPartition(shuffleKey, masterLocs)
+            worker.removeSlavePartition(shuffleKey, slaveLocs)
+          }
+        }
+        nextShufflePartitions = getNextShufflePartitions(worker)
+      }
+    })
+    // delete files for the application
+    val appPath = EssPathUtil.GetAppDir(conf, appId)
+    if (fs.delete(appPath, true)) {
+      logInfo("Finished handling ApplicationLost")
+      context.reply(ApplicationLostResponse(true))
+    } else {
+      logError("Delete files failed!")
+      context.reply(ApplicationLostResponse(false))
+    }
+  }
+
+  private def handleHeartBeatFromApplication(appId: String): Unit = {
+    appHeartbeatTime.synchronized {
+      appHeartbeatTime.put(appId, System.currentTimeMillis())
+    }
+  }
+
+  private def partitionExists(shuffleKey: String): Boolean = {
+    workers.exists(w => {
+      w.masterPartitionLocations.contains(shuffleKey) ||
+        w.slavePartitionLocations.contains(shuffleKey)
+    })
   }
 
 }

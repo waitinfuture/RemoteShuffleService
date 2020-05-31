@@ -5,8 +5,12 @@ import org.apache.hadoop.fs.Path;
 
 public class EssPathUtil
 {
-    private static String workerBaseDir(EssConf conf) {
+    public static String workerBaseDir(EssConf conf) {
         return conf.get("ess.worker.base.dir", "file:///tmp/Aliyun-EMR-SS/");
+    }
+
+    public static Path GetBaseDir(EssConf conf) {
+        return new Path(String.format("%s/", workerBaseDir(conf)));
     }
 
     public static Path GetAppDir(EssConf conf, String appId) {

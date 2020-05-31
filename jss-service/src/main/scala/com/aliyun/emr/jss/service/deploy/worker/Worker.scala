@@ -101,7 +101,7 @@ private[deploy] class Worker(
 
   override def receive: PartialFunction[Any, Unit] = {
     case SendHeartbeat =>
-      masterEndpoint.send(Heartbeat(host, port))
+      masterEndpoint.send(HeartbeatFromWorker(host, port))
     case SlaveLost(shuffleKey, masterLocation, slaveLocation) =>
       logInfo(s"received SlaveLost ${shuffleKey}, ${masterLocation}, ${slaveLocation}")
       handleSlaveLost(null, shuffleKey, masterLocation, slaveLocation)

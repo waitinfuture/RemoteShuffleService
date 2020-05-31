@@ -12,10 +12,11 @@ import com.aliyun.emr.jss.protocol.{PartitionLocation, RpcNameConstants}
 import com.aliyun.emr.jss.protocol.message.ControlMessages._
 import com.aliyun.emr.jss.protocol.message.DataMessages.{GetDoubleChunkInfo, GetDoubleChunkInfoResponse, SendData, SendDataResponse}
 import com.aliyun.emr.jss.protocol.message.ReturnCode
+import com.aliyun.emr.jss.service.deploy.common.EssPathUtil
 import com.aliyun.emr.jss.service.deploy.master.{Master, MasterArguments}
 import com.aliyun.emr.jss.service.deploy.worker._
 import org.apache.hadoop.conf.Configuration
-import org.apache.hadoop.fs.Path
+import org.apache.hadoop.fs.{FileSystem, Path}
 import org.scalatest.FunSuite
 
 class MessageHandlerSuite
@@ -26,7 +27,6 @@ class MessageHandlerSuite
      * start master
      * ===============================
      */
-    val conf = new EssConf()
     conf.set("ess.partition.memory", "128")
     conf.set("ess.worker.base.dir", "hdfs://11.158.199.162:9000/tmp/ess-test/")
     val masterArgs = new MasterArguments(Array.empty[String], conf)
@@ -132,6 +132,10 @@ class MessageHandlerSuite
     if (numWorkers == 3) {
       worker3 = env.setupEndpointRef(new RpcAddress(localhost, port3), RpcNameConstants.WORKER_EP)
     }
+
+    val file = new Path("hdfs://11.158.199.162:9000/tmp/ess-test/")
+    val hadoopConf = new Configuration()
+    fs = file.getFileSystem(hadoopConf)
   }
 
   def stop(numWorkers: Int = 2): Unit = {
@@ -141,6 +145,8 @@ class MessageHandlerSuite
       rpcEnvWorker3.shutdown()
     }
     rpcEnvMaster.shutdown()
+
+    fs.close()
   }
 
   def getWorker(loc: PartitionLocation): RpcEndpointRef = {
@@ -154,6 +160,8 @@ class MessageHandlerSuite
       null
     }
   }
+
+  val conf = new EssConf()
 
   val masterPort = 9099
   val port1 = 9090
@@ -176,6 +184,8 @@ class MessageHandlerSuite
   var worker1InfoWorker: WorkerInfo = null
   var worker2InfoWorker: WorkerInfo = null
   var worker3InfoWorker: WorkerInfo = null
+
+  var fs: FileSystem = null
 
   def getInfosInMaster(): Unit = {
     val workerInfosMaster = master.askSync[GetWorkerInfosResponse](GetWorkerInfos).workerInfos
@@ -258,8 +268,6 @@ class MessageHandlerSuite
     val file = new Path(String.format("%s/%s",
       s"hdfs://11.158.199.162:9000/tmp/ess-test/${appId}/${shuffleId}/",
       name))
-    val hadoopConf = new Configuration()
-    val fs = file.getFileSystem(hadoopConf)
     if (!fs.exists(file)) {
       0
     } else {
@@ -818,7 +826,7 @@ class MessageHandlerSuite
     master.askSync[WorkerLostResponse](
       WorkerLost(worker1.address.host, worker1.address.port)
     )
-    Thread.sleep(500)
+    Thread.sleep(2000)
     getInfosInMaster()
     getInfosInWorker()
     if (worker1InfoMaster != null) {
@@ -1325,6 +1333,155 @@ class MessageHandlerSuite
     assertInfos()
     assertFileLength(shuffleKey, resReg.partitionLocations, 63 * 10)
     assertFileLength(shuffleKey, List(newLoc), 63 * 1)
+
+    stop(3)
+  }
+
+  test("UnregisterShuffle") {
+    init(3)
+
+    // register shuffle
+    val appId = "appId"
+    val shuffleId = 1
+    val shuffleKey = Utils.makeShuffleKey(appId, shuffleId)
+    val resReg = master.askSync[RegisterShuffleResponse](
+      RegisterShuffle(appId, shuffleId, 10, 14)
+    )
+    assert(resReg.success)
+
+    // send data
+    0 until 10 foreach (_ => {
+      resReg.partitionLocations.foreach(loc => {
+        val worker = getWorker(loc)
+        val data = new Array[Byte](63)
+        Random.nextBytes(data)
+        val res = worker.askSync[SendDataResponse](
+          SendData(shuffleKey, loc, PartitionLocation.Mode.Master, true, data)
+        )
+        assert(res.success)
+      })
+    })
+
+    waitUntilDataFinishFlushing(worker1, shuffleKey)
+    waitUntilDataFinishFlushing(worker2, shuffleKey)
+    waitUntilDataFinishFlushing(worker3, shuffleKey)
+
+    val shufflePath = EssPathUtil.GetShuffleDir(conf, appId, shuffleId)
+    assert(fs.exists(shufflePath))
+
+    // unregister shuffle without StageEnd
+    var resUnreg = master.askSync[UnregisterShuffleResponse](
+      UnregisterShuffle(appId, shuffleId)
+    )
+    assert(resUnreg.returnCode == ReturnCode.PartitionExists)
+
+    // stage end
+    val resStageEnd = master.askSync[StageEndResponse](
+      StageEnd(appId, shuffleId)
+    )
+    assert(resStageEnd.returnCode == ReturnCode.Success)
+
+    // unregister shuffle
+    resUnreg = master.askSync[UnregisterShuffleResponse](
+      UnregisterShuffle(appId, shuffleId)
+    )
+    assert(resUnreg.returnCode == ReturnCode.Success)
+    assert(!fs.exists(shufflePath))
+
+    stop(3)
+  }
+
+  test("ApplicationLost") {
+    init(3)
+
+    val appId = "appId"
+    val shuffleId1 = 1
+    val shuffleId2 = 2
+    val shuffleId3 = 3
+    val shuffleKey1 = Utils.makeShuffleKey(appId, shuffleId1)
+    val shuffleKey2 = Utils.makeShuffleKey(appId, shuffleId2)
+    val shuffleKey3 = Utils.makeShuffleKey(appId, shuffleId3)
+
+    // register shuffle1 and send data
+    var resReg = master.askSync[RegisterShuffleResponse](
+      RegisterShuffle(appId, shuffleId1, 10, 12)
+    )
+    assert(resReg.success)
+    0 until 9 foreach(_ => {
+      resReg.partitionLocations.foreach(loc => {
+        val worker = getWorker(loc)
+        val data = new Array[Byte](63)
+        Random.nextBytes(data)
+        val res = worker.askSync[SendDataResponse](
+          SendData(shuffleKey1, loc, PartitionLocation.Mode.Master, true, data)
+        )
+        assert(res.success)
+      })
+    })
+    val shufflePath1 = EssPathUtil.GetShuffleDir(conf, appId, shuffleId1)
+    assert(fs.exists(shufflePath1))
+
+    // register shuffle2 and send data
+    resReg = master.askSync[RegisterShuffleResponse](
+      RegisterShuffle(appId, shuffleId2, 16, 13)
+    )
+    assert(resReg.success)
+    0 until 19 foreach(_ => {
+      resReg.partitionLocations.foreach(loc => {
+        val worker = getWorker(loc)
+        val data = new Array[Byte](63)
+        Random.nextBytes(data)
+        val res = worker.askSync[SendDataResponse](
+          SendData(shuffleKey2, loc, PartitionLocation.Mode.Master, true, data)
+        )
+        assert(res.success)
+      })
+    })
+    val shufflePath2 = EssPathUtil.GetShuffleDir(conf, appId, shuffleId2)
+    assert(fs.exists(shufflePath2))
+
+    // register shuffle3 and send data
+    resReg = master.askSync[RegisterShuffleResponse](
+      RegisterShuffle(appId, shuffleId3, 11, 33)
+    )
+    assert(resReg.success)
+    0 until 31 foreach(_ => {
+      resReg.partitionLocations.foreach(loc => {
+        val worker = getWorker(loc)
+        val data = new Array[Byte](63)
+        Random.nextBytes(data)
+        val res = worker.askSync[SendDataResponse](
+          SendData(shuffleKey3, loc, PartitionLocation.Mode.Master, true, data)
+        )
+        assert(res.success)
+      })
+    })
+    val shufflePath3 = EssPathUtil.GetShuffleDir(conf, appId, shuffleId3)
+    assert(fs.exists(shufflePath3))
+
+    // wait for all data written
+    waitUntilDataFinishFlushing(worker1, shuffleKey1)
+    waitUntilDataFinishFlushing(worker2, shuffleKey1)
+    waitUntilDataFinishFlushing(worker3, shuffleKey1)
+    waitUntilDataFinishFlushing(worker1, shuffleKey2)
+    waitUntilDataFinishFlushing(worker2, shuffleKey2)
+    waitUntilDataFinishFlushing(worker3, shuffleKey2)
+    waitUntilDataFinishFlushing(worker1, shuffleKey3)
+    waitUntilDataFinishFlushing(worker2, shuffleKey3)
+    waitUntilDataFinishFlushing(worker3, shuffleKey3)
+
+    // trigger ApplicationLost
+    val resAppLost = master.askSync[ApplicationLostResponse](
+      ApplicationLost(appId)
+    )
+    assert(resAppLost.success)
+    val path = EssPathUtil.GetAppDir(conf, appId)
+    assert(!fs.exists(path))
+
+    assertInfos()
+    assert(worker1InfoMaster.memoryUsed == 0)
+    assert(worker2InfoMaster.memoryUsed == 0)
+    assert(worker3InfoMaster.memoryUsed == 0)
 
     stop(3)
   }
