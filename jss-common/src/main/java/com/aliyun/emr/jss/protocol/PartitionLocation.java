@@ -8,6 +8,7 @@ public class PartitionLocation implements Serializable
         Master, Slave
     };
 
+    private int reduceId;
     private String UUID;
     private String host;
     private int port;
@@ -15,6 +16,7 @@ public class PartitionLocation implements Serializable
     private PartitionLocation peer;
 
     public PartitionLocation(PartitionLocation loc) {
+        this.reduceId = loc.reduceId;
         this.UUID = loc.UUID;
         this.host = loc.host;
         this.port = loc.port;
@@ -22,19 +24,27 @@ public class PartitionLocation implements Serializable
         this.peer = loc.peer;
     }
 
-    public PartitionLocation(String UUID, String host, int port, Mode mode) {
-        this.UUID = UUID;
-        this.host = host;
-        this.port = port;
-        this.mode = mode;
+    public PartitionLocation(int reduceId, String UUID, String host, int port, Mode mode) {
+        this(reduceId, UUID, host, port, mode, null);
     }
 
-    public PartitionLocation(String UUID, String host, int port, Mode mode, PartitionLocation peer) {
+    public PartitionLocation(int reduceId, String UUID, String host, int port, Mode mode, PartitionLocation peer) {
+        this.reduceId = reduceId;
         this.UUID = UUID;
         this.host = host;
         this.port = port;
         this.mode = mode;
         this.peer = peer;
+    }
+
+    public int getReduceId()
+    {
+        return reduceId;
+    }
+
+    public void setReduceId(int reduceId)
+    {
+        this.reduceId = reduceId;
     }
 
     public String getUUID() {
@@ -87,16 +97,16 @@ public class PartitionLocation implements Serializable
             return false;
         }
         PartitionLocation o = (PartitionLocation) other;
-        return host.equals(o.host) && port == o.port && UUID.equals(o.UUID);
+        return reduceId == o.reduceId && host.equals(o.host) && port == o.port && UUID.equals(o.UUID);
     }
 
     @Override
     public int hashCode() {
-        return (host + port + UUID).hashCode();
+        return (reduceId + host + port + UUID).hashCode();
     }
 
     @Override
     public String toString() {
-        return UUID + " " + host + ":" + port + " " + "Mode: " + mode;
+        return reduceId + " " + UUID + " " + host + ":" + port + " " + "Mode: " + mode;
     }
 }

@@ -21,7 +21,7 @@ public class EssPathUtil
         return new Path(String.format("%s/%s/%s/", workerBaseDir(conf), appId, shuffleId));
     }
 
-    public static Path GetPartitionPath(EssConf conf, String appId, int shuffleId, String partitionId) {
-        return new Path(String.format("%s/%s/%s/%s", workerBaseDir(conf), appId, shuffleId, partitionId));
+    public static Path GetPartitionPath(EssConf conf, String appId, int shuffleId, int reduceId, String uuid) {
+        return new Path(String.format("%s/%s/%s/%s/%s", workerBaseDir(conf), appId, shuffleId, reduceId, uuid));
     }
 }

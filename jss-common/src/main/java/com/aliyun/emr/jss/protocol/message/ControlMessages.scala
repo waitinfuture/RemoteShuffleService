@@ -44,36 +44,42 @@ object ControlMessages {
   ) extends MasterMessage
 
   case class RegisterShuffleResponse(
-      success: Boolean,
+      status: StatusCode,
       partitionLocations: util.List[PartitionLocation]
   ) extends MasterMessage
 
   case class Revive(
     applicationId: String,
-    shuffleId: Int
+    shuffleId: Int,
+    reduceId: Int
   ) extends MasterMessage
 
   case class ReviveResponse(
-    success: Boolean,
-    newLocation: PartitionLocation
-  ) extends MasterMessage
-
-  case class OfferSlaveResponse(
-    success: Boolean,
-    location: PartitionLocation
+    status: StatusCode,
+    partitionLocation: PartitionLocation
   ) extends MasterMessage
 
   case class MapperEnd(
     applicationId: String,
     shuffleId: Int,
     mapId: Int,
-    attempId: Int,
-    partitionIds: util.List[String]
+    attemptId: Int,
+    partitionLocations: util.List[PartitionLocation]
   ) extends MasterMessage
 
   case class MapperEndResponse(
-    success: Boolean
+    status: StatusCode
   ) extends MasterMessage
+
+  case class GetShuffleFileGroup(
+    applicationId: String,
+    shuffleId: Int) extends MasterMessage
+
+  // util.Set[String] -> util.Set[Path.toString]
+  // Path can't be serialized
+  case class GetShuffleFileGroupResponse(
+    status: StatusCode,
+    fileGroup: util.HashMap[String, util.Set[String]]) extends MasterMessage
 
   case class WorkerLost(
     host: String,
@@ -84,20 +90,13 @@ object ControlMessages {
     success: Boolean
   ) extends MasterMessage
 
-  case class Trigger(
-    applicationId: String,
-    shuffleId: Int) extends MasterMessage
-
-  case class TriggerResponse(
-    success: Boolean) extends MasterMessage
-
   case class StageEnd(
     applicationId: String,
     shuffleId: Int
   ) extends MasterMessage
 
   case class StageEndResponse(
-    returnCode: ReturnCode,
+    status: StatusCode,
     lostFiles: util.List[String]
   ) extends MasterMessage
 
@@ -107,7 +106,7 @@ object ControlMessages {
   ) extends MasterMessage
 
   case class MasterPartitionSuicideResponse(
-    returnCode: ReturnCode
+    status: StatusCode
   ) extends MasterMessage
 
   case class UnregisterShuffle(
@@ -116,7 +115,7 @@ object ControlMessages {
   ) extends MasterMessage
 
   case class UnregisterShuffleResponse(
-    returnCode: ReturnCode
+    status: StatusCode
   ) extends MasterMessage
 
   case class ApplicationLost(
@@ -152,7 +151,7 @@ object ControlMessages {
   ) extends WorkerMessage
 
   case class ReserveBuffersResponse(
-    success: Boolean
+    status: StatusCode
   ) extends WorkerMessage
 
   case class CommitFiles(
@@ -161,7 +160,7 @@ object ControlMessages {
     mode: PartitionLocation.Mode) extends WorkerMessage
 
   case class CommitFilesResponse(
-    errorCode: ReturnCode,
+    status: StatusCode,
     failedLocations: util.List[PartitionLocation]
   ) extends WorkerMessage
 
@@ -172,7 +171,7 @@ object ControlMessages {
   ) extends WorkerMessage
 
   case class DestroyResponse(
-    returnCode: ReturnCode,
+    status: StatusCode,
     failedMasters: util.List[PartitionLocation],
     failedSlaves: util.List[PartitionLocation]
   ) extends WorkerMessage
@@ -196,14 +195,14 @@ object ControlMessages {
   ) extends Message
 
   case class SlaveLostResponse(
-    returnCode: ReturnCode,
+    status: StatusCode,
     slaveLocation: PartitionLocation
   ) extends Message
 
   // for test
   case object GetWorkerInfos extends Message
   case class GetWorkerInfosResponse(
-    success: Boolean,
+    status: StatusCode,
     workerInfos: Any
   ) extends Message
 }
@@ -221,8 +220,6 @@ object DataMessages {
   case class SendData(
     shuffleKey: String,
     partitionLocation: PartitionLocation,
-    mode: PartitionLocation.Mode,
-    flush: Boolean,
 //    data: ByteBuf
     data: Array[Byte]
   ) extends WorkerMessage
@@ -236,7 +233,7 @@ object DataMessages {
   ) extends WorkerMessage
 
   case class ReplicateDataResponse(
-    returnCode: ReturnCode,
+    status: StatusCode,
     msg: String
   ) extends WorkerMessage
 
@@ -260,7 +257,6 @@ object DataMessages {
    *  ==========================================
    */
   case class SendDataResponse(
-    success: Boolean,
-    msg: String
+    status: StatusCode
   ) extends ClientMessage
 }

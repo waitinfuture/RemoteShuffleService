@@ -6,6 +6,7 @@ import org.junit.Test;
 import scala.Tuple2;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 
@@ -19,7 +20,7 @@ public class MasterUtilSuiteJ {
         String shuffleKey = "appId-1";
 
         Map<WorkerInfo, Tuple2<List<PartitionLocation>, List<PartitionLocation>>> slots =
-                MasterUtil.offerSlots(shuffleKey, workers, 3);
+                MasterUtil.offerSlots(shuffleKey, workers, Arrays.asList(0, 1, 2));
         assert slots.size() == 3;
 
         assert slots.get(workers.get(0))._1.size() == 1;
@@ -58,7 +59,7 @@ public class MasterUtilSuiteJ {
         workers.add(new WorkerInfo("host1", 10, 1024, 12, null));
         workers.add(new WorkerInfo("host2", 11, 1024, 12, null));
         workers.add(new WorkerInfo("host3", 12, 1024, 12, null));
-        slots = MasterUtil.offerSlots(shuffleKey, workers, 4);
+        slots = MasterUtil.offerSlots(shuffleKey, workers, Arrays.asList(0, 1, 2, 3));
         assert slots.size() == 3;
         assert slots.get(workers.get(0))._1.size() == 2;
         assert slots.get(workers.get(0))._2.size() == 1;
@@ -73,25 +74,25 @@ public class MasterUtilSuiteJ {
 
         workers.clear();
         workers.add(new WorkerInfo("host1", 10, 1024, 12, null));
-        slots = MasterUtil.offerSlots(shuffleKey, workers, 1);
+        slots = MasterUtil.offerSlots(shuffleKey, workers, Arrays.asList(0));
         assert slots == null;
 
         workers.clear();
         workers.add(new WorkerInfo("host1", 10, 1024, 1025, null));
         workers.add(new WorkerInfo("host2", 10, 1024, 1025, null));
-        slots = MasterUtil.offerSlots(shuffleKey, workers, 1);
+        slots = MasterUtil.offerSlots(shuffleKey, workers, Arrays.asList(0));
         assert slots == null;
 
         workers.clear();;
         workers.add(new WorkerInfo("host1", 10, 1024, 32, null));
         workers.add(new WorkerInfo("host2", 10, 1024, 32, null));
-        slots = MasterUtil.offerSlots(shuffleKey, workers, 2);
+        slots = MasterUtil.offerSlots(shuffleKey, workers, Arrays.asList(0, 1));
         assert slots.size() == 2;
 
         workers.clear();;
         workers.add(new WorkerInfo("host1", 10, 1024, 512, null));
         workers.add(new WorkerInfo("host2", 10, 1024, 512, null));
-        slots = MasterUtil.offerSlots(shuffleKey, workers, 3);
+        slots = MasterUtil.offerSlots(shuffleKey, workers, Arrays.asList(0, 1, 2));
         assert slots == null;
     }
 }

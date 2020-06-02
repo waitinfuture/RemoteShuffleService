@@ -23,13 +23,13 @@ public class MasterUtil {
         Tuple2<List<PartitionLocation>, List<PartitionLocation>>> offerSlots(
             String shuffleKey,
             List<WorkerInfo> workers,
-            int numPartitions) {
+            List<Integer> reduceIds) {
         // master partition index
         int masterInd = 0;
         Map<WorkerInfo, Tuple2<List<PartitionLocation>, List<PartitionLocation>>> slots =
                 new HashMap<>();
         // foreach iteration, allocate both master and slave partitions
-        for(int p = 0; p < numPartitions; p++) {
+        for(int p = 0; p < reduceIds.size(); p++) {
             int nextMasterInd = masterInd;
             // try to find slot for master partition
             while (!workers.get(nextMasterInd).slotAvailable()) {
@@ -66,12 +66,14 @@ public class MasterUtil {
             Tuple2<List<PartitionLocation>, List<PartitionLocation>> locations =
                     slots.get(workers.get(nextMasterInd));
             PartitionLocation slaveLocation = new PartitionLocation(
+                reduceIds.get(p),
                 partitionId,
                 workers.get(nextSlaveInd).host(),
                 workers.get(nextSlaveInd).port(),
                 PartitionLocation.Mode.Slave
             );
             PartitionLocation masterLocation = new PartitionLocation(
+                reduceIds.get(p),
                 partitionId,
                 workers.get(nextMasterInd).host(),
                 workers.get(nextMasterInd).port(),
@@ -110,6 +112,7 @@ public class MasterUtil {
             curInd = (startInd + i) % workers.size();
             if (workers.get(curInd).slotAvailable()) {
                 PartitionLocation location = new PartitionLocation(
+                    masterLocation.getReduceId(),
                     masterLocation.getUUID(),
                     workers.get(curInd).host(),
                     workers.get(curInd).port(),

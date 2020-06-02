@@ -477,6 +477,10 @@ object Utils extends Logging {
   }
 
   def makeShuffleKey(applicationId: String, shuffleId: Int): String = {
-    s"${applicationId}-${shuffleId}"
+    s"$applicationId-$shuffleId"
+  }
+
+  def makePartitionKey(applicationId: String, shuffleId: Int, reduceId: Int): String = {
+    s"$applicationId-$shuffleId-$reduceId"
   }
 }

@@ -22,7 +22,6 @@ import java.util.concurrent.TimeUnit
 
 import scala.collection.JavaConversions._
 import scala.util.control.Breaks._
-
 import com.aliyun.emr.jss.common.EssConf
 import com.aliyun.emr.jss.common.internal.Logging
 import com.aliyun.emr.jss.common.rpc._
@@ -30,7 +29,7 @@ import com.aliyun.emr.jss.common.util.{ThreadUtils, Utils}
 import com.aliyun.emr.jss.protocol.{PartitionLocation, RpcNameConstants}
 import com.aliyun.emr.jss.protocol.message.ControlMessages._
 import com.aliyun.emr.jss.protocol.message.DataMessages._
-import com.aliyun.emr.jss.protocol.message.ReturnCode
+import com.aliyun.emr.jss.protocol.message.StatusCode
 import com.aliyun.emr.jss.service.deploy.common.EssPathUtil
 
 private[deploy] class Worker(
@@ -102,39 +101,48 @@ private[deploy] class Worker(
   override def receive: PartialFunction[Any, Unit] = {
     case SendHeartbeat =>
       masterEndpoint.send(HeartbeatFromWorker(host, port))
+
     case SlaveLost(shuffleKey, masterLocation, slaveLocation) =>
-      logInfo(s"received SlaveLost ${shuffleKey}, ${masterLocation}, ${slaveLocation}")
+      logInfo(s"received one way SlaveLost request, $shuffleKey, $masterLocation, $slaveLocation")
       handleSlaveLost(null, shuffleKey, masterLocation, slaveLocation)
   }
 
   override def receiveAndReply(context: RpcCallContext): PartialFunction[Any, Unit] = {
     case ReserveBuffers(shuffleKey, masterLocations, slaveLocations) =>
-      logInfo("receive ReserveBuffers request," +
-        s"${shuffleKey}, ${masterLocations}, ${slaveLocations}")
+      logInfo("received ReserveBuffers request," +
+        s"$shuffleKey, $masterLocations, $slaveLocations")
       handleReserveBuffers(context, shuffleKey, masterLocations, slaveLocations)
+
     case CommitFiles(shuffleKey, commitLocations, mode) =>
-      logInfo(s"receive CommitFiles request, ${shuffleKey}, ${mode}")
+      logInfo(s"receive CommitFiles request, $shuffleKey, $mode")
       handleCommitFiles(context, shuffleKey, commitLocations, mode)
+
     case Destroy(shuffleKey, masterLocations, slaveLocations) =>
-      logInfo(s"receive Destroy request, ${shuffleKey} ${masterLocations} ${slaveLocations}")
+      logInfo(s"received Destroy request, $shuffleKey $masterLocations $slaveLocations")
       handleDestroy(context, shuffleKey, masterLocations, slaveLocations)
-    case SendData(shuffleKey, partitionLocation, mode, flush, data) =>
-      logInfo(s"Worker ${host}:${port} receive SendData request, ${mode}, ${shuffleKey}, ${partitionLocation.getUUID}")
-      handleSendData(context, shuffleKey, partitionLocation, mode, flush, data)
+
+    case SendData(shuffleKey, partitionLocation, data) =>
+      logInfo(s"Worker $host:$port received SendData request, $shuffleKey, $partitionLocation")
+      handleSendData(context, shuffleKey, partitionLocation, data)
+
     case ReplicateData(shuffleKey, partitionLocation, working, masterData, slaveData) =>
       logInfo(s"received ReplicateData request, ${shuffleKey}, ${partitionLocation}")
       handleReplicateData(context, shuffleKey, partitionLocation, working, masterData, slaveData)
+
     case GetWorkerInfos =>
       logInfo("received GetWorkerInfos request")
       handleGetWorkerInfos(context)
+
     case GetDoubleChunkInfo(shuffleKey, mode, partitionLocation) =>
       logInfo("received GetDoubleChunkInfo request")
       handleGetDoubleChunkInfo(context, shuffleKey, mode, partitionLocation)
+
     case SlaveLost(shuffleKey, masterLocation, slaveLocation) =>
-      logInfo(s"received SlaveLost ${shuffleKey}, ${masterLocation}, ${slaveLocation}")
+      logInfo(s"received SlaveLost request, $shuffleKey, $masterLocation, $slaveLocation")
       handleSlaveLost(context, shuffleKey, masterLocation, slaveLocation)
+
     case GetShuffleStatus(shuffleKey) =>
-      logInfo(s"received GetShuffleStatus request, ${shuffleKey}")
+      logInfo(s"received GetShuffleStatus request, $shuffleKey")
       handleGetShuffleStatus(context, shuffleKey)
   }
 
@@ -160,6 +168,7 @@ private[deploy] class Worker(
                   EssPathUtil.GetPartitionPath(conf,
                     shuffleKey.split("-").dropRight(1).mkString("-"),
                     shuffleKey.split("-").last.toInt,
+                    masterLocations.get(ind).getReduceId,
                     masterLocations.get(ind).getUUID)
                 )
               )
@@ -172,7 +181,7 @@ private[deploy] class Worker(
       logInfo("not all master partition satisfied, return chunks")
       masterDoubleChunks.foreach(entry =>
         entry.asInstanceOf[PartitionLocationWithDoubleChunks].getDoubleChunk.returnChunks())
-      context.reply(ReserveBuffersResponse(false))
+      context.reply(ReserveBuffersResponse(StatusCode.ReserveBufferFailed))
       return
     }
     val slaveDoubleChunks = new util.ArrayList[PartitionLocation]()
@@ -193,6 +202,7 @@ private[deploy] class Worker(
                   EssPathUtil.GetPartitionPath(conf,
                     shuffleKey.split("-").dropRight(1).mkString("-"),
                     shuffleKey.split("-").last.toInt,
+                    slaveLocations.get(ind).getReduceId,
                     slaveLocations.get(ind).getUUID)
                 )
               )
@@ -207,7 +217,7 @@ private[deploy] class Worker(
         entry.asInstanceOf[PartitionLocationWithDoubleChunks].getDoubleChunk.returnChunks())
       slaveDoubleChunks.foreach(entry =>
         entry.asInstanceOf[PartitionLocationWithDoubleChunks].getDoubleChunk.returnChunks())
-      context.reply(ReserveBuffersResponse(false))
+      context.reply(ReserveBuffersResponse(StatusCode.ReserveBufferFailed))
       return
     }
     // reserve success, update status
@@ -215,7 +225,7 @@ private[deploy] class Worker(
       workerInfo.addMasterPartition(shuffleKey, masterDoubleChunks)
       workerInfo.addSlavePartition(shuffleKey, slaveDoubleChunks)
     }
-    context.reply(ReserveBuffersResponse(true))
+    context.reply(ReserveBuffersResponse(StatusCode.Success))
   }
 
   private def handleCommitFiles(context: RpcCallContext,
@@ -226,13 +236,13 @@ private[deploy] class Worker(
     if (mode == PartitionLocation.Mode.Master) {
       if (!workerInfo.masterPartitionLocations.containsKey(shuffleKey)) {
         logError(s"shuffle ${shuffleKey} doesn't exist!")
-        context.reply(CommitFilesResponse(ReturnCode.ShuffleNotRegistered, commitLocations))
+        context.reply(CommitFilesResponse(StatusCode.ShuffleNotRegistered, commitLocations))
         return
       }
     } else {
       if (!workerInfo.slavePartitionLocations.containsKey(shuffleKey)) {
         logError(s"shuffle ${shuffleKey} doesn't exist!")
-        context.reply(CommitFilesResponse(ReturnCode.ShuffleNotRegistered, commitLocations))
+        context.reply(CommitFilesResponse(StatusCode.ShuffleNotRegistered, commitLocations))
         return
       }
     }
@@ -260,10 +270,10 @@ private[deploy] class Worker(
 
     // reply
     if (failedLocations.isEmpty) {
-      context.reply(CommitFilesResponse(ReturnCode.Success, null))
+      context.reply(CommitFilesResponse(StatusCode.Success, null))
     } else {
       logInfo("CommitFiles success!")
-      context.reply(CommitFilesResponse(ReturnCode.PartialSuccess, failedLocations))
+      context.reply(CommitFilesResponse(StatusCode.PartialSuccess, failedLocations))
     }
   }
 
@@ -274,9 +284,9 @@ private[deploy] class Worker(
     // check whether shuffleKey has registered
     if (!workerInfo.masterPartitionLocations.containsKey(shuffleKey) &&
       !workerInfo.slavePartitionLocations.containsKey(shuffleKey)) {
-      logError(s"shuffle ${shuffleKey} doesn't exist!")
+      logError(s"shuffle $shuffleKey not registered!")
       context.reply(DestroyResponse(
-        ReturnCode.ShuffleNotRegistered, masterLocations, slaveLocations))
+        StatusCode.ShuffleNotRegistered, masterLocations, slaveLocations))
       return
     }
 
@@ -318,75 +328,77 @@ private[deploy] class Worker(
     // reply
     if (failedMasters.isEmpty && failedSlaves.isEmpty) {
       logInfo("finished handle destroy")
-      context.reply(DestroyResponse(ReturnCode.Success, null, null))
+      context.reply(DestroyResponse(StatusCode.Success, null, null))
     } else {
-      context.reply(DestroyResponse(ReturnCode.PartialSuccess, failedMasters, failedSlaves))
+      context.reply(DestroyResponse(StatusCode.PartialSuccess, failedMasters, failedSlaves))
     }
   }
 
-  private def handleSendData(
-    context: RpcCallContext,
+  private def handleSendData(context: RpcCallContext,
     shuffleKey: String,
     partitionLocation: PartitionLocation,
-    mode: PartitionLocation.Mode,
-    flush: Boolean,
     //    data: ByteBuf): Unit = {
     data: Array[Byte]): Unit = {
     // find DoubleChunk responsible for the data
-    val shufflelocations = if (mode == PartitionLocation.Mode.Master) {
-      workerInfo.masterPartitionLocations.get(shuffleKey)
-    } else {
-      workerInfo.slavePartitionLocations.get(shuffleKey)
+    val shuffleLocations = partitionLocation.getMode match {
+      case PartitionLocation.Mode.Master => workerInfo.masterPartitionLocations.get(shuffleKey)
+      case PartitionLocation.Mode.Slave => workerInfo.slavePartitionLocations.get(shuffleKey)
     }
-    if (shufflelocations == null) {
-      val msg = "shuffle shufflelocations not found!"
-      logError(msg)
-      context.reply(SendDataResponse(false, msg))
+
+    if (shuffleLocations == null) {
+      logError(s"Can't find shuffleLocations with $shuffleKey!")
+      context.reply(SendDataResponse(StatusCode.ShuffleNotRegistered))
       return
     }
-    val location = shufflelocations.get(partitionLocation)
+
+    val location = shuffleLocations.get(partitionLocation)
     if (location == null) {
-      val msg = "Partition Location not found!"
-      logError(msg)
-      context.reply(SendDataResponse(false, msg))
+      logError(s"Can't find target partitionLocation $partitionLocation")
+      partitionLocation.getMode match {
+        case PartitionLocation.Mode.Master =>
+          context.reply(SendDataResponse(StatusCode.MasterPartitionNotFound))
+
+        case PartitionLocation.Mode.Slave =>
+          context.reply(SendDataResponse(StatusCode.SlavePartitionNotFound))
+      }
       return
     }
+
+    val flush = partitionLocation.getMode == PartitionLocation.Mode.Master
     val doubleChunk = location.asInstanceOf[PartitionLocationWithDoubleChunks].getDoubleChunk
 
     // append data
     val appended = doubleChunk.append(data, flush)
     if (!appended) {
-      val msg = "append data failed!"
-      logError(msg)
-      context.reply(SendDataResponse(false, msg))
+      logError(s"Append data to target partitionLocation $partitionLocation failed!")
+      context.reply(SendDataResponse(StatusCode.Failed))
       return
     }
 
     // for master, send data to slave
-    if (mode == PartitionLocation.Mode.Master) {
-      logInfo("replicating data to slave")
+    if (partitionLocation.getMode == PartitionLocation.Mode.Master) {
       val peer = location.getPeer
+      logInfo(s"Replicating data to slave partitionLocation $peer")
       val slaveEndpoint = getOrCreateEndpoint(peer.getHost, peer.getPort)
       var res = slaveEndpoint.askSync[SendDataResponse](
-        SendData(shuffleKey, peer, PartitionLocation.Mode.Slave, false, data)
+        SendData(shuffleKey, peer, data)
       )
-      if (!res.success) {
+      if (!res.status.equals(StatusCode.Success)) {
         // retry once
         res = slaveEndpoint.askSync[SendDataResponse](
-          SendData(shuffleKey, peer, PartitionLocation.Mode.Slave, false, data)
+          SendData(shuffleKey, peer, data)
         )
       }
-      if (res.success) {
-        context.reply(SendDataResponse(true, null))
+      if (res.status.equals(StatusCode.Success)) {
+        context.reply(SendDataResponse(StatusCode.Success))
       } else {
-        val msg = s"send data to slave failed! ${res.msg}"
-        logError(msg)
+        logError(s"Replicate data to slave partitionLocation $peer failed!")
         // send SlaveLost to self
         self.send(SlaveLost(shuffleKey, location, peer))
-        context.reply(SendDataResponse(false, msg))
+        context.reply(SendDataResponse(StatusCode.Failed))
       }
     } else {
-      context.reply(SendDataResponse(true, null))
+      context.reply(SendDataResponse(StatusCode.Success))
     }
   }
 
@@ -396,21 +408,21 @@ private[deploy] class Worker(
     if (!workerInfo.slavePartitionLocations.contains(shuffleKey)) {
       val msg = s"shuffleKey ${shuffleKey} Not Found!"
       logError(msg)
-      context.reply(ReplicateDataResponse(ReturnCode.ShuffleNotRegistered, msg))
+      context.reply(ReplicateDataResponse(StatusCode.ShuffleNotRegistered, msg))
       return
     }
     val partition = workerInfo.slavePartitionLocations.get(shuffleKey).get(partitionLocation)
     if (partition == null) {
       val msg = s"partition ${partitionLocation} not found!"
       logError(msg)
-      context.reply(ReplicateDataResponse(ReturnCode.PartitionNotFound, msg))
+      context.reply(ReplicateDataResponse(StatusCode.PartitionNotFound, msg))
       return
     }
     val doubleChunk = partition.asInstanceOf[PartitionLocationWithDoubleChunks].getDoubleChunk
     doubleChunk.synchronized {
       doubleChunk.initWithData(working, masterData, slaveData)
     }
-    context.reply(ReplicateDataResponse(ReturnCode.Success, null))
+    context.reply(ReplicateDataResponse(StatusCode.Success, null))
   }
 
   private def handleSlaveLost(context: RpcCallContext, shuffleKey: String,
@@ -422,7 +434,7 @@ private[deploy] class Worker(
       SlaveLost(shuffleKey, masterLocation, slaveLocation)
     )
     // if Master doesn't know me, remove master location
-    if (res.returnCode == ReturnCode.MasterPartitionNotFound) {
+    if (res.status == StatusCode.MasterPartitionNotFound) {
       logError("Master doesn't know me, remove myself")
       val master = workerInfo.masterPartitionLocations.get(shuffleKey).get(masterLocation)
         .asInstanceOf[PartitionLocationWithDoubleChunks]
@@ -434,8 +446,8 @@ private[deploy] class Worker(
       return
     }
     // if Master offer slave failed, flush and destroy self
-    if (res.returnCode != ReturnCode.Success) {
-      logError(s"Master process SlaveLost failed! ${res.returnCode}," +
+    if (res.status != StatusCode.Success) {
+      logError(s"Master process SlaveLost failed! ${res.status}," +
         " flush and destroy master location")
       // remove master location
       val loc = workerInfo.masterPartitionLocations.get(shuffleKey).get(masterLocation)
@@ -476,21 +488,21 @@ private[deploy] class Worker(
           doubleChunk.getMasterData,
           doubleChunk.getSlaveData)
       )
-      if (res.returnCode != ReturnCode.Success) {
+      if (res.status != StatusCode.Success) {
         logError(s"Replicate data failed! ${res.msg}")
         self.send(SlaveLost(shuffleKey, masterLocation, slaveLocation))
       }
     }
     logInfo("handle SlaveLost success")
     if (context != null) {
-      context.reply(SlaveLostResponse(ReturnCode.Success, slaveLocation))
+      context.reply(SlaveLostResponse(StatusCode.Success, slaveLocation))
     }
   }
 
   private def handleGetWorkerInfos(context: RpcCallContext): Unit = {
     val list = new util.ArrayList[WorkerInfo]()
     list.add(workerInfo)
-    context.reply(GetWorkerInfosResponse(true, list))
+    context.reply(GetWorkerInfosResponse(StatusCode.Success, list))
   }
 
   private def handleGetDoubleChunkInfo(context: RpcCallContext,

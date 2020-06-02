@@ -1,16 +1,21 @@
 package com.aliyun.emr.jss.protocol.message;
 
-public enum ReturnCode {
+public enum StatusCode
+{
+    // 1/0 Status
     Success,
     PartialSuccess,
+    Failed,
+
+    // Specific Status
+    ShuffleAlreadyRegistered,
     ShuffleNotRegistered,
-    WorkerNotFound,
-    SlotNotAvailable,
     ReserveBufferFailed,
+    SlotNotAvailable,
+    WorkerNotFound,
     PartitionNotFound,
     MasterPartitionNotFound,
     SlavePartitionNotFound,
     DeleteFilesFailed,
     PartitionExists,
-    Failed
 }

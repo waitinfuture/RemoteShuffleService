@@ -3,15 +3,15 @@ package com.aliyun.emr.jss.service.deploy
 import java.util
 
 import scala.collection.JavaConversions._
+import scala.collection.JavaConverters._
 import scala.util.Random
-
 import com.aliyun.emr.jss.common.rpc.{RpcAddress, RpcEndpointRef, RpcEnv}
 import com.aliyun.emr.jss.common.util.Utils
 import com.aliyun.emr.jss.common.EssConf
 import com.aliyun.emr.jss.protocol.{PartitionLocation, RpcNameConstants}
 import com.aliyun.emr.jss.protocol.message.ControlMessages._
 import com.aliyun.emr.jss.protocol.message.DataMessages.{GetDoubleChunkInfo, GetDoubleChunkInfoResponse, SendData, SendDataResponse}
-import com.aliyun.emr.jss.protocol.message.ReturnCode
+import com.aliyun.emr.jss.protocol.message.StatusCode
 import com.aliyun.emr.jss.service.deploy.common.EssPathUtil
 import com.aliyun.emr.jss.service.deploy.master.{Master, MasterArguments}
 import com.aliyun.emr.jss.service.deploy.worker._
@@ -262,13 +262,14 @@ class MessageHandlerSuite
     })
   }
 
-  def getFileLengh(shuffleKey: String, name: String): Long = {
+  def getFileLengh(shuffleKey: String, reduceId: Int, name: String): Long = {
     val appId = shuffleKey.split("-").dropRight(1).mkString("-")
     val shuffleId = shuffleKey.split("-").last
     val file = new Path(String.format("%s/%s",
-      s"hdfs://11.158.199.162:9000/tmp/ess-test/${appId}/${shuffleId}/",
+      s"hdfs://11.158.199.162:9000/tmp/ess-test/$appId/$shuffleId/$reduceId/",
       name))
     if (!fs.exists(file)) {
+      println(s"file $file does not exists")
       0
     } else {
       val status = fs.getFileStatus(file)
@@ -278,7 +279,7 @@ class MessageHandlerSuite
 
   def assertFileLength(shuffleKey: String, locations: util.List[PartitionLocation], size: Int): Unit = {
     locations.foreach(loc => {
-      assert(getFileLengh(shuffleKey, loc.getUUID).toInt == size)
+      assert(getFileLengh(shuffleKey, loc.getReduceId, loc.getUUID).toInt == size)
     })
   }
 
@@ -313,7 +314,7 @@ class MessageHandlerSuite
         10
       )
     )
-    assert(res.success)
+    assert(res.status.equals(StatusCode.Success))
     val partitionLocations = res.partitionLocations
     assert(partitionLocations.size() == 10)
     partitionLocations.foreach(p => {
@@ -321,6 +322,10 @@ class MessageHandlerSuite
       assert(p.getPeer != null)
       assert(p.getPeer.getMode == PartitionLocation.Mode.Slave)
     })
+
+    assertResult((0 until 10).toList) {
+      partitionLocations.map(_.getReduceId).sorted.toList
+    }
 
     stop()
   }
@@ -336,9 +341,9 @@ class MessageHandlerSuite
         10
       )
     )
-    // Master
+    // Master WorkerInfos
     var res = master.askSync[GetWorkerInfosResponse](GetWorkerInfos)
-    assert(res.success)
+    assert(res.status.equals(StatusCode.Success))
     val workerInfos = res.workerInfos.asInstanceOf[util.List[WorkerInfo]]
     assert(workerInfos.length == 2)
     assert(workerInfos(0).memoryUsed == 128 * 10)
@@ -357,9 +362,23 @@ class MessageHandlerSuite
     assert(workerInfos.get(1).slavePartitionLocations.contains("appId-1"))
     assert(workerInfos.get(1).slavePartitionLocations.get("appId-1").size() == 5)
 
-    // Worker
+    // assert master location reduceId
+    assertResult((0 until 10).toList) {
+      workerInfos.flatMap(w => {
+        w.masterPartitionLocations.get("appId-1").keySet()
+      }).map(_.getReduceId).sorted.toList
+    }
+
+    // assert slave location reduceId
+    assertResult((0 until 10).toList) {
+      workerInfos.flatMap(w => {
+        w.slavePartitionLocations.get("appId-1").keySet()
+      }).map(_.getReduceId).sorted.toList
+    }
+
+    // Worker WorkerInfos
     res = worker1.askSync[GetWorkerInfosResponse](GetWorkerInfos)
-    assert(res.success)
+    assert(res.status.equals(StatusCode.Success))
     assert(res.workerInfos.asInstanceOf[util.List[WorkerInfo]].size() == 1)
     val worker = res.workerInfos.asInstanceOf[util.List[WorkerInfo]].get(0)
     assert(worker.memoryUsed == 1280)
@@ -369,9 +388,6 @@ class MessageHandlerSuite
     assert(worker.slavePartitionLocations.contains("appId-1"))
     assert(worker.masterPartitionLocations.get("appId-1").size() == 5)
     assert(worker.slavePartitionLocations.get("appId-1").size() == 5)
-    val partitionLocationWithDoubleChunks =
-      worker.masterPartitionLocations.get("appId-1").valuesIterator.next()
-        .asInstanceOf[PartitionLocationWithDoubleChunks]
 
     stop()
   }
@@ -384,8 +400,8 @@ class MessageHandlerSuite
     val shuffleKey = Utils.makeShuffleKey(appId, shuffleId)
     val resReg = master.askSync[RegisterShuffleResponse](
       RegisterShuffle(
-        "appId",
-        1,
+        appId,
+        shuffleId,
         10,
         10
       )
@@ -398,91 +414,85 @@ class MessageHandlerSuite
     val sendDataMsg1 = SendData(
       shuffleKey,
       worker1Location,
-      PartitionLocation.Mode.Master,
-      true,
       bytes
     )
     var res = worker1.askSync[SendDataResponse](sendDataMsg1)
-    assert(res.success)
+    assert(res.status.equals(StatusCode.Success))
     res = worker1.askSync[SendDataResponse](sendDataMsg1)
-    assert(res.success)
+    assert(res.status.equals(StatusCode.Success))
     waitUntilDataFinishFlushing(worker1, shuffleKey)
-    assert(getFileLengh(shuffleKey, worker1Location.getUUID) == 0)
+    assert(getFileLengh(shuffleKey, worker1Location.getReduceId, worker1Location.getUUID) == 0)
     res = worker1.askSync[SendDataResponse](sendDataMsg1)
-    assert(res.success)
+    assert(res.status.equals(StatusCode.Success))
     waitUntilDataFinishFlushing(worker1, shuffleKey)
-    assert(getFileLengh(shuffleKey, worker1Location.getUUID) == 128)
+    assert(getFileLengh(shuffleKey, worker1Location.getReduceId, worker1Location.getUUID) == 128)
     res = worker1.askSync[SendDataResponse](sendDataMsg1)
-    assert(res.success)
+    assert(res.status.equals(StatusCode.Success))
     waitUntilDataFinishFlushing(worker1, shuffleKey)
-    assert(getFileLengh(shuffleKey, worker1Location.getUUID) == 128)
+    assert(getFileLengh(shuffleKey, worker1Location.getReduceId, worker1Location.getUUID) == 128)
     res = worker1.askSync[SendDataResponse](sendDataMsg1)
-    assert(res.success)
+    assert(res.status.equals(StatusCode.Success))
     waitUntilDataFinishFlushing(worker1, shuffleKey)
-    assert(getFileLengh(shuffleKey, worker1Location.getUUID) == 256)
+    assert(getFileLengh(shuffleKey, worker1Location.getReduceId, worker1Location.getUUID) == 256)
 
     val worker2Location = partitionLocations.filter(p => p.getPort == port2).toList(0)
-    assert(getFileLengh(shuffleKey, worker2Location.getUUID) == 0)
+    assert(getFileLengh(shuffleKey, worker2Location.getReduceId, worker2Location.getUUID) == 0)
     val sendDataMsg2 = SendData(
       "appId-1",
       worker2Location,
-      PartitionLocation.Mode.Master,
-      true,
       bytes
     )
     res = worker2.askSync[SendDataResponse](sendDataMsg2)
-    assert(res.success)
+    assert(res.status.equals(StatusCode.Success))
     waitUntilDataFinishFlushing(worker2, shuffleKey)
-    assert(getFileLengh(shuffleKey, worker2Location.getUUID) == 0)
+    assert(getFileLengh(shuffleKey, worker2Location.getReduceId, worker2Location.getUUID) == 0)
     res = worker2.askSync[SendDataResponse](sendDataMsg2)
-    assert(res.success)
+    assert(res.status.equals(StatusCode.Success))
     waitUntilDataFinishFlushing(worker2, shuffleKey)
-    assert(getFileLengh(shuffleKey, worker2Location.getUUID) == 0)
+    assert(getFileLengh(shuffleKey, worker2Location.getReduceId, worker2Location.getUUID) == 0)
     res = worker2.askSync[SendDataResponse](sendDataMsg2)
-    assert(res.success)
+    assert(res.status.equals(StatusCode.Success))
     waitUntilDataFinishFlushing(worker2, shuffleKey)
-    assert(getFileLengh(shuffleKey, worker2Location.getUUID) == 128)
+    assert(getFileLengh(shuffleKey, worker2Location.getReduceId, worker2Location.getUUID) == 128)
     res = worker2.askSync[SendDataResponse](sendDataMsg2)
-    assert(res.success)
+    assert(res.status.equals(StatusCode.Success))
     waitUntilDataFinishFlushing(worker2, shuffleKey)
-    assert(getFileLengh(shuffleKey, worker2Location.getUUID) == 128)
+    assert(getFileLengh(shuffleKey, worker2Location.getReduceId, worker2Location.getUUID) == 128)
     res = worker2.askSync[SendDataResponse](sendDataMsg2)
-    assert(res.success)
+    assert(res.status.equals(StatusCode.Success))
     waitUntilDataFinishFlushing(worker2, shuffleKey)
-    assert(getFileLengh(shuffleKey, worker2Location.getUUID) == 256)
+    assert(getFileLengh(shuffleKey, worker2Location.getReduceId, worker2Location.getUUID) == 256)
 
     val worker2Location2 = partitionLocations.filter(p => p.getPort == port2).toList(1)
-    assert(getFileLengh(shuffleKey, worker2Location2.getUUID) == 0)
+    assert(getFileLengh(shuffleKey, worker2Location.getReduceId, worker2Location2.getUUID) == 0)
     val sendDataMsg3 = SendData(
       "appId-1",
       worker2Location2,
-      PartitionLocation.Mode.Master,
-      true,
       bytes
     )
     res = worker2.askSync[SendDataResponse](sendDataMsg3)
-    assert(res.success)
+    assert(res.status.equals(StatusCode.Success))
     waitUntilDataFinishFlushing(worker2, shuffleKey)
-    assert(getFileLengh(shuffleKey, worker2Location2.getUUID) == 0)
+    assert(getFileLengh(shuffleKey, worker2Location2.getReduceId, worker2Location2.getUUID) == 0)
     res = worker2.askSync[SendDataResponse](sendDataMsg3)
-    assert(res.success)
+    assert(res.status.equals(StatusCode.Success))
     waitUntilDataFinishFlushing(worker2, shuffleKey)
-    assert(getFileLengh(shuffleKey, worker2Location2.getUUID) == 0)
+    assert(getFileLengh(shuffleKey, worker2Location2.getReduceId, worker2Location2.getUUID) == 0)
     res = worker2.askSync[SendDataResponse](sendDataMsg3)
-    assert(res.success)
+    assert(res.status.equals(StatusCode.Success))
     waitUntilDataFinishFlushing(worker2, shuffleKey)
-    assert(getFileLengh(shuffleKey, worker2Location2.getUUID) == 128)
+    assert(getFileLengh(shuffleKey, worker2Location2.getReduceId, worker2Location2.getUUID) == 128)
     res = worker2.askSync[SendDataResponse](sendDataMsg3)
-    assert(res.success)
+    assert(res.status.equals(StatusCode.Success))
     waitUntilDataFinishFlushing(worker2, shuffleKey)
-    assert(getFileLengh(shuffleKey, worker2Location2.getUUID) == 128)
+    assert(getFileLengh(shuffleKey, worker2Location2.getReduceId, worker2Location2.getUUID) == 128)
     res = worker2.askSync[SendDataResponse](sendDataMsg3)
-    assert(res.success)
+    assert(res.status.equals(StatusCode.Success))
     waitUntilDataFinishFlushing(worker2, shuffleKey)
-    assert(getFileLengh(shuffleKey, worker2Location2.getUUID) == 256)
+    assert(getFileLengh(shuffleKey, worker2Location2.getReduceId, worker2Location2.getUUID) == 256)
 
     val res2 = worker2.askSync[GetWorkerInfosResponse](GetWorkerInfos)
-    assert(res2.success)
+    assert(res2.status.equals(StatusCode.Success))
     val workerInfos = res2.workerInfos.asInstanceOf[util.List[WorkerInfo]]
     assert(workerInfos.length == 1)
     val worker = workerInfos.get(0)
@@ -504,22 +514,91 @@ class MessageHandlerSuite
       RegisterShuffle(
         "appId",
         1,
-        10,
+        3,
         10
       )
     )
     val partitionLocations = resReg.partitionLocations
 
-    val res = master.askSync[MapperEndResponse](
+    val mapper1Locations = Random.shuffle(partitionLocations.asScala).take(3)
+    val mapper2Locations = Random.shuffle(partitionLocations.asScala).take(4)
+    val mapper3Locations = Random.shuffle(partitionLocations.asScala).take(5)
+
+    var res = master.askSync[MapperEndResponse](
       MapperEnd(
         "appId",
         1,
         0,
-        1,
-        partitionLocations.map(_.getUUID)
+        0,
+        mapper1Locations
       )
     )
-    assert(res.success)
+    assert(res.status.equals(StatusCode.Success))
+    var groupRes = master.askSync[GetShuffleFileGroupResponse](
+      GetShuffleFileGroup("appId", 1)
+    )
+    assert(groupRes.status.equals(StatusCode.Success))
+    val orderKeys1: Array[String] = mapper1Locations.map(l => Utils.makePartitionKey("appId", 1, l.getReduceId)).sorted.toArray
+    val orderValues1: Array[String] = mapper1Locations.map(l => EssPathUtil.GetPartitionPath(conf, "appId", 1, l.getReduceId, l.getUUID).toString).sorted.toArray
+    assertResult(orderKeys1) {
+      groupRes.fileGroup.keySet().asScala.toArray.sorted
+    }
+    assertResult(orderValues1) {
+      groupRes.fileGroup.values().flatten.toArray.sorted
+    }
+
+    res = master.askSync[MapperEndResponse](
+      MapperEnd(
+        "appId",
+        1,
+        1,
+        0,
+        mapper2Locations
+      )
+    )
+    assert(res.status.equals(StatusCode.Success))
+    groupRes = master.askSync[GetShuffleFileGroupResponse](
+      GetShuffleFileGroup("appId", 1)
+    )
+    assert(groupRes.status.equals(StatusCode.Success))
+    val orderKeys2: Array[String] = (mapper1Locations ++ mapper2Locations)
+      .distinct.map(l => Utils.makePartitionKey("appId", 1, l.getReduceId))
+      .sorted.toArray
+    val orderValues2: Array[String] = (mapper1Locations ++ mapper2Locations)
+      .distinct.map(l => EssPathUtil.GetPartitionPath(conf, "appId", 1, l.getReduceId, l.getUUID).toString)
+      .sorted.toArray
+    assertResult(orderKeys2) {
+      groupRes.fileGroup.keySet().asScala.toArray.sorted
+    }
+    assertResult(orderValues2) {
+      groupRes.fileGroup.values().flatten.toArray.sorted
+    }
+
+    res = master.askSync[MapperEndResponse](
+      MapperEnd(
+        "appId",
+        1,
+        2,
+        0,
+        mapper3Locations
+      )
+    )
+    assert(res.status.equals(StatusCode.Success))
+    groupRes = master.askSync[GetShuffleFileGroupResponse](
+      GetShuffleFileGroup("appId", 1)
+    )
+    assert(groupRes.status.equals(StatusCode.Success))
+    val orderKeys3: Array[String] = (mapper1Locations ++ mapper2Locations ++ mapper3Locations)
+      .distinct.map(l => Utils.makePartitionKey("appId", 1, l.getReduceId))
+      .sorted.toArray
+    val orderValues3: Array[String] = (mapper1Locations ++ mapper2Locations ++ mapper3Locations)
+      .distinct.map(l => EssPathUtil.GetPartitionPath(conf, "appId", 1, l.getReduceId, l.getUUID).toString).sorted.toArray
+    assertResult(orderKeys3) {
+      groupRes.fileGroup.keySet().asScala.toArray.sorted
+    }
+    assertResult(orderValues3) {
+      groupRes.fileGroup.values().flatten.toArray.sorted
+    }
 
     stop()
   }
@@ -539,7 +618,7 @@ class MessageHandlerSuite
       )
     )
 
-    assert(res.success)
+    assert(res.status.equals(StatusCode.Success))
     val partitionLocations = res.partitionLocations
     assert(partitionLocations.size() == 6)
     partitionLocations.foreach(p => {
@@ -549,7 +628,7 @@ class MessageHandlerSuite
     })
 
     var res1 = worker1.askSync[GetWorkerInfosResponse](GetWorkerInfos)
-    assert(res1.success)
+    assert(res1.status.equals(StatusCode.Success))
     var workerInfos = res1.workerInfos.asInstanceOf[util.List[WorkerInfo]]
     assert(workerInfos.size() == 1)
     var workerInfo = workerInfos.get(0)
@@ -560,10 +639,10 @@ class MessageHandlerSuite
         workerInfo.masterPartitionLocations.get(shuffleKey).keySet().toList,
         workerInfo.slavePartitionLocations.get(shuffleKey).keySet().toList)
     )
-    assert(res2.returnCode == ReturnCode.Success)
+    assert(res2.status == StatusCode.Success)
 
     res1 = worker1.askSync[GetWorkerInfosResponse](GetWorkerInfos)
-    assert(res1.success)
+    assert(res1.status.equals(StatusCode.Success))
     workerInfos = res1.workerInfos.asInstanceOf[util.List[WorkerInfo]]
     assert(workerInfos.size() == 1)
     workerInfo = workerInfos.get(0)
@@ -572,7 +651,7 @@ class MessageHandlerSuite
     assert(workerInfo.memoryUsed == 0)
 
     res1 = worker2.askSync[GetWorkerInfosResponse](GetWorkerInfos)
-    assert(res1.success)
+    assert(res1.status.equals(StatusCode.Success))
     workerInfos = res1.workerInfos.asInstanceOf[util.List[WorkerInfo]]
     workerInfo = workerInfos.get(0)
     assert(workerInfo.masterPartitionLocations.get(shuffleKey).size() == 3)
@@ -582,10 +661,10 @@ class MessageHandlerSuite
         workerInfo.masterPartitionLocations.get(shuffleKey).keySet().toList,
         workerInfo.slavePartitionLocations.get(shuffleKey).keySet().toList)
     )
-    assert(res2.returnCode == ReturnCode.Success)
+    assert(res2.status == StatusCode.Success)
 
     res1 = worker2.askSync[GetWorkerInfosResponse](GetWorkerInfos)
-    assert(res1.success)
+    assert(res1.status.equals(StatusCode.Success))
     workerInfos = res1.workerInfos.asInstanceOf[util.List[WorkerInfo]]
     workerInfo = workerInfos.get(0)
     assert(workerInfo.masterPartitionLocations.get(shuffleKey) == null)
@@ -609,7 +688,7 @@ class MessageHandlerSuite
       )
     )
 
-    assert(res.success)
+    assert(res.status.equals(StatusCode.Success))
     val partitionLocations = res.partitionLocations
     assert(partitionLocations.size() == 6)
     partitionLocations.foreach(p => {
@@ -619,7 +698,7 @@ class MessageHandlerSuite
     })
 
     var res1 = worker1.askSync[GetWorkerInfosResponse](GetWorkerInfos)
-    assert(res1.success)
+    assert(res1.status.equals(StatusCode.Success))
     var workerInfos = res1.workerInfos.asInstanceOf[util.List[WorkerInfo]]
     assert(workerInfos.size() == 1)
     var workerInfo = workerInfos.get(0)
@@ -630,10 +709,10 @@ class MessageHandlerSuite
         List(workerInfo.masterPartitionLocations.get(shuffleKey).keySet().head),
         List(workerInfo.slavePartitionLocations.get(shuffleKey).keySet().head))
     )
-    assert(res2.returnCode == ReturnCode.Success)
+    assert(res2.status == StatusCode.Success)
 
     res1 = worker1.askSync[GetWorkerInfosResponse](GetWorkerInfos)
-    assert(res1.success)
+    assert(res1.status.equals(StatusCode.Success))
     workerInfos = res1.workerInfos.asInstanceOf[util.List[WorkerInfo]]
     assert(workerInfos.size() == 1)
     workerInfo = workerInfos.get(0)
@@ -654,11 +733,11 @@ class MessageHandlerSuite
     val res = master.askSync[RegisterShuffleResponse](
       RegisterShuffle(applicationId, shuffleId, 10, 10)
     )
-    assert(res.success)
+    assert(res.status.equals(StatusCode.Success))
 
     // get partition info
     var res1 = worker1.askSync[GetWorkerInfosResponse](GetWorkerInfos)
-    assert(res1.success)
+    assert(res1.status.equals(StatusCode.Success))
     assert(res1.workerInfos.asInstanceOf[util.List[WorkerInfo]].size() == 1)
     var workerInfo = res1.workerInfos.asInstanceOf[util.List[WorkerInfo]].get(0)
     assert(workerInfo.memoryUsed == 128 * 10)
@@ -668,7 +747,7 @@ class MessageHandlerSuite
     var masterLocations = workerInfo.masterPartitionLocations.get(shuffleKey)
 
     res1 = worker2.askSync[GetWorkerInfosResponse](GetWorkerInfos)
-    assert(res1.success)
+    assert(res1.status.equals(StatusCode.Success))
     workerInfo = res1.workerInfos.asInstanceOf[util.List[WorkerInfo]].get(0)
     assert(workerInfo.memoryUsed == 128 * 10)
     var slaveLocations = workerInfo.slavePartitionLocations.get(shuffleKey)
@@ -684,8 +763,6 @@ class MessageHandlerSuite
         SendData(
           shuffleKey,
           lostSlave.getPeer,
-          PartitionLocation.Mode.Master,
-          true,
           data
         )
       )
@@ -754,9 +831,9 @@ class MessageHandlerSuite
         val worker = getWorker(loc)
         val data = new Array[Byte](63)
         val res = worker.askSync[SendDataResponse](
-          SendData(shuffleKey, loc, PartitionLocation.Mode.Master, true, data)
+          SendData(shuffleKey, loc, data)
         )
-        assert(res.success)
+        assert(res.status.equals(StatusCode.Success))
       })
     })
 
@@ -796,7 +873,7 @@ class MessageHandlerSuite
     val resReg = master.askSync[RegisterShuffleResponse](
       RegisterShuffle(appId, shuffleId, 10, 12)
     )
-    assert(resReg.success)
+    assert(resReg.status.equals(StatusCode.Success))
 
     // check worker info
     assertInfos()
@@ -814,9 +891,9 @@ class MessageHandlerSuite
         val data = new Array[Byte](63)
         Random.nextBytes(data)
         val res = getWorker(loc).askSync[SendDataResponse](
-          SendData(shuffleKey, loc, PartitionLocation.Mode.Master, true, data)
+          SendData(shuffleKey, loc, data)
         )
-        assert(res.success)
+        assert(res.status.equals(StatusCode.Success))
       })
     })
 
@@ -878,7 +955,7 @@ class MessageHandlerSuite
         val data = new Array[Byte](63)
         Random.nextBytes(data)
         worker.askSync[SendDataResponse](
-          SendData(shuffleKey, loc, PartitionLocation.Mode.Master, true, data)
+          SendData(shuffleKey, loc, data)
         )
       })
     })
@@ -899,7 +976,7 @@ class MessageHandlerSuite
     val res = master.askSync[StageEndResponse](
       StageEnd(appId, shuffleId)
     )
-    assert(res.returnCode == ReturnCode.Success)
+    assert(res.status == StatusCode.Success)
     assertInfos()
     assert(worker1InfoMaster.masterPartitionLocations.size() == 0)
     assert(worker1InfoMaster.slavePartitionLocations.size() == 0)
@@ -928,9 +1005,9 @@ class MessageHandlerSuite
         val data = new Array[Byte](63)
         Random.nextBytes(data)
         val res = worker.askSync[SendDataResponse](
-          SendData(shuffleKey2, loc, PartitionLocation.Mode.Master, true, data)
+          SendData(shuffleKey2, loc, data)
         )
-        assert(res.success)
+        assert(res.status.equals(StatusCode.Success))
       })
     })
 
@@ -961,9 +1038,9 @@ class MessageHandlerSuite
         val data = new Array[Byte](63)
         Random.nextBytes(data)
         val res = worker.askSync[SendDataResponse](
-          SendData(shuffleKey3, loc, PartitionLocation.Mode.Master, true, data)
+          SendData(shuffleKey3, loc, data)
         )
-        assert(res.success)
+        assert(res.status.equals(StatusCode.Success))
       })
     })
 
@@ -984,7 +1061,7 @@ class MessageHandlerSuite
     val stageEndRes3 = master.askSync[StageEndResponse](
       StageEnd(appId, shuffleId3)
     )
-    assert(stageEndRes3.returnCode == ReturnCode.Success)
+    assert(stageEndRes3.status == StatusCode.Success)
 
     waitUntilDataFinishFlushing(worker1, shuffleKey3)
     waitUntilDataFinishFlushing(worker2, shuffleKey3)
@@ -1008,7 +1085,7 @@ class MessageHandlerSuite
     val stageEndRes2 = master.askSync[StageEndResponse](
       StageEnd(appId, shuffleId2)
     )
-    assert(stageEndRes2.returnCode == ReturnCode.Success)
+    assert(stageEndRes2.status == StatusCode.Success)
 
     waitUntilDataFinishFlushing(worker1, shuffleKey2)
     waitUntilDataFinishFlushing(worker2, shuffleKey2)
@@ -1033,7 +1110,7 @@ class MessageHandlerSuite
     val resReg = master.askSync[RegisterShuffleResponse](
       RegisterShuffle(appId, shuffleId1, 10, 12)
     )
-    assert(resReg.success)
+    assert(resReg.status.equals(StatusCode.Success))
 
     // send data
     0 until 100 foreach (_ => {
@@ -1042,9 +1119,9 @@ class MessageHandlerSuite
         val data = new Array[Byte](63)
         Random.nextBytes(data)
         val res = worker.askSync[SendDataResponse](
-          SendData(shuffleKey1, loc, PartitionLocation.Mode.Master, true, data)
+          SendData(shuffleKey1, loc, data)
         )
-        assert(res.success)
+        assert(res.status.equals(StatusCode.Success))
       })
     })
 
@@ -1095,7 +1172,7 @@ class MessageHandlerSuite
     val resStageEnd = master.askSync[StageEndResponse](
       StageEnd(appId, shuffleId1)
     )
-    assert(resStageEnd.returnCode == ReturnCode.Success)
+    assert(resStageEnd.status == StatusCode.Success)
     assertFileLength(shuffleKey1, resReg.partitionLocations, 63 * 100)
     assertInfos()
     assert(worker1InfoMaster == null)
@@ -1118,7 +1195,7 @@ class MessageHandlerSuite
     val resReg1 = master.askSync[RegisterShuffleResponse](
       RegisterShuffle(appId, shuffleId1, 10, 12)
     )
-    assert(resReg1.success)
+    assert(resReg1.status.equals(StatusCode.Success))
     // send data
     0 until 70 foreach (_ => {
       resReg1.partitionLocations.foreach(loc => {
@@ -1126,9 +1203,9 @@ class MessageHandlerSuite
         val data = new Array[Byte](63)
         Random.nextBytes(data)
         val res = worker.askSync[SendDataResponse](
-          SendData(shuffleKey1, loc, PartitionLocation.Mode.Master, true, data)
+          SendData(shuffleKey1, loc, data)
         )
-        assert(res.success)
+        assert(res.status.equals(StatusCode.Success))
       })
     })
 
@@ -1138,7 +1215,7 @@ class MessageHandlerSuite
     val resReg2 = master.askSync[RegisterShuffleResponse](
       RegisterShuffle(appId, shuffleId2, 12, 14)
     )
-    assert(resReg2.success)
+    assert(resReg2.status.equals(StatusCode.Success))
     // send data
     0 until 90 foreach (_ => {
       resReg2.partitionLocations.foreach(loc => {
@@ -1146,9 +1223,9 @@ class MessageHandlerSuite
         val data = new Array[Byte](63)
         Random.nextBytes(data)
         val res = worker.askSync[SendDataResponse](
-          SendData(shuffleKey2, loc, PartitionLocation.Mode.Master, true, data)
+          SendData(shuffleKey2, loc, data)
         )
-        assert(res.success)
+        assert(res.status.equals(StatusCode.Success))
       })
     })
 
@@ -1158,7 +1235,7 @@ class MessageHandlerSuite
     val resReg3 = master.askSync[RegisterShuffleResponse](
       RegisterShuffle(appId, shuffleId3, 12, 29)
     )
-    assert(resReg3.success)
+    assert(resReg3.status.equals(StatusCode.Success))
     // send data
     0 until 173 foreach (_ => {
       resReg3.partitionLocations.foreach(loc => {
@@ -1166,9 +1243,9 @@ class MessageHandlerSuite
         val data = new Array[Byte](63)
         Random.nextBytes(data)
         val res = worker.askSync[SendDataResponse](
-          SendData(shuffleKey3, loc, PartitionLocation.Mode.Master, true, data)
+          SendData(shuffleKey3, loc, data)
         )
-        assert(res.success)
+        assert(res.status.equals(StatusCode.Success))
       })
     })
 
@@ -1249,15 +1326,15 @@ class MessageHandlerSuite
     var stageEnd = master.askSync[StageEndResponse](
       StageEnd(appId, shuffleId1)
     )
-    assert(stageEnd.returnCode == ReturnCode.Success)
+    assert(stageEnd.status == StatusCode.Success)
     stageEnd = master.askSync[StageEndResponse](
       StageEnd(appId, shuffleId2)
     )
-    assert(stageEnd.returnCode == ReturnCode.Success)
+    assert(stageEnd.status == StatusCode.Success)
     stageEnd = master.askSync[StageEndResponse](
       StageEnd(appId, shuffleId3)
     )
-    assert(stageEnd.returnCode == ReturnCode.Success)
+    assert(stageEnd.status == StatusCode.Success)
 
     assertFileLength(shuffleKey1, resReg1.partitionLocations, 63 * 70)
     assertFileLength(shuffleKey2, resReg2.partitionLocations, 63 * 90)
@@ -1281,7 +1358,7 @@ class MessageHandlerSuite
     val resReg = master.askSync[RegisterShuffleResponse](
       RegisterShuffle(appId, shuffleId, 10, 12)
     )
-    assert(resReg.success)
+    assert(resReg.status.equals(StatusCode.Success))
 
     // send data
     0 until 10 foreach (_ => {
@@ -1290,7 +1367,7 @@ class MessageHandlerSuite
         val data = new Array[Byte](63)
         Random.nextBytes(data)
         worker.askSync[SendDataResponse](
-          SendData(shuffleKey, loc, PartitionLocation.Mode.Master, true, data)
+          SendData(shuffleKey, loc, data)
         )
       })
     })
@@ -1302,19 +1379,19 @@ class MessageHandlerSuite
 
     // revive
     val resRev = master.askSync[ReviveResponse](
-      Revive(appId, shuffleId)
+      Revive(appId, shuffleId, 0)
     )
-    assert(resRev.success)
-    val newLoc = resRev.newLocation
+    assert(resRev.status.equals(StatusCode.Success))
+    val newLoc = resRev.partitionLocation
     // send data to new location
     val worker = getWorker(newLoc)
     val data = new Array[Byte](63)
     Random.nextBytes(data)
     0 until 1 foreach (_ => {
       val resSend = worker.askSync[SendDataResponse](
-        SendData(shuffleKey, newLoc, PartitionLocation.Mode.Master, true, data)
+        SendData(shuffleKey, newLoc, data)
       )
-      assert(resSend.success)
+      assert(resSend.status.equals(StatusCode.Success))
     })
     waitUntilDataFinishFlushing(worker, shuffleKey)
 
@@ -1324,7 +1401,7 @@ class MessageHandlerSuite
     val resStageEnd = master.askSync[StageEndResponse](
       StageEnd(appId, shuffleId)
     )
-    assert(resStageEnd.returnCode == ReturnCode.Success)
+    assert(resStageEnd.status == StatusCode.Success)
 
     waitUntilDataFinishFlushing(worker1, shuffleKey)
     waitUntilDataFinishFlushing(worker2, shuffleKey)
@@ -1347,7 +1424,7 @@ class MessageHandlerSuite
     val resReg = master.askSync[RegisterShuffleResponse](
       RegisterShuffle(appId, shuffleId, 10, 14)
     )
-    assert(resReg.success)
+    assert(resReg.status.equals(StatusCode.Success))
 
     // send data
     0 until 10 foreach (_ => {
@@ -1356,9 +1433,9 @@ class MessageHandlerSuite
         val data = new Array[Byte](63)
         Random.nextBytes(data)
         val res = worker.askSync[SendDataResponse](
-          SendData(shuffleKey, loc, PartitionLocation.Mode.Master, true, data)
+          SendData(shuffleKey, loc, data)
         )
-        assert(res.success)
+        assert(res.status.equals(StatusCode.Success))
       })
     })
 
@@ -1373,19 +1450,19 @@ class MessageHandlerSuite
     var resUnreg = master.askSync[UnregisterShuffleResponse](
       UnregisterShuffle(appId, shuffleId)
     )
-    assert(resUnreg.returnCode == ReturnCode.PartitionExists)
+    assert(resUnreg.status == StatusCode.PartitionExists)
 
     // stage end
     val resStageEnd = master.askSync[StageEndResponse](
       StageEnd(appId, shuffleId)
     )
-    assert(resStageEnd.returnCode == ReturnCode.Success)
+    assert(resStageEnd.status == StatusCode.Success)
 
     // unregister shuffle
     resUnreg = master.askSync[UnregisterShuffleResponse](
       UnregisterShuffle(appId, shuffleId)
     )
-    assert(resUnreg.returnCode == ReturnCode.Success)
+    assert(resUnreg.status == StatusCode.Success)
     assert(!fs.exists(shufflePath))
 
     stop(3)
@@ -1406,16 +1483,16 @@ class MessageHandlerSuite
     var resReg = master.askSync[RegisterShuffleResponse](
       RegisterShuffle(appId, shuffleId1, 10, 12)
     )
-    assert(resReg.success)
+    assert(resReg.status.equals(StatusCode.Success))
     0 until 9 foreach(_ => {
       resReg.partitionLocations.foreach(loc => {
         val worker = getWorker(loc)
         val data = new Array[Byte](63)
         Random.nextBytes(data)
         val res = worker.askSync[SendDataResponse](
-          SendData(shuffleKey1, loc, PartitionLocation.Mode.Master, true, data)
+          SendData(shuffleKey1, loc, data)
         )
-        assert(res.success)
+        assert(res.status.equals(StatusCode.Success))
       })
     })
     val shufflePath1 = EssPathUtil.GetShuffleDir(conf, appId, shuffleId1)
@@ -1425,16 +1502,16 @@ class MessageHandlerSuite
     resReg = master.askSync[RegisterShuffleResponse](
       RegisterShuffle(appId, shuffleId2, 16, 13)
     )
-    assert(resReg.success)
+    assert(resReg.status.equals(StatusCode.Success))
     0 until 19 foreach(_ => {
       resReg.partitionLocations.foreach(loc => {
         val worker = getWorker(loc)
         val data = new Array[Byte](63)
         Random.nextBytes(data)
         val res = worker.askSync[SendDataResponse](
-          SendData(shuffleKey2, loc, PartitionLocation.Mode.Master, true, data)
+          SendData(shuffleKey2, loc, data)
         )
-        assert(res.success)
+        assert(res.status.equals(StatusCode.Success))
       })
     })
     val shufflePath2 = EssPathUtil.GetShuffleDir(conf, appId, shuffleId2)
@@ -1444,16 +1521,16 @@ class MessageHandlerSuite
     resReg = master.askSync[RegisterShuffleResponse](
       RegisterShuffle(appId, shuffleId3, 11, 33)
     )
-    assert(resReg.success)
+    assert(resReg.status.equals(StatusCode.Success))
     0 until 31 foreach(_ => {
       resReg.partitionLocations.foreach(loc => {
         val worker = getWorker(loc)
         val data = new Array[Byte](63)
         Random.nextBytes(data)
         val res = worker.askSync[SendDataResponse](
-          SendData(shuffleKey3, loc, PartitionLocation.Mode.Master, true, data)
+          SendData(shuffleKey3, loc, data)
         )
-        assert(res.success)
+        assert(res.status.equals(StatusCode.Success))
       })
     })
     val shufflePath3 = EssPathUtil.GetShuffleDir(conf, appId, shuffleId3)

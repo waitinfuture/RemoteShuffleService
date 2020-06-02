@@ -4,17 +4,18 @@ import java.util
 import java.util.concurrent.{ConcurrentHashMap, ScheduledFuture, TimeUnit}
 
 import scala.collection.JavaConversions._
-
+import scala.collection.JavaConverters._
 import com.aliyun.emr.jss.common.EssConf
 import com.aliyun.emr.jss.common.internal.Logging
 import com.aliyun.emr.jss.common.rpc._
 import com.aliyun.emr.jss.common.util.{ThreadUtils, Utils}
 import com.aliyun.emr.jss.protocol.{PartitionLocation, RpcNameConstants}
 import com.aliyun.emr.jss.protocol.message.ControlMessages._
-import com.aliyun.emr.jss.protocol.message.ReturnCode
+import com.aliyun.emr.jss.protocol.message.StatusCode
 import com.aliyun.emr.jss.service.deploy.common.EssPathUtil
 import com.aliyun.emr.jss.service.deploy.worker.WorkerInfo
 import org.apache.hadoop.conf.Configuration
+import org.apache.hadoop.fs.Path
 
 private[deploy] class Master(
   override val rpcEnv: RpcEnv,
@@ -53,6 +54,7 @@ private[deploy] class Master(
   private val shuffleMapperAttempts = new util.HashMap[String, Array[Int]]()
   private val shuffleCommittedPartitions = new util.HashMap[String, util.Set[String]]()
   private val shufflePartitionsWritten = new util.HashMap[String, util.Set[String]]()
+  private val reducerFileGroup = new util.HashMap[String, util.Set[Path]]()
   private val appHeartbeatTime = new util.HashMap[String, Long]()
 
   private def getChunkIndex(applicationId: String,
@@ -118,7 +120,7 @@ private[deploy] class Master(
     slots.foreach(entry => {
       val res = entry._1.endpoint.askSync[ReserveBuffersResponse](
         ReserveBuffers(shuffleKey, entry._2._1, entry._2._2))
-      if (res.success) {
+      if (res.status.equals(StatusCode.Success)) {
         logInfo(s"Successfully allocated partitions buffer from worker ${entry._1.hostPort}")
       } else {
         logInfo(s"Failed to reserve buffers from worker ${entry._1.hostPort}")
@@ -148,7 +150,7 @@ private[deploy] class Master(
     var res = worker.endpoint.askSync[DestroyResponse](
       Destroy(shuffleKey, masterLocations, slaveLocations)
     )
-    if (res.returnCode != ReturnCode.Success) {
+    if (res.status != StatusCode.Success) {
       res = worker.endpoint.askSync[DestroyResponse](
         Destroy(shuffleKey, res.failedMasters, res.failedSlaves)
       )
@@ -158,47 +160,52 @@ private[deploy] class Master(
 
   override def receiveAndReply(context: RpcCallContext): PartialFunction[Any, Unit] = {
     case RegisterWorker(host, port, memory, worker) =>
-      logInfo(s"received RegisterWorker, ${host}:${port} ${memory}")
+      logInfo(s"received RegisterWorker request, $host:$port $memory")
       handleRegisterWorker(context, host, port, memory, worker)
+
     case RegisterShuffle(applicationId, shuffleId, numMappers, numPartitions) =>
-      logInfo(s"received register shuffle, ${applicationId}, ${shuffleId}, ${numMappers}, ${numPartitions}")
+      logInfo(s"received RegisterShuffle request, $applicationId, $shuffleId, $numMappers, $numPartitions")
       handleRegisterShuffle(context, applicationId, shuffleId, numMappers, numPartitions)
-    case Revive(applicationId, shuffleId) =>
-      logInfo(s"received Revive request, ${applicationId}, ${shuffleId}")
-      handleRevive(context, applicationId, shuffleId)
+
+    case Revive(applicationId, shuffleId, reduceId) =>
+      logInfo(s"received Revive request, $applicationId, $shuffleId, $reduceId")
+      handleRevive(context, applicationId, shuffleId, reduceId)
+
     case MapperEnd(applicationId: String, shuffleId: Int, mapId: Int,
-    attemptId: Int, partitionIds: util.List[String]) =>
-      logInfo(s"receive MapperEnd request, ${applicationId}, ${shuffleId}, ${mapId}, ${attemptId}")
-      handleMapperEnd(context, applicationId, shuffleId, mapId, attemptId, partitionIds)
+    attemptId: Int, partitionLocations: util.List[PartitionLocation]) =>
+      logInfo(s"received MapperEnd request, $applicationId, $shuffleId, $mapId, $attemptId, $partitionLocations")
+      handleMapperEnd(context, applicationId, shuffleId, mapId, attemptId, partitionLocations)
+
+    case GetShuffleFileGroup(applicationId: String, shuffleId: Int) =>
+      logInfo(s"received GetShuffleFileGroup request, $applicationId, $shuffleId")
+      handleGetShuffleFileGroup(context, applicationId, shuffleId)
+
     case SlaveLost(shuffleKey, masterLocation, slaveLocation: PartitionLocation) =>
-      logInfo(s"receive SlaveLost request, ${slaveLocation}")
+      logInfo(s"received SlaveLost request, $slaveLocation")
       handleSlaveLost(context, shuffleKey, masterLocation, slaveLocation)
-    case Trigger(applicationId, shuffleId) =>
 
-      val result = workers(1).endpoint.askSync[CommitFilesResponse](CommitFiles(
-        s"${applicationId}-${shuffleId}",
-        workers(1).masterPartitionLocations.get(s"${applicationId}-${shuffleId}").keySet().toList,
-        PartitionLocation.Mode.Master
-      ))
-
-      context.reply(TriggerResponse(true))
     case GetWorkerInfos =>
-      logInfo("received GetWorkerInfo request")
+      logInfo("received GetWorkerInfos request")
       handleGetWorkerInfos(context)
+
     case StageEnd(applicationId, shuffleId) =>
-      logInfo(s"receive StageEnd request, ${applicationId}, ${shuffleId}")
+      logInfo(s"received StageEnd request, $applicationId, $shuffleId")
       handleStageEnd(context, applicationId, shuffleId)
+
     case WorkerLost(host, port) =>
-      logInfo((s"receive WorkerLost request, ${host}:${port}"))
+      logInfo(s"received WorkerLost request, $host:$port")
       handleWorkerLost(context, host, port)
+
     case MasterPartitionSuicide(shuffleKey, location) =>
-      logInfo(s"receive MasterPartitionSuicide, ${location}")
+      logInfo(s"received MasterPartitionSuicide request, $location")
       handleMasterPartitionSuicide(context, shuffleKey, location)
+
     case UnregisterShuffle(appId, shuffleId) =>
-      logInfo(s"receive UnregisterShuffle request, ${appId}-${shuffleId}")
+      logInfo(s"received UnregisterShuffle request, $appId-$shuffleId")
       handleUnregisterShuffle(context, appId, shuffleId)
+
     case ApplicationLost(appId) =>
-      logInfo(s"received ApplicationLost, ${appId}")
+      logInfo(s"received ApplicationLost request, $appId")
       handleApplicationLost(context, appId)
   }
 
@@ -286,7 +293,7 @@ private[deploy] class Master(
           Destroy(shuffleKey, null, elem._2.toList)
         )
         // retry once to destroy
-        if (resDestroy.returnCode != ReturnCode.Success) {
+        if (resDestroy.status != StatusCode.Success) {
           worker.endpoint.askSync[DestroyResponse](
             Destroy(shuffleKey, null, resDestroy.failedSlaves)
           )
@@ -324,23 +331,23 @@ private[deploy] class Master(
     val worker: WorkerInfo = workers.find(w => w.hostPort == location.hostPort()).orNull
     if (worker == null) {
       logError(s"worker not found for the location ${location} !")
-      context.reply(MasterPartitionSuicideResponse(ReturnCode.WorkerNotFound))
+      context.reply(MasterPartitionSuicideResponse(StatusCode.WorkerNotFound))
       return
     }
     if (!worker.masterPartitionLocations.contains(shuffleKey)) {
       logError(s"shuffle ${shuffleKey} not registered!")
-      context.reply(MasterPartitionSuicideResponse(ReturnCode.ShuffleNotRegistered))
+      context.reply(MasterPartitionSuicideResponse(StatusCode.ShuffleNotRegistered))
       return
     }
     if (!worker.masterPartitionLocations.get(shuffleKey).contains(location)) {
       logError(s"location ${location} not found!")
-      context.reply(MasterPartitionSuicideResponse(ReturnCode.MasterPartitionNotFound))
+      context.reply(MasterPartitionSuicideResponse(StatusCode.MasterPartitionNotFound))
       return
     }
     worker.synchronized {
       worker.removeMasterPartition(shuffleKey, location)
     }
-    context.reply(MasterPartitionSuicideResponse(ReturnCode.Success))
+    context.reply(MasterPartitionSuicideResponse(StatusCode.Success))
   }
 
   def handleRegisterWorker(context: RpcCallContext, host: String, port: Int,
@@ -363,22 +370,20 @@ private[deploy] class Master(
   def handleRegisterShuffle(context: RpcCallContext, applicationId: String,
     shuffleId: Int, numMappers: Int, numPartitions: Int): Unit = {
     val shuffleKey = Utils.makeShuffleKey(applicationId, shuffleId)
-
-    // check if shuffle has already registered
     if (registeredShuffle.contains(shuffleKey)) {
-      logError(s"shuffle ${shuffleKey} has registered!")
-      context.reply(RegisterShuffleResponse(false, null))
+      logError(s"shuffle $shuffleKey already registered!")
+      context.reply(RegisterShuffleResponse(StatusCode.ShuffleAlreadyRegistered, null))
       return
     }
 
     val slots = workers.synchronized {
-      MasterUtil.offerSlots(shuffleKey, workers, numPartitions)
+      MasterUtil.offerSlots(shuffleKey, workers, (0 until numPartitions).map(new Integer(_)).toList)
     }
 
     // reply false if offer slots failed
     if (slots == null || slots.isEmpty()) {
       logError("offerSlots failed!")
-      context.reply(RegisterShuffleResponse(false, null))
+      context.reply(RegisterShuffleResponse(StatusCode.SlotNotAvailable, null))
       return
     }
 
@@ -396,7 +401,7 @@ private[deploy] class Master(
         }
       })
       logInfo("fail to reserve buffers")
-      context.reply(RegisterShuffleResponse(false, null))
+      context.reply(RegisterShuffleResponse(StatusCode.ReserveBufferFailed, null))
       return
     }
 
@@ -414,26 +419,28 @@ private[deploy] class Master(
       val commitedPartitions = new util.HashSet[String]()
       shuffleCommittedPartitions.put(shuffleKey, commitedPartitions)
     }
-    context.reply(RegisterShuffleResponse(true, locations))
+
+    // TODO 维护 reduceGroup ???
+    context.reply(RegisterShuffleResponse(StatusCode.Success, locations))
   }
 
-  private def handleRevive(context: RpcCallContext, applicationId: String, shuffleId: Int): Unit = {
+  private def handleRevive(context: RpcCallContext, applicationId: String, shuffleId: Int, reduceId: Int): Unit = {
     // check whether shuffle has registered
     val shuffleKey = Utils.makeShuffleKey(applicationId, shuffleId)
     if (!registeredShuffle.contains(shuffleKey)) {
-      logError(s"shuffle ${shuffleKey} has not registered!")
-      context.reply(ReviveResponse(false, null))
+      logError(s"shuffle $shuffleKey already registered!")
+      context.reply(ReviveResponse(StatusCode.ShuffleAlreadyRegistered, null))
       return
     }
 
     // offer new slot
     val slots = workers.synchronized {
-      MasterUtil.offerSlots(shuffleKey, workers, 1)
+      MasterUtil.offerSlots(shuffleKey, workers, Seq(new Integer(reduceId)))
     }
     // reply false if offer slots failed
     if (slots == null || slots.isEmpty()) {
       logError("offerSlot failed!")
-      context.reply(ReviveResponse(false, null))
+      context.reply(ReviveResponse(StatusCode.SlotNotAvailable, null))
       return
     }
 
@@ -449,50 +456,78 @@ private[deploy] class Master(
         }
       })
       logInfo("fail to reserve buffers")
-      context.reply(ReviveResponse(false, null))
+      context.reply(ReviveResponse(StatusCode.ReserveBufferFailed, null))
       return
     }
 
     // reply success
     val (masters, slaves) = slots.head._2
     if (masters != null && masters.size() > 0) {
-      context.reply(ReviveResponse(true, masters.head))
+      context.reply(ReviveResponse(StatusCode.Success, masters.head))
     } else {
-      context.reply(ReviveResponse(true, slaves.head.getPeer))
+      context.reply(ReviveResponse(StatusCode.Success, slaves.head.getPeer))
     }
   }
 
-  private def handleMapperEnd(
-    context: RpcCallContext,
+  private def handleMapperEnd(context: RpcCallContext,
     applicationId: String,
     shuffleId: Int,
     mapId: Int,
     attemptId: Int,
-    partitionIds: util.List[String]
-  ): Unit = {
+    partitionLocations: util.List[PartitionLocation]): Unit = {
     val shuffleKey = Utils.makeShuffleKey(applicationId, shuffleId)
     // update max attemptId
     shuffleMapperAttempts.synchronized {
       val attempts = shuffleMapperAttempts.get(shuffleKey)
       if (attempts == null) {
-        logError(s"shuffle not registered! ${shuffleKey}")
-        context.reply(MapperEndResponse(false))
+        logError(s"shuffle $shuffleKey not registered!")
+        context.reply(MapperEndResponse(StatusCode.ShuffleNotRegistered))
         return
       }
+
       if (attempts(mapId) < attemptId) {
         attempts(mapId) = attemptId
       }
     }
 
     // update partitions written
+    // TODO shufflePartitionsWritten might need to change to new util.HashMap[String, util.Set[PartitionLocation]]()
     shufflePartitionsWritten.synchronized {
       shufflePartitionsWritten.putIfAbsent(shuffleKey, new util.HashSet[String]())
       val partitionsWritten = shufflePartitionsWritten.get(shuffleKey)
-      partitionsWritten.addAll(partitionIds)
+      partitionsWritten.addAll(partitionLocations.map(_.getUUID))
+    }
+
+    reducerFileGroup.synchronized {
+      partitionLocations
+        .map(loc => {
+          val partitionKey = Utils.makePartitionKey(applicationId, shuffleId, loc.getReduceId)
+          val path = EssPathUtil.GetPartitionPath(conf, applicationId, shuffleId, loc.getReduceId, loc.getUUID)
+          (partitionKey, path)
+        })
+        .groupBy(_._1) // Map[String,List[(String, Path)]]
+        .mapValues(r => {r.map(r => {r._2})}) // Map[String, List[Path]]
+        .foreach(entry => {
+          reducerFileGroup.putIfAbsent(entry._1, new util.HashSet[Path]())
+          reducerFileGroup.get(entry._1).addAll(entry._2)
+        })
     }
 
     // reply success
-    context.reply(MapperEndResponse(true))
+    context.reply(MapperEndResponse(StatusCode.Success))
+  }
+
+  private def handleGetShuffleFileGroup(context: RpcCallContext,
+    applicationId: String,
+    shuffleId: Int): Unit = {
+
+    val partitionKeyPrefix = Utils.makeShuffleKey(applicationId, shuffleId)
+    val shuffleFileGroup = reducerFileGroup
+      .filter(entry => entry._1.startsWith(partitionKeyPrefix))
+      .map(entry => (entry._1, new util.HashSet(entry._2.map(_.toString).asJava)))
+      .toMap
+
+    context.reply(GetShuffleFileGroupResponse(StatusCode.Success, new util.HashMap(shuffleFileGroup.asJava)))
   }
 
   private def handleSlaveLost(context: RpcCallContext,
@@ -505,7 +540,7 @@ private[deploy] class Master(
       w.port == masterLocation.getPort).orNull
     if (masterWorker == null) {
       logError("MasterWorker not found!")
-      context.reply(SlaveLostResponse(ReturnCode.MasterPartitionNotFound, null))
+      context.reply(SlaveLostResponse(StatusCode.MasterPartitionNotFound, null))
       return
     }
     // send Destroy
@@ -530,7 +565,7 @@ private[deploy] class Master(
     }
     if (location == null) {
       logError("offer slot failed!")
-      context.reply(SlaveLostResponse(ReturnCode.SlotNotAvailable, null))
+      context.reply(SlaveLostResponse(StatusCode.SlotNotAvailable, null))
       return
     }
     // reserve buffer
@@ -548,7 +583,7 @@ private[deploy] class Master(
           slaveWorker.removeSlavePartition(shuffleKey, location._2)
         }
       }
-      context.reply(SlaveLostResponse(ReturnCode.ReserveBufferFailed, null))
+      context.reply(SlaveLostResponse(StatusCode.ReserveBufferFailed, null))
       return
     }
     // add slave partition
@@ -560,11 +595,11 @@ private[deploy] class Master(
       masterWorker.masterPartitionLocations.get(shuffleKey).get(masterLocation).setPeer(location._2)
     }
     // handle SlaveLost success, reply
-    context.reply(SlaveLostResponse(ReturnCode.Success, location._2))
+    context.reply(SlaveLostResponse(StatusCode.Success, location._2))
   }
 
   private def handleGetWorkerInfos(context: RpcCallContext): Unit = {
-    context.reply(GetWorkerInfosResponse(true, workers))
+    context.reply(GetWorkerInfosResponse(StatusCode.Success, workers))
   }
 
   private def handleStageEnd(context: RpcCallContext,
@@ -573,7 +608,7 @@ private[deploy] class Master(
     // check whether shuffle has registered
     if (!registeredShuffle.contains(shuffleKey)) {
       logInfo(s"shuffle ${shuffleKey} not reigstered!")
-      context.reply(StageEndResponse(ReturnCode.ShuffleNotRegistered, null))
+      context.reply(StageEndResponse(StatusCode.ShuffleNotRegistered, null))
       return
     }
 
@@ -643,7 +678,7 @@ private[deploy] class Master(
           worker.slavePartitionLocations.get(shuffleKey).keySet().toList)
       )
       // retry once to destroy
-      if (res.returnCode != ReturnCode.Success) {
+      if (res.status != StatusCode.Success) {
         worker.endpoint.askSync[DestroyResponse](
           Destroy(shuffleKey,
             res.failedMasters,
@@ -684,9 +719,9 @@ private[deploy] class Master(
 
     // reply
     if (lostFiles.isEmpty) {
-      context.reply(StageEndResponse(ReturnCode.Success, null))
+      context.reply(StageEndResponse(StatusCode.Success, null))
     } else {
-      context.reply(StageEndResponse(ReturnCode.PartialSuccess, null))
+      context.reply(StageEndResponse(StatusCode.PartialSuccess, null))
     }
   }
 
@@ -696,17 +731,17 @@ private[deploy] class Master(
     // if PartitionLocations exists for the shuffle, return fail
     if (partitionExists(shuffleKey)) {
       logError(s"Partition exists for shuffle ${shuffleKey}!")
-      context.reply(UnregisterShuffleResponse(ReturnCode.PartitionExists))
+      context.reply(UnregisterShuffleResponse(StatusCode.PartitionExists))
       return
     }
     // delete shuffle files
     val shuffleDir = EssPathUtil.GetShuffleDir(conf, appId, shuffleId)
     val success = fs.delete(shuffleDir, true)
     if (success) {
-      context.reply(UnregisterShuffleResponse(ReturnCode.Success))
+      context.reply(UnregisterShuffleResponse(StatusCode.Success))
     } else {
       logError("delete files failed!")
-      context.reply(UnregisterShuffleResponse(ReturnCode.DeleteFilesFailed))
+      context.reply(UnregisterShuffleResponse(StatusCode.DeleteFilesFailed))
     }
   }
 
@@ -736,7 +771,7 @@ private[deploy] class Master(
             Destroy(shuffleKey, masterLocs, slaveLocs)
           )
           // retry once
-          if (res.returnCode != ReturnCode.Success) {
+          if (res.status != StatusCode.Success) {
             worker.endpoint.askSync[DestroyResponse](
               Destroy(shuffleKey, res.failedMasters, res.failedSlaves)
             )
