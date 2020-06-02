@@ -1,6 +1,8 @@
 package com.aliyun.emr.jss.client;
 
 import com.aliyun.emr.jss.protocol.PartitionLocation;
+import com.aliyun.emr.jss.protocol.message.StatusCode;
+import io.netty.buffer.ByteBuf;
 
 import java.io.InputStream;
 import java.util.List;
@@ -58,6 +60,12 @@ public abstract class ShuffleClient implements Cloneable
         int mapAttemptNum,
         byte[] data);
 
+    public abstract boolean pushData(
+        String applicationId,
+        int shuffleId,
+        int reduceId,
+        ByteBuf data);
+
     /**
      * 注销
      * @param applicationId
@@ -65,6 +73,14 @@ public abstract class ShuffleClient implements Cloneable
      * @return
      */
     public abstract boolean unregisterShuffle(String applicationId, int shuffleId);
+
+    /**
+     * commit files, update status
+     * @param appId
+     * @param shuffleId
+     * @return
+     */
+    public abstract boolean stageEnd(String appId, int shuffleId);
 
     /**
      * reduce端分区读取
@@ -98,4 +114,6 @@ public abstract class ShuffleClient implements Cloneable
      */
     public abstract void applyShuffleInfo(
         String applicationId, int shuffleId, List<PartitionLocation> partitionLocations);
+
+    public abstract void shutDown();
 }

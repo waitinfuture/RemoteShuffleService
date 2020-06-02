@@ -23,21 +23,22 @@ import java.nio.channels.{Pipe, ReadableByteChannel, WritableByteChannel}
 import java.util.concurrent._
 import java.util.concurrent.atomic.AtomicBoolean
 
-import com.aliyun.emr.jss.common.EssConf
-import com.aliyun.emr.jss.common.internal.Logging
-import javax.annotation.Nullable
-
 import scala.concurrent.{Future, Promise}
 import scala.reflect.ClassTag
 import scala.util.{DynamicVariable, Failure, Success, Try}
 import scala.util.control.NonFatal
-import org.apache.spark.network.TransportContext
-import org.apache.spark.network.client._
-import org.apache.spark.network.crypto.{AuthClientBootstrap, AuthServerBootstrap}
-import org.apache.spark.network.server._
+
+import com.aliyun.emr.jss.common.EssConf
+import com.aliyun.emr.jss.common.internal.Logging
 import com.aliyun.emr.jss.common.rpc._
 import com.aliyun.emr.jss.common.serializer.{JavaSerializer, JavaSerializerInstance, SerializationStream}
 import com.aliyun.emr.jss.common.util.{ByteBufferInputStream, ByteBufferOutputStream, ThreadUtils, Utils}
+import com.aliyun.emr.jss.protocol.RpcNameConstants
+import com.aliyun.emr.network.TransportContext
+import com.aliyun.emr.network.client._
+import com.aliyun.emr.network.protocol.ess.PushData
+import com.aliyun.emr.network.server._
+import javax.annotation.Nullable
 
 private[jss] class NettyRpcEnv(
     val conf: EssConf,
@@ -223,6 +224,64 @@ private[jss] class NettyRpcEnv(
         postToOutbox(message.receiver, rpcMessage)
         promise.future.failed.foreach {
           case _: TimeoutException => rpcMessage.onTimeout()
+          case _ =>
+        }(ThreadUtils.sameThread)
+      }
+
+      val timeoutCancelable = timeoutScheduler.schedule(new Runnable {
+        override def run(): Unit = {
+          onFailure(new TimeoutException(s"Cannot receive any reply from ${remoteAddr} " +
+            s"in ${timeout.duration}"))
+        }
+      }, timeout.duration.toNanos, TimeUnit.NANOSECONDS)
+      promise.future.onComplete { v =>
+        timeoutCancelable.cancel(true)
+      }(ThreadUtils.sameThread)
+    } catch {
+      case NonFatal(e) =>
+        onFailure(e)
+    }
+    promise.future.mapTo[T].recover(timeout.addMessageIfTimeout)(ThreadUtils.sameThread)
+  }
+
+  private[jss] def pushData[T: ClassTag](pushData: PushData,
+    receiver: NettyRpcEndpointRef, timeout: RpcTimeout): Future[T] = {
+    val promise = Promise[Any]()
+    val remoteAddr = receiver.address
+
+    def onFailure(e: Throwable): Unit = {
+      if (!promise.tryFailure(e)) {
+        e match {
+          case e : RpcEnvStoppedException => logDebug (s"Ignored failure: $e")
+          case _ => logWarning(s"Ignored failure: $e")
+        }
+      }
+    }
+
+    def onSuccess(reply: Any): Unit = reply match {
+      case RpcFailure(e) => onFailure(e)
+      case rpcReply =>
+        if (!promise.trySuccess(rpcReply)) {
+          logWarning(s"Ignored message: $reply")
+        }
+    }
+
+    try {
+      if (remoteAddr == address) {
+        val p = Promise[Any]()
+        p.future.onComplete {
+          case Success(response) => onSuccess(response)
+          case Failure(e) => onFailure(e)
+        }(ThreadUtils.sameThread)
+        dispatcher.postLocalMessage(pushData, receiver, p)
+      } else {
+        val dataMessage = DataOutboxMessage(
+          pushData,
+          onFailure,
+          (client, response) => onSuccess(deserialize[Any](client, response)))
+        postToOutbox(receiver, dataMessage)
+        promise.future.failed.foreach {
+          case _: TimeoutException => dataMessage.onTimeout()
           case _ =>
         }(ThreadUtils.sameThread)
       }
@@ -510,6 +569,11 @@ private[jss] class NettyRpcEndpointRef(
     nettyEnv.ask(new RequestMessage(nettyEnv.address, this, message), timeout)
   }
 
+  override def pushData[T: ClassTag](message: Any, timeout: RpcTimeout): Future[T] = {
+    val req = message.asInstanceOf[PushData]
+    nettyEnv.pushData(req, this, timeout)
+  }
+
   override def send(message: Any): Unit = {
     require(message != null, "Message is null")
     nettyEnv.send(new RequestMessage(nettyEnv.address, this, message))
@@ -659,6 +723,21 @@ private[jss] class NettyRpcHandler(
       }
       requestMessage
     }
+  }
+
+  override def receivePushData(client: TransportClient,
+    req: PushData, callback: RpcResponseCallback): Unit = {
+    val addr = client.getChannel().remoteAddress().asInstanceOf[InetSocketAddress]
+    assert(addr != null)
+    val clientAddr = RpcAddress(addr.getHostString, addr.getPort)
+    val rpcCallContext = new RemoteNettyRpcCallContext(nettyEnv, callback, clientAddr)
+    req.body().retain()
+    val messageToDispatch = PushDataMessage(
+      req,
+      rpcCallContext
+    )
+    dispatcher.postMessage(
+      RpcNameConstants.WORKER_EP, messageToDispatch, (e) => callback.onFailure(e))
   }
 
   override def getStreamManager: StreamManager = streamManager

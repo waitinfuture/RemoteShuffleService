@@ -1,0 +1,33 @@
+[INFO] Scanning for projects...
+[INFO] 
+[INFO] -----------------< com.aliyun.emr:ess-network-common >------------------
+[INFO] Building Aliyun E-MapReduce JindoSS Common 1.0.0-SNAPSHOT
+[INFO] --------------------------------[ jar ]---------------------------------
+[INFO] 
+[INFO] --- maven-dependency-plugin:2.8:tree (default-cli) @ ess-network-common ---
+[INFO] com.aliyun.emr:ess-network-common:jar:1.0.0-SNAPSHOT
+[INFO] +- io.netty:netty-all:jar:4.1.17.Final:compile
+[INFO] +- org.apache.commons:commons-lang3:jar:3.5:compile
+[INFO] +- org.fusesource.leveldbjni:leveldbjni-all:jar:1.8:compile
+[INFO] +- com.fasterxml.jackson.core:jackson-databind:jar:2.6.7.3:compile
+[INFO] |  \- com.fasterxml.jackson.core:jackson-core:jar:2.6.7:compile
+[INFO] +- com.fasterxml.jackson.core:jackson-annotations:jar:2.6.7:compile
+[INFO] +- io.dropwizard.metrics:metrics-core:jar:3.1.5:compile
+[INFO] +- org.slf4j:slf4j-api:jar:1.7.16:provided
+[INFO] +- com.google.code.findbugs:jsr305:jar:1.3.9:compile
+[INFO] +- com.google.guava:guava:jar:14.0.1:compile
+[INFO] +- org.apache.commons:commons-crypto:jar:1.0.0:compile
+[INFO] +- log4j:log4j:jar:1.2.17:test
+[INFO] +- org.apache.spark:spark-tags_2.11:jar:2.4.3:test
+[INFO] |  +- org.scala-lang:scala-library:jar:2.11.12:test
+[INFO] |  +- org.apache.hive:hive-storage-api:jar:2.6.0:test
+[INFO] |  |  \- commons-lang:commons-lang:jar:2.6:test
+[INFO] |  \- org.spark-project.spark:unused:jar:1.0.0:test
+[INFO] +- org.mockito:mockito-core:jar:1.10.19:test
+[INFO] \- org.slf4j:slf4j-log4j12:jar:1.7.16:test
+[INFO] ------------------------------------------------------------------------
+[INFO] BUILD SUCCESS
+[INFO] ------------------------------------------------------------------------
+[INFO] Total time:  1.153 s
+[INFO] Finished at: 2020-06-01T18:37:30+08:00
+[INFO] ------------------------------------------------------------------------

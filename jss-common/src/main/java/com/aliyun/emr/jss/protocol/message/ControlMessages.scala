@@ -217,12 +217,6 @@ object DataMessages {
    *             handled by worker
    *  ==========================================
    */
-  case class SendData(
-    shuffleKey: String,
-    partitionLocation: PartitionLocation,
-//    data: ByteBuf
-    data: Array[Byte]
-  ) extends WorkerMessage
 
   case class ReplicateData(
     shuffleKey: String,
@@ -256,7 +250,7 @@ object DataMessages {
    *             handled by client
    *  ==========================================
    */
-  case class SendDataResponse(
+  case class PushDataResponse(
     status: StatusCode
   ) extends ClientMessage
 }

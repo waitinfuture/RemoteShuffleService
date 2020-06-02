@@ -166,11 +166,9 @@ private[deploy] class Master(
     case RegisterShuffle(applicationId, shuffleId, numMappers, numPartitions) =>
       logInfo(s"received RegisterShuffle request, $applicationId, $shuffleId, $numMappers, $numPartitions")
       handleRegisterShuffle(context, applicationId, shuffleId, numMappers, numPartitions)
-
     case Revive(applicationId, shuffleId, reduceId) =>
       logInfo(s"received Revive request, $applicationId, $shuffleId, $reduceId")
       handleRevive(context, applicationId, shuffleId, reduceId)
-
     case MapperEnd(applicationId: String, shuffleId: Int, mapId: Int,
     attemptId: Int, partitionLocations: util.List[PartitionLocation]) =>
       logInfo(s"received MapperEnd request, $applicationId, $shuffleId, $mapId, $attemptId, $partitionLocations")

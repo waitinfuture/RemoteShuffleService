@@ -18,4 +18,7 @@ public enum StatusCode
     SlavePartitionNotFound,
     DeleteFilesFailed,
     PartitionExists,
+    ReviveFailed,
+    PushDataFailed,
+    ReplicateDataFailed
 }

@@ -33,9 +33,8 @@ public class Chunk {
     }
 
     public void append(ByteBuf data) {
-        int numBytes = data.readableBytes();
-        for (int i = 0; i < numBytes; i++) {
-            Platform.putByte(null, currentAddress, data.readByte());
+        for (int i = data.readerIndex(); i < data.writerIndex(); i++) {
+            Platform.putByte(null, currentAddress, data.getByte(i));
             currentAddress++;
         }
     }

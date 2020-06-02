@@ -17,34 +17,46 @@
 
 package com.aliyun.emr.jss.common.rpc.netty
 
+import scala.util.control.NonFatal
+
 import com.aliyun.emr.jss.common.JindoException
 import com.aliyun.emr.jss.common.internal.Logging
-import javax.annotation.concurrent.GuardedBy
-
-import scala.util.control.NonFatal
 import com.aliyun.emr.jss.common.rpc.{RpcAddress, RpcEndpoint, ThreadSafeRpcEndpoint}
+import com.aliyun.emr.network.protocol.ess.PushData
+import javax.annotation.concurrent.GuardedBy
 
 
 private[jss] sealed trait InboxMessage
 
 private[jss] case class OneWayMessage(
-    senderAddress: RpcAddress,
-    content: Any) extends InboxMessage
+  senderAddress: RpcAddress,
+  content: Any)
+  extends InboxMessage
 
 private[jss] case class RpcMessage(
-    senderAddress: RpcAddress,
-    content: Any,
-    context: NettyRpcCallContext) extends InboxMessage
+  senderAddress: RpcAddress,
+  content: Any,
+  context: NettyRpcCallContext)
+  extends InboxMessage
 
-private[jss] case object OnStart extends InboxMessage
+private[jss] case class PushDataMessage(
+  pushData: PushData,
+  context: NettyRpcCallContext
+) extends InboxMessage
 
-private[jss] case object OnStop extends InboxMessage
+private[jss] case object OnStart
+  extends InboxMessage
+
+private[jss] case object OnStop
+  extends InboxMessage
 
 /** A message to tell all endpoints that a remote process has connected. */
-private[jss] case class RemoteProcessConnected(remoteAddress: RpcAddress) extends InboxMessage
+private[jss] case class RemoteProcessConnected(remoteAddress: RpcAddress)
+  extends InboxMessage
 
 /** A message to tell all endpoints that a remote process has disconnected. */
-private[jss] case class RemoteProcessDisconnected(remoteAddress: RpcAddress) extends InboxMessage
+private[jss] case class RemoteProcessDisconnected(remoteAddress: RpcAddress)
+  extends InboxMessage
 
 /** A message to tell all endpoints that a network error has happened. */
 private[jss] case class RemoteProcessConnectionError(cause: Throwable, remoteAddress: RpcAddress)
@@ -54,11 +66,11 @@ private[jss] case class RemoteProcessConnectionError(cause: Throwable, remoteAdd
  * An inbox that stores messages for an [[RpcEndpoint]] and posts messages to it thread-safely.
  */
 private[jss] class Inbox(
-    val endpointRef: NettyRpcEndpointRef,
-    val endpoint: RpcEndpoint)
+  val endpointRef: NettyRpcEndpointRef,
+  val endpoint: RpcEndpoint)
   extends Logging {
 
-  inbox =>  // Give this an alias so we can use it more clearly in closures.
+  inbox => // Give this an alias so we can use it more clearly in closures.
 
   @GuardedBy("this")
   protected val messages = new java.util.LinkedList[InboxMessage]()
@@ -112,6 +124,17 @@ private[jss] class Inbox(
                 throw e
             }
 
+          case PushDataMessage(pushData, context) =>
+            try {
+              endpoint.receiveAndReply(context).applyOrElse[Any, Unit](pushData, { msg =>
+                throw new JindoException(s"Unsupported message $message")
+              })
+            } catch {
+              case e: Throwable =>
+                context.sendFailure(e)
+                throw e
+            }
+
           case OneWayMessage(_sender, content) =>
             endpoint.receive.applyOrElse[Any, Unit](content, { msg =>
               throw new JindoException(s"Unsupported message $message from ${_sender}")
@@ -128,7 +151,9 @@ private[jss] class Inbox(
             }
 
           case OnStop =>
-            val activeThreads = inbox.synchronized { inbox.numActiveThreads }
+            val activeThreads = inbox.synchronized {
+              inbox.numActiveThreads
+            }
             assert(activeThreads == 1,
               s"There should be only a single active thread but found $activeThreads threads.")
             dispatcher.removeRpcEndpointRef(endpoint)
@@ -187,7 +212,9 @@ private[jss] class Inbox(
     }
   }
 
-  def isEmpty: Boolean = inbox.synchronized { messages.isEmpty }
+  def isEmpty: Boolean = inbox.synchronized {
+    messages.isEmpty
+  }
 
   /**
    * Called when we are dropping a message. Test cases override this to test message dropping.

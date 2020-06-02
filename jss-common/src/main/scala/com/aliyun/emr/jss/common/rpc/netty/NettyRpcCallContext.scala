@@ -18,10 +18,10 @@
 package com.aliyun.emr.jss.common.rpc.netty
 
 import com.aliyun.emr.jss.common.internal.Logging
-
 import scala.concurrent.Promise
-import org.apache.spark.network.client.RpcResponseCallback
+
 import com.aliyun.emr.jss.common.rpc.{RpcAddress, RpcCallContext}
+import com.aliyun.emr.network.client.RpcResponseCallback
 
 private[jss] abstract class NettyRpcCallContext(override val senderAddress: RpcAddress)
   extends RpcCallContext with Logging {

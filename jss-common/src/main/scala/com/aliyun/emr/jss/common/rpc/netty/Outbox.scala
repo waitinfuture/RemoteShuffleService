@@ -20,13 +20,14 @@ package com.aliyun.emr.jss.common.rpc.netty
 import java.nio.ByteBuffer
 import java.util.concurrent.Callable
 
+import scala.util.control.NonFatal
+
 import com.aliyun.emr.jss.common.JindoException
 import com.aliyun.emr.jss.common.internal.Logging
-import javax.annotation.concurrent.GuardedBy
-
-import scala.util.control.NonFatal
-import org.apache.spark.network.client.{RpcResponseCallback, TransportClient}
 import com.aliyun.emr.jss.common.rpc.{RpcAddress, RpcEnvStoppedException}
+import com.aliyun.emr.network.client.{RpcResponseCallback, TransportClient}
+import com.aliyun.emr.network.protocol.ess.PushData
+import javax.annotation.concurrent.GuardedBy
 
 private[jss] sealed trait OutboxMessage {
 
@@ -64,6 +65,38 @@ private[jss] case class RpcOutboxMessage(
   override def sendWith(client: TransportClient): Unit = {
     this.client = client
     this.requestId = client.sendRpc(content, this)
+  }
+
+  def onTimeout(): Unit = {
+    if (client != null) {
+      client.removeRpcRequest(requestId)
+    } else {
+      logError("Ask timeout before connecting successfully")
+    }
+  }
+
+  override def onFailure(e: Throwable): Unit = {
+    _onFailure(e)
+  }
+
+  override def onSuccess(response: ByteBuffer): Unit = {
+    _onSuccess(client, response)
+  }
+
+}
+
+private[jss] case class DataOutboxMessage(
+  pushData: PushData,
+  _onFailure: (Throwable) => Unit,
+  _onSuccess: (TransportClient, ByteBuffer) => Unit)
+  extends OutboxMessage with RpcResponseCallback with Logging {
+
+  private var client: TransportClient = _
+  private var requestId: Long = _
+
+  override def sendWith(client: TransportClient): Unit = {
+    this.client = client
+    this.requestId = client.pushData(pushData, this)
   }
 
   def onTimeout(): Unit = {

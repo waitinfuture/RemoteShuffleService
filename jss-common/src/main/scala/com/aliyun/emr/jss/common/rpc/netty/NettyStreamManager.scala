@@ -19,10 +19,10 @@ package com.aliyun.emr.jss.common.rpc.netty
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 
-import org.apache.spark.network.buffer.{FileSegmentManagedBuffer, ManagedBuffer}
-import org.apache.spark.network.server.StreamManager
 import com.aliyun.emr.jss.common.rpc.RpcEnvFileServer
 import com.aliyun.emr.jss.common.util.Utils
+import com.aliyun.emr.network.buffer.{FileSegmentManagedBuffer, ManagedBuffer}
+import com.aliyun.emr.network.server.StreamManager
 
 private[jss] class NettyStreamManager(rpcEnv: NettyRpcEnv)
   extends StreamManager with RpcEnvFileServer {

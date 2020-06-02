@@ -19,7 +19,7 @@ package com.aliyun.emr.jss.common.internal
 
 import java.util.concurrent.TimeUnit
 
-import org.apache.spark.network.util.ByteUnit
+import com.aliyun.emr.network.util.ByteUnit
 
 package object config {
 }

@@ -5,16 +5,21 @@ import java.util
 import scala.collection.JavaConversions._
 import scala.collection.JavaConverters._
 import scala.util.Random
+import com.aliyun.emr.jss.client.impl.ShuffleClientImpl
 import com.aliyun.emr.jss.common.rpc.{RpcAddress, RpcEndpointRef, RpcEnv}
 import com.aliyun.emr.jss.common.util.Utils
 import com.aliyun.emr.jss.common.EssConf
 import com.aliyun.emr.jss.protocol.{PartitionLocation, RpcNameConstants}
 import com.aliyun.emr.jss.protocol.message.ControlMessages._
-import com.aliyun.emr.jss.protocol.message.DataMessages.{GetDoubleChunkInfo, GetDoubleChunkInfoResponse, SendData, SendDataResponse}
+import com.aliyun.emr.jss.protocol.message.DataMessages.{GetDoubleChunkInfo, GetDoubleChunkInfoResponse, PushDataResponse}
 import com.aliyun.emr.jss.protocol.message.StatusCode
 import com.aliyun.emr.jss.service.deploy.common.EssPathUtil
 import com.aliyun.emr.jss.service.deploy.master.{Master, MasterArguments}
 import com.aliyun.emr.jss.service.deploy.worker._
+import com.aliyun.emr.network.buffer.NettyManagedBuffer
+import com.aliyun.emr.network.client.TransportClient
+import com.aliyun.emr.network.protocol.ess.PushData
+import io.netty.buffer.Unpooled
 import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.fs.{FileSystem, Path}
 import org.scalatest.FunSuite
@@ -392,7 +397,7 @@ class MessageHandlerSuite
     stop()
   }
 
-  test("SendData") {
+  test("PushData") {
     init()
 
     val appId = "appId"
@@ -410,84 +415,108 @@ class MessageHandlerSuite
 
     val bytes = new Array[Byte](64)
     0 until bytes.length foreach (ind => bytes(ind) = 'a')
+    val buf = new NettyManagedBuffer(Unpooled.copiedBuffer(bytes))
     val worker1Location = partitionLocations.filter(p => p.getPort == port1).toList(0)
-    val sendDataMsg1 = SendData(
+    val pushDataMsg1 = new PushData(
       shuffleKey,
-      worker1Location,
-      bytes
+      worker1Location.getUUID,
+      PartitionLocation.Mode.Master.mode,
+      buf,
+      TransportClient.requestId()
     )
-    var res = worker1.askSync[SendDataResponse](sendDataMsg1)
-    assert(res.status.equals(StatusCode.Success))
-    res = worker1.askSync[SendDataResponse](sendDataMsg1)
-    assert(res.status.equals(StatusCode.Success))
+    buf.retain()
+    var res1 = worker1.pushDataSync[PushDataResponse](pushDataMsg1)
+    buf.retain()
+    assert(res1.status == StatusCode.Success)
+    res1 = worker1.pushDataSync[PushDataResponse](pushDataMsg1)
+    buf.retain()
+    assert(res1.status == StatusCode.Success)
     waitUntilDataFinishFlushing(worker1, shuffleKey)
     assert(getFileLengh(shuffleKey, worker1Location.getReduceId, worker1Location.getUUID) == 0)
-    res = worker1.askSync[SendDataResponse](sendDataMsg1)
-    assert(res.status.equals(StatusCode.Success))
+    res1 = worker1.pushDataSync[PushDataResponse](pushDataMsg1)
+    buf.retain()
+    assert(res1.status == StatusCode.Success)
     waitUntilDataFinishFlushing(worker1, shuffleKey)
     assert(getFileLengh(shuffleKey, worker1Location.getReduceId, worker1Location.getUUID) == 128)
-    res = worker1.askSync[SendDataResponse](sendDataMsg1)
-    assert(res.status.equals(StatusCode.Success))
+    res1 = worker1.pushDataSync[PushDataResponse](pushDataMsg1)
+    buf.retain()
+    assert(res1.status == StatusCode.Success)
     waitUntilDataFinishFlushing(worker1, shuffleKey)
     assert(getFileLengh(shuffleKey, worker1Location.getReduceId, worker1Location.getUUID) == 128)
-    res = worker1.askSync[SendDataResponse](sendDataMsg1)
-    assert(res.status.equals(StatusCode.Success))
+    res1 = worker1.pushDataSync[PushDataResponse](pushDataMsg1)
+    buf.retain()
+    assert(res1.status == StatusCode.Success)
     waitUntilDataFinishFlushing(worker1, shuffleKey)
     assert(getFileLengh(shuffleKey, worker1Location.getReduceId, worker1Location.getUUID) == 256)
 
     val worker2Location = partitionLocations.filter(p => p.getPort == port2).toList(0)
     assert(getFileLengh(shuffleKey, worker2Location.getReduceId, worker2Location.getUUID) == 0)
-    val sendDataMsg2 = SendData(
+    val pushDataMsg2 = new PushData(
       "appId-1",
-      worker2Location,
-      bytes
+      worker2Location.getUUID,
+      PartitionLocation.Mode.Master.mode(),
+      buf,
+      TransportClient.requestId()
     )
-    res = worker2.askSync[SendDataResponse](sendDataMsg2)
-    assert(res.status.equals(StatusCode.Success))
+    buf.retain()
+    var res = worker2.pushDataSync[PushDataResponse](pushDataMsg2)
+    assert(res.status == StatusCode.Success)
     waitUntilDataFinishFlushing(worker2, shuffleKey)
     assert(getFileLengh(shuffleKey, worker2Location.getReduceId, worker2Location.getUUID) == 0)
-    res = worker2.askSync[SendDataResponse](sendDataMsg2)
-    assert(res.status.equals(StatusCode.Success))
+    buf.retain()
+    res = worker2.pushDataSync[PushDataResponse](pushDataMsg2)
+    assert(res.status == StatusCode.Success)
     waitUntilDataFinishFlushing(worker2, shuffleKey)
     assert(getFileLengh(shuffleKey, worker2Location.getReduceId, worker2Location.getUUID) == 0)
-    res = worker2.askSync[SendDataResponse](sendDataMsg2)
-    assert(res.status.equals(StatusCode.Success))
+    buf.retain()
+    res = worker2.pushDataSync[PushDataResponse](pushDataMsg2)
+    assert(res.status == StatusCode.Success)
+    waitUntilDataFinishFlushing(worker2, shuffleKey)
+    Thread.sleep(1000)
+    assert(getFileLengh(shuffleKey, worker2Location.getReduceId, worker2Location.getUUID) == 128)
+    buf.retain()
+    res = worker2.pushDataSync[PushDataResponse](pushDataMsg2)
+    assert(res.status == StatusCode.Success)
     waitUntilDataFinishFlushing(worker2, shuffleKey)
     assert(getFileLengh(shuffleKey, worker2Location.getReduceId, worker2Location.getUUID) == 128)
-    res = worker2.askSync[SendDataResponse](sendDataMsg2)
-    assert(res.status.equals(StatusCode.Success))
-    waitUntilDataFinishFlushing(worker2, shuffleKey)
-    assert(getFileLengh(shuffleKey, worker2Location.getReduceId, worker2Location.getUUID) == 128)
-    res = worker2.askSync[SendDataResponse](sendDataMsg2)
-    assert(res.status.equals(StatusCode.Success))
+    buf.retain()
+    res = worker2.pushDataSync[PushDataResponse](pushDataMsg2)
+    assert(res.status == StatusCode.Success)
     waitUntilDataFinishFlushing(worker2, shuffleKey)
     assert(getFileLengh(shuffleKey, worker2Location.getReduceId, worker2Location.getUUID) == 256)
 
     val worker2Location2 = partitionLocations.filter(p => p.getPort == port2).toList(1)
     assert(getFileLengh(shuffleKey, worker2Location.getReduceId, worker2Location2.getUUID) == 0)
-    val sendDataMsg3 = SendData(
+    val pushDataMsg3 = new PushData(
       "appId-1",
-      worker2Location2,
-      bytes
+      worker2Location2.getUUID,
+      PartitionLocation.Mode.Master.mode(),
+      buf,
+      TransportClient.requestId()
     )
-    res = worker2.askSync[SendDataResponse](sendDataMsg3)
-    assert(res.status.equals(StatusCode.Success))
+    buf.retain()
+    res = worker2.pushDataSync[PushDataResponse](pushDataMsg3)
+    assert(res.status == StatusCode.Success)
     waitUntilDataFinishFlushing(worker2, shuffleKey)
     assert(getFileLengh(shuffleKey, worker2Location2.getReduceId, worker2Location2.getUUID) == 0)
-    res = worker2.askSync[SendDataResponse](sendDataMsg3)
-    assert(res.status.equals(StatusCode.Success))
+    buf.retain()
+    res = worker2.pushDataSync[PushDataResponse](pushDataMsg3)
+    assert(res.status == StatusCode.Success)
     waitUntilDataFinishFlushing(worker2, shuffleKey)
     assert(getFileLengh(shuffleKey, worker2Location2.getReduceId, worker2Location2.getUUID) == 0)
-    res = worker2.askSync[SendDataResponse](sendDataMsg3)
-    assert(res.status.equals(StatusCode.Success))
+    buf.retain()
+    res = worker2.pushDataSync[PushDataResponse](pushDataMsg3)
+    assert(res.status == StatusCode.Success)
     waitUntilDataFinishFlushing(worker2, shuffleKey)
     assert(getFileLengh(shuffleKey, worker2Location2.getReduceId, worker2Location2.getUUID) == 128)
-    res = worker2.askSync[SendDataResponse](sendDataMsg3)
-    assert(res.status.equals(StatusCode.Success))
+    buf.retain()
+    res = worker2.pushDataSync[PushDataResponse](pushDataMsg3)
+    assert(res.status == StatusCode.Success)
     waitUntilDataFinishFlushing(worker2, shuffleKey)
     assert(getFileLengh(shuffleKey, worker2Location2.getReduceId, worker2Location2.getUUID) == 128)
-    res = worker2.askSync[SendDataResponse](sendDataMsg3)
-    assert(res.status.equals(StatusCode.Success))
+    buf.retain()
+    res = worker2.pushDataSync[PushDataResponse](pushDataMsg3)
+    assert(res.status == StatusCode.Success)
     waitUntilDataFinishFlushing(worker2, shuffleKey)
     assert(getFileLengh(shuffleKey, worker2Location2.getReduceId, worker2Location2.getUUID) == 256)
 
@@ -759,19 +788,23 @@ class MessageHandlerSuite
     0 until 5 foreach (_ => {
       val data = new Array[Byte](63)
       Random.nextBytes(data)
-      worker1.askSync[SendDataResponse](
-        SendData(
+      val buf = new NettyManagedBuffer(Unpooled.copiedBuffer(data))
+      worker1.pushDataSync[PushDataResponse](
+        new PushData(
           shuffleKey,
-          lostSlave.getPeer,
-          data
+          lostSlave.getPeer.getUUID,
+          PartitionLocation.Mode.Master.mode(),
+          buf,
+          TransportClient.requestId()
         )
       )
     })
 
     // trigger slave lost
-    var res2 = worker1.askSync[SlaveLostResponse](
+    val res2 = worker1.askSync[SlaveLostResponse](
       SlaveLost(shuffleKey, lostSlave.getPeer, lostSlave)
     )
+    assert(res2.status == StatusCode.Success)
     waitUntilDataFinishFlushing(worker1, shuffleKey)
     res1 = worker1.askSync[GetWorkerInfosResponse](GetWorkerInfos)
     workerInfo = res1.workerInfos.asInstanceOf[util.List[WorkerInfo]].get(0)
@@ -830,10 +863,12 @@ class MessageHandlerSuite
       locations.foreach(loc => {
         val worker = getWorker(loc)
         val data = new Array[Byte](63)
-        val res = worker.askSync[SendDataResponse](
-          SendData(shuffleKey, loc, data)
+        val buf = new NettyManagedBuffer(Unpooled.copiedBuffer(data))
+        val res = worker.pushDataSync[PushDataResponse](
+          new PushData(shuffleKey, loc.getUUID, PartitionLocation.Mode.Master.mode,
+            buf, TransportClient.requestId())
         )
-        assert(res.status.equals(StatusCode.Success))
+        assert(res.status == StatusCode.Success)
       })
     })
 
@@ -890,10 +925,12 @@ class MessageHandlerSuite
       resReg.partitionLocations.foreach(loc => {
         val data = new Array[Byte](63)
         Random.nextBytes(data)
-        val res = getWorker(loc).askSync[SendDataResponse](
-          SendData(shuffleKey, loc, data)
+        val buf = new NettyManagedBuffer(Unpooled.copiedBuffer(data))
+        val res = getWorker(loc).pushDataSync[PushDataResponse](
+          new PushData(shuffleKey, loc.getUUID, PartitionLocation.Mode.Master.mode(),
+            buf, TransportClient.requestId())
         )
-        assert(res.status.equals(StatusCode.Success))
+        assert(res.status == StatusCode.Success)
       })
     })
 
@@ -954,9 +991,12 @@ class MessageHandlerSuite
         val worker = getWorker(loc)
         val data = new Array[Byte](63)
         Random.nextBytes(data)
-        worker.askSync[SendDataResponse](
-          SendData(shuffleKey, loc, data)
+        val buf = new NettyManagedBuffer(Unpooled.copiedBuffer(data))
+        val res = worker.pushDataSync[PushDataResponse](
+          new PushData(shuffleKey, loc.getUUID, PartitionLocation.Mode.Master.mode(),
+            buf, TransportClient.requestId())
         )
+        assert(res.status == StatusCode.Success)
       })
     })
 
@@ -1004,10 +1044,12 @@ class MessageHandlerSuite
         val worker = getWorker(loc)
         val data = new Array[Byte](63)
         Random.nextBytes(data)
-        val res = worker.askSync[SendDataResponse](
-          SendData(shuffleKey2, loc, data)
+        val buf = new NettyManagedBuffer(Unpooled.copiedBuffer(data))
+        val res = worker.pushDataSync[PushDataResponse](
+          new PushData(shuffleKey2, loc.getUUID, PartitionLocation.Mode.Master.mode,
+            buf, TransportClient.requestId())
         )
-        assert(res.status.equals(StatusCode.Success))
+        assert(res.status == StatusCode.Success)
       })
     })
 
@@ -1037,10 +1079,12 @@ class MessageHandlerSuite
         val worker = getWorker(loc)
         val data = new Array[Byte](63)
         Random.nextBytes(data)
-        val res = worker.askSync[SendDataResponse](
-          SendData(shuffleKey3, loc, data)
+        val buf = new NettyManagedBuffer(Unpooled.copiedBuffer(data))
+        val res = worker.pushDataSync[PushDataResponse](
+          new PushData(shuffleKey3, loc.getUUID, PartitionLocation.Mode.Master.mode,
+            buf, TransportClient.requestId())
         )
-        assert(res.status.equals(StatusCode.Success))
+        assert(res.status == StatusCode.Success)
       })
     })
 
@@ -1118,10 +1162,12 @@ class MessageHandlerSuite
         val worker = getWorker(loc)
         val data = new Array[Byte](63)
         Random.nextBytes(data)
-        val res = worker.askSync[SendDataResponse](
-          SendData(shuffleKey1, loc, data)
+        val buf = new NettyManagedBuffer(Unpooled.copiedBuffer(data))
+        val res = worker.pushDataSync[PushDataResponse](
+          new PushData(shuffleKey1, loc.getUUID, PartitionLocation.Mode.Master.mode(),
+            buf, TransportClient.requestId())
         )
-        assert(res.status.equals(StatusCode.Success))
+        assert(res.status == StatusCode.Success)
       })
     })
 
@@ -1202,10 +1248,12 @@ class MessageHandlerSuite
         val worker = getWorker(loc)
         val data = new Array[Byte](63)
         Random.nextBytes(data)
-        val res = worker.askSync[SendDataResponse](
-          SendData(shuffleKey1, loc, data)
+        val buf = new NettyManagedBuffer(Unpooled.copiedBuffer(data))
+        val res = worker.pushDataSync[PushDataResponse](
+          new PushData(shuffleKey1, loc.getUUID, PartitionLocation.Mode.Master.mode,
+            buf, TransportClient.requestId())
         )
-        assert(res.status.equals(StatusCode.Success))
+        assert(res.status == StatusCode.Success)
       })
     })
 
@@ -1222,10 +1270,12 @@ class MessageHandlerSuite
         val worker = getWorker(loc)
         val data = new Array[Byte](63)
         Random.nextBytes(data)
-        val res = worker.askSync[SendDataResponse](
-          SendData(shuffleKey2, loc, data)
+        val buf = new NettyManagedBuffer(Unpooled.copiedBuffer(data))
+        val res = worker.pushDataSync[PushDataResponse](
+          new PushData(shuffleKey2, loc.getUUID, PartitionLocation.Mode.Master.mode,
+            buf, TransportClient.requestId())
         )
-        assert(res.status.equals(StatusCode.Success))
+        assert(res.status == StatusCode.Success)
       })
     })
 
@@ -1242,10 +1292,12 @@ class MessageHandlerSuite
         val worker = getWorker(loc)
         val data = new Array[Byte](63)
         Random.nextBytes(data)
-        val res = worker.askSync[SendDataResponse](
-          SendData(shuffleKey3, loc, data)
+        val buf = new NettyManagedBuffer(Unpooled.copiedBuffer(data))
+        val res = worker.pushDataSync[PushDataResponse](
+          new PushData(shuffleKey3, loc.getUUID, PartitionLocation.Mode.Master.mode(),
+            buf, TransportClient.requestId())
         )
-        assert(res.status.equals(StatusCode.Success))
+        assert(res.status == StatusCode.Success)
       })
     })
 
@@ -1366,8 +1418,10 @@ class MessageHandlerSuite
         val worker = getWorker(loc)
         val data = new Array[Byte](63)
         Random.nextBytes(data)
-        worker.askSync[SendDataResponse](
-          SendData(shuffleKey, loc, data)
+        val buf = new NettyManagedBuffer(Unpooled.copiedBuffer(data))
+        worker.pushDataSync[PushDataResponse](
+          new PushData(shuffleKey, loc.getUUID, PartitionLocation.Mode.Master.mode,
+            buf, TransportClient.requestId())
         )
       })
     })
@@ -1387,11 +1441,13 @@ class MessageHandlerSuite
     val worker = getWorker(newLoc)
     val data = new Array[Byte](63)
     Random.nextBytes(data)
+    val buf = new NettyManagedBuffer(Unpooled.copiedBuffer(data))
     0 until 1 foreach (_ => {
-      val resSend = worker.askSync[SendDataResponse](
-        SendData(shuffleKey, newLoc, data)
+      val resSend = worker.pushDataSync[PushDataResponse](
+        new PushData(shuffleKey, newLoc.getUUID, PartitionLocation.Mode.Master.mode(),
+          buf, TransportClient.requestId())
       )
-      assert(resSend.status.equals(StatusCode.Success))
+      assert(resSend.status == StatusCode.Success)
     })
     waitUntilDataFinishFlushing(worker, shuffleKey)
 
@@ -1432,10 +1488,12 @@ class MessageHandlerSuite
         val worker = getWorker(loc)
         val data = new Array[Byte](63)
         Random.nextBytes(data)
-        val res = worker.askSync[SendDataResponse](
-          SendData(shuffleKey, loc, data)
+        val buf = new NettyManagedBuffer(Unpooled.copiedBuffer(data))
+        val res = worker.pushDataSync[PushDataResponse](
+          new PushData(shuffleKey, loc.getUUID, PartitionLocation.Mode.Master.mode(),
+            buf, TransportClient.requestId())
         )
-        assert(res.status.equals(StatusCode.Success))
+        assert(res.status == StatusCode.Success)
       })
     })
 
@@ -1489,10 +1547,12 @@ class MessageHandlerSuite
         val worker = getWorker(loc)
         val data = new Array[Byte](63)
         Random.nextBytes(data)
-        val res = worker.askSync[SendDataResponse](
-          SendData(shuffleKey1, loc, data)
+        val buf = new NettyManagedBuffer(Unpooled.copiedBuffer(data))
+        val res = worker.pushDataSync[PushDataResponse](
+          new PushData(shuffleKey1, loc.getUUID, PartitionLocation.Mode.Master.mode(),
+            buf, TransportClient.requestId())
         )
-        assert(res.status.equals(StatusCode.Success))
+        assert(res.status == StatusCode.Success)
       })
     })
     val shufflePath1 = EssPathUtil.GetShuffleDir(conf, appId, shuffleId1)
@@ -1508,10 +1568,12 @@ class MessageHandlerSuite
         val worker = getWorker(loc)
         val data = new Array[Byte](63)
         Random.nextBytes(data)
-        val res = worker.askSync[SendDataResponse](
-          SendData(shuffleKey2, loc, data)
+        val buf = new NettyManagedBuffer(Unpooled.copiedBuffer(data))
+        val res = worker.pushDataSync[PushDataResponse](
+          new PushData(shuffleKey2, loc.getUUID, PartitionLocation.Mode.Master.mode(),
+            buf, TransportClient.requestId())
         )
-        assert(res.status.equals(StatusCode.Success))
+        assert(res.status == StatusCode.Success)
       })
     })
     val shufflePath2 = EssPathUtil.GetShuffleDir(conf, appId, shuffleId2)
@@ -1527,10 +1589,12 @@ class MessageHandlerSuite
         val worker = getWorker(loc)
         val data = new Array[Byte](63)
         Random.nextBytes(data)
-        val res = worker.askSync[SendDataResponse](
-          SendData(shuffleKey3, loc, data)
+        val buf = new NettyManagedBuffer(Unpooled.copiedBuffer(data))
+        val res = worker.pushDataSync[PushDataResponse](
+          new PushData(shuffleKey3, loc.getUUID, PartitionLocation.Mode.Master.mode(),
+            buf, TransportClient.requestId())
         )
-        assert(res.status.equals(StatusCode.Success))
+        assert(res.status == StatusCode.Success)
       })
     })
     val shufflePath3 = EssPathUtil.GetShuffleDir(conf, appId, shuffleId3)
@@ -1560,6 +1624,55 @@ class MessageHandlerSuite
     assert(worker2InfoMaster.memoryUsed == 0)
     assert(worker3InfoMaster.memoryUsed == 0)
 
+    stop(3)
+  }
+
+  test("ClientPushData") {
+    init(3)
+
+    val appId = "appId"
+    val shuffleId1 = 1
+    val shuffleKey1 = Utils.makeShuffleKey(appId, shuffleId1)
+    val client = new ShuffleClientImpl()
+    val res = client.registerShuffle(appId, shuffleId1, 10, 11)
+    assert(res)
+
+    0 until 114 foreach (_ => {
+      0 until 11 foreach (reduceId => {
+        val data = new Array[Byte](63)
+        val buf = Unpooled.copiedBuffer(data)
+        val res = client.pushData(appId, shuffleId1, reduceId, buf)
+        assert(res)
+      })
+    })
+
+    waitUntilDataFinishFlushing(worker1, shuffleKey1)
+    waitUntilDataFinishFlushing(worker2, shuffleKey1)
+    waitUntilDataFinishFlushing(worker3, shuffleKey1)
+    assertInfos()
+
+    // stageEnd
+    val resStageEnd = client.stageEnd(appId, shuffleId1);
+    assert(resStageEnd)
+    waitUntilDataFinishFlushing(worker1, shuffleKey1)
+    waitUntilDataFinishFlushing(worker2, shuffleKey1)
+    waitUntilDataFinishFlushing(worker3, shuffleKey1)
+    assertInfos()
+    assert(worker1InfoMaster.memoryUsed == 0)
+    assert(worker2InfoMaster.memoryUsed == 0)
+    assert(worker3InfoMaster.memoryUsed == 0)
+    val partitions = client.fetchShuffleInfo(appId, shuffleId1)
+    assertFileLength(shuffleKey1, partitions, 63 * 114)
+
+    // unregister shuffle
+    val resUnreg = client.unregisterShuffle(appId, shuffleId1)
+    assert(resUnreg)
+    assertInfos()
+    assert(worker1InfoMaster.memoryUsed == 0)
+    assert(worker2InfoMaster.memoryUsed == 0)
+    assert(worker3InfoMaster.memoryUsed == 0)
+
+    client.shutDown()
     stop(3)
   }
 }

@@ -22,13 +22,14 @@ import java.util.concurrent.{ConcurrentHashMap, ConcurrentMap, LinkedBlockingQue
 import com.aliyun.emr.jss.common.JindoException
 import com.aliyun.emr.jss.common.internal.Logging
 import javax.annotation.concurrent.GuardedBy
-
 import scala.collection.JavaConverters._
 import scala.concurrent.Promise
 import scala.util.control.NonFatal
-import org.apache.spark.network.client.RpcResponseCallback
+
 import com.aliyun.emr.jss.common.rpc._
 import com.aliyun.emr.jss.common.util.ThreadUtils
+import com.aliyun.emr.network.client.RpcResponseCallback
+import com.aliyun.emr.network.protocol.ess.PushData
 
 /**
  * A message dispatcher, responsible for routing RPC messages to the appropriate endpoint(s).
@@ -135,6 +136,16 @@ private[jss] class Dispatcher(nettyEnv: NettyRpcEnv, numUsableCores: Int) extend
     postMessage(message.receiver.name, rpcMessage, (e) => p.tryFailure(e))
   }
 
+  /** Posts a message sent by a local endpoint. */
+  def postLocalMessage(message: PushData, receiver: NettyRpcEndpointRef, p: Promise[Any]): Unit = {
+    val rpcCallContext = new LocalNettyRpcCallContext(nettyEnv.address, p)
+    val pushDataMessage = PushDataMessage(
+      message,
+      rpcCallContext
+    )
+    postMessage(receiver.name, pushDataMessage, (e) => p.tryFailure(e))
+  }
+
   /** Posts a one-way message. */
   def postOneWayMessage(message: RequestMessage): Unit = {
     postMessage(message.receiver.name, OneWayMessage(message.senderAddress, message.content),
@@ -148,7 +159,7 @@ private[jss] class Dispatcher(nettyEnv: NettyRpcEnv, numUsableCores: Int) extend
    * @param message the message to post
    * @param callbackIfStopped callback function if the endpoint is stopped.
    */
-  private def postMessage(
+  def postMessage(
       endpointName: String,
       message: InboxMessage,
       callbackIfStopped: (Exception) => Unit): Unit = {

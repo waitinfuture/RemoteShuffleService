@@ -17,7 +17,7 @@
 
 package com.aliyun.emr.jss.common.util
 
-import java.io.{File, FileInputStream, IOException, InputStreamReader}
+import java.io.{File, FileInputStream, InputStreamReader, IOException}
 import java.math.{MathContext, RoundingMode}
 import java.net._
 import java.nio.charset.StandardCharsets
@@ -29,12 +29,13 @@ import com.aliyun.emr.jss.common.internal.Logging
 import com.google.common.net.InetAddresses
 import io.netty.channel.unix.Errors.NativeIoException
 import org.apache.commons.lang3.SystemUtils
-import org.apache.spark.network.util.{ConfigProvider, JavaUtils, TransportConf}
 
 import scala.collection.JavaConverters._
 import scala.collection.Map
 import scala.util.Try
 import scala.util.control.{ControlThrowable, NonFatal}
+
+import com.aliyun.emr.network.util.{ConfigProvider, JavaUtils, TransportConf}
 
 object Utils extends Logging {
 

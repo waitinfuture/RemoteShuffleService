@@ -21,9 +21,10 @@ import java.util.concurrent.TimeUnit
 import java.util.regex.PatternSyntaxException
 
 import com.aliyun.emr.jss.common.util.Utils
-import org.apache.spark.network.util.{ByteUnit, JavaUtils}
 
 import scala.util.matching.Regex
+
+import com.aliyun.emr.network.util.{ByteUnit, JavaUtils}
 
 private object ConfigHelpers {
 

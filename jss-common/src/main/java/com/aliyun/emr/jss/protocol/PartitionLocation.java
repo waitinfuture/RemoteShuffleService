@@ -5,10 +5,28 @@ import java.io.Serializable;
 public class PartitionLocation implements Serializable
 {
     public enum Mode {
-        Master, Slave
+        Master(0), Slave(1);
+
+        private final byte mode;
+
+        Mode(int id) {
+            assert id < 128 : "Cannot have more than 128 message types";
+            this.mode = (byte) id;
+        }
+
+        public byte mode() { return mode; }
     };
 
     private int reduceId;
+
+    public static PartitionLocation.Mode getMode(byte mode) {
+        if (mode == 0) {
+            return Mode.Master;
+        } else {
+            return Mode.Slave;
+        }
+    }
+
     private String UUID;
     private String host;
     private int port;
