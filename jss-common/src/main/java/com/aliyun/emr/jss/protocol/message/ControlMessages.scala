@@ -71,13 +71,13 @@ object ControlMessages {
     status: StatusCode
   ) extends MasterMessage
 
-  case class GetShuffleFileGroup(
+  case class GetReducerFileGroup(
     applicationId: String,
     shuffleId: Int) extends MasterMessage
 
   // util.Set[String] -> util.Set[Path.toString]
   // Path can't be serialized
-  case class GetShuffleFileGroupResponse(
+  case class GetReducerFileGroupResponse(
     status: StatusCode,
     fileGroup: util.HashMap[String, util.Set[String]]) extends MasterMessage
 

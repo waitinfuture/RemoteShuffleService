@@ -563,11 +563,11 @@ class MessageHandlerSuite
       )
     )
     assert(res.status.equals(StatusCode.Success))
-    var groupRes = master.askSync[GetShuffleFileGroupResponse](
-      GetShuffleFileGroup("appId", 1)
+    var groupRes = master.askSync[GetReducerFileGroupResponse](
+      GetReducerFileGroup("appId", 1)
     )
     assert(groupRes.status.equals(StatusCode.Success))
-    val orderKeys1: Array[String] = mapper1Locations.map(l => Utils.makePartitionKey("appId", 1, l.getReduceId)).sorted.toArray
+    val orderKeys1: Array[String] = mapper1Locations.map(l => Utils.makeReducerKey("appId", 1, l.getReduceId)).sorted.toArray
     val orderValues1: Array[String] = mapper1Locations.map(l => EssPathUtil.GetPartitionPath(conf, "appId", 1, l.getReduceId, l.getUUID).toString).sorted.toArray
     assertResult(orderKeys1) {
       groupRes.fileGroup.keySet().asScala.toArray.sorted
@@ -586,12 +586,12 @@ class MessageHandlerSuite
       )
     )
     assert(res.status.equals(StatusCode.Success))
-    groupRes = master.askSync[GetShuffleFileGroupResponse](
-      GetShuffleFileGroup("appId", 1)
+    groupRes = master.askSync[GetReducerFileGroupResponse](
+      GetReducerFileGroup("appId", 1)
     )
     assert(groupRes.status.equals(StatusCode.Success))
     val orderKeys2: Array[String] = (mapper1Locations ++ mapper2Locations)
-      .distinct.map(l => Utils.makePartitionKey("appId", 1, l.getReduceId))
+      .distinct.map(l => Utils.makeReducerKey("appId", 1, l.getReduceId))
       .sorted.toArray
     val orderValues2: Array[String] = (mapper1Locations ++ mapper2Locations)
       .distinct.map(l => EssPathUtil.GetPartitionPath(conf, "appId", 1, l.getReduceId, l.getUUID).toString)
@@ -613,12 +613,12 @@ class MessageHandlerSuite
       )
     )
     assert(res.status.equals(StatusCode.Success))
-    groupRes = master.askSync[GetShuffleFileGroupResponse](
-      GetShuffleFileGroup("appId", 1)
+    groupRes = master.askSync[GetReducerFileGroupResponse](
+      GetReducerFileGroup("appId", 1)
     )
     assert(groupRes.status.equals(StatusCode.Success))
     val orderKeys3: Array[String] = (mapper1Locations ++ mapper2Locations ++ mapper3Locations)
-      .distinct.map(l => Utils.makePartitionKey("appId", 1, l.getReduceId))
+      .distinct.map(l => Utils.makeReducerKey("appId", 1, l.getReduceId))
       .sorted.toArray
     val orderValues3: Array[String] = (mapper1Locations ++ mapper2Locations ++ mapper3Locations)
       .distinct.map(l => EssPathUtil.GetPartitionPath(conf, "appId", 1, l.getReduceId, l.getUUID).toString).sorted.toArray
@@ -1673,6 +1673,119 @@ class MessageHandlerSuite
     assert(worker3InfoMaster.memoryUsed == 0)
 
     client.shutDown()
+    stop(3)
+  }
+
+  test("GetReducerFileGroup") {
+    init(3)
+
+    val appId = "appId"
+    val shuffleId = 1
+    val shuffleKey = Utils.makeShuffleKey(appId, shuffleId)
+    // register shuffle
+    val resReg = master.askSync[RegisterShuffleResponse](
+      RegisterShuffle(appId, shuffleId, 10, 10)
+    )
+
+    // send data
+    0 until 10 foreach (_ => {
+      resReg.partitionLocations.foreach(loc => {
+        val worker = getWorker(loc)
+        val data = new Array[Byte](63)
+        Random.nextBytes(data)
+        val buf = new NettyManagedBuffer(Unpooled.copiedBuffer(data))
+        val res = worker.pushDataSync[PushDataResponse](
+          new PushData(shuffleKey, loc.getUUID, PartitionLocation.Mode.Master.mode(),
+            buf, TransportClient.requestId())
+        )
+        assert(res.status == StatusCode.Success)
+      })
+    })
+
+    // get reducer group before mapper end
+    var resRedGrp = master.askSync[GetReducerFileGroupResponse](
+      GetReducerFileGroup(appId, shuffleId)
+    )
+    assert(resRedGrp.status == StatusCode.Success)
+    assert(resRedGrp.fileGroup.size() == 0)
+
+    // mapper end
+    0 until 10 foreach(mapId => {
+      val res = master.askSync[MapperEndResponse](
+        MapperEnd(appId, shuffleId, mapId, 0, resReg.partitionLocations)
+      )
+      assert(res.status == StatusCode.Success)
+    })
+
+    // get reducer group after mapper end
+    resRedGrp = master.askSync[GetReducerFileGroupResponse](
+      GetReducerFileGroup(appId, shuffleId)
+    )
+    assert(resRedGrp.status == StatusCode.Success)
+    assert(resRedGrp.fileGroup.size() == 10)
+    resReg.partitionLocations.foreach(loc => {
+      val reducerKey = Utils.makeReducerKey(appId, shuffleId, loc.getReduceId)
+      assert(resRedGrp.fileGroup.containsKey(reducerKey))
+      val path = EssPathUtil.GetPartitionPath(conf, appId, shuffleId, loc.getReduceId, loc.getUUID)
+      assert(resRedGrp.fileGroup.get(reducerKey).size() == 1)
+      assert(resRedGrp.fileGroup.get(reducerKey).head.equals(path.toString))
+    })
+
+    // revive for reducer 0
+    val resRev = master.askSync[ReviveResponse](
+      Revive(appId, shuffleId, 0)
+    )
+    assert(resRev.status == StatusCode.Success)
+    // send data for the revived partition
+    var worker = getWorker(resRev.partitionLocation)
+    val data = new Array[Byte](63)
+    val buf = new NettyManagedBuffer(Unpooled.copiedBuffer(data))
+    val res = worker.pushDataSync[PushDataResponse](
+      new PushData(shuffleKey, resRev.partitionLocation.getUUID, PartitionLocation.Mode.Master.mode(),
+        buf, TransportClient.requestId())
+    )
+    assert(res.status == StatusCode.Success)
+
+    // mapper end
+    val res2 = master.askSync[MapperEndResponse](
+      MapperEnd(appId, shuffleId, 0, 0, List(resRev.partitionLocation))
+    )
+    assert(res2.status == StatusCode.Success)
+
+    // get reducer group after mapper end
+    resRedGrp = master.askSync[GetReducerFileGroupResponse](
+      GetReducerFileGroup(appId, shuffleId)
+    )
+    assert(resRedGrp.status == StatusCode.Success)
+    assert(resRedGrp.fileGroup.size() == 10)
+    resReg.partitionLocations.foreach(loc => {
+      val reducerKey = Utils.makeReducerKey(appId, shuffleId, loc.getReduceId)
+      assert(resRedGrp.fileGroup.containsKey(reducerKey))
+      if (loc.getReduceId == 0) {
+        val path1 = EssPathUtil.GetPartitionPath(conf, appId, shuffleId,
+          loc.getReduceId, loc.getUUID)
+        val path2 = EssPathUtil.GetPartitionPath(conf, appId, shuffleId,
+          resRev.partitionLocation.getReduceId, resRev.partitionLocation.getUUID)
+        assert(resRedGrp.fileGroup.get(reducerKey).size() == 2)
+        val fileGroup = resRedGrp.fileGroup.get(reducerKey)
+        assert(fileGroup.contains(path1.toString))
+        assert(fileGroup.contains(path2.toString))
+      } else {
+        val path = EssPathUtil.GetPartitionPath(conf, appId, shuffleId, loc.getReduceId, loc.getUUID)
+        assert(resRedGrp.fileGroup.get(reducerKey).size() == 1)
+        assert(resRedGrp.fileGroup.get(reducerKey).head.equals(path.toString))
+      }
+    })
+
+
+    // trigger stage end
+    val resStageEnd = master.askSync[StageEndResponse](
+      StageEnd(appId, shuffleId)
+    )
+    assert(resStageEnd.status == StatusCode.Success)
+    assertFileLength(shuffleKey, resReg.partitionLocations, 63 * 10)
+    assertFileLength(shuffleKey, List(resRev.partitionLocation), 63)
+
     stop(3)
   }
 }

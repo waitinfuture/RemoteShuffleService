@@ -174,9 +174,9 @@ private[deploy] class Master(
       logInfo(s"received MapperEnd request, $applicationId, $shuffleId, $mapId, $attemptId, $partitionLocations")
       handleMapperEnd(context, applicationId, shuffleId, mapId, attemptId, partitionLocations)
 
-    case GetShuffleFileGroup(applicationId: String, shuffleId: Int) =>
+    case GetReducerFileGroup(applicationId: String, shuffleId: Int) =>
       logInfo(s"received GetShuffleFileGroup request, $applicationId, $shuffleId")
-      handleGetShuffleFileGroup(context, applicationId, shuffleId)
+      handleGetReducerFileGroup(context, applicationId, shuffleId)
 
     case SlaveLost(shuffleKey, masterLocation, slaveLocation: PartitionLocation) =>
       logInfo(s"received SlaveLost request, $slaveLocation")
@@ -499,7 +499,7 @@ private[deploy] class Master(
     reducerFileGroup.synchronized {
       partitionLocations
         .map(loc => {
-          val partitionKey = Utils.makePartitionKey(applicationId, shuffleId, loc.getReduceId)
+          val partitionKey = Utils.makeReducerKey(applicationId, shuffleId, loc.getReduceId)
           val path = EssPathUtil.GetPartitionPath(conf, applicationId, shuffleId, loc.getReduceId, loc.getUUID)
           (partitionKey, path)
         })
@@ -515,7 +515,7 @@ private[deploy] class Master(
     context.reply(MapperEndResponse(StatusCode.Success))
   }
 
-  private def handleGetShuffleFileGroup(context: RpcCallContext,
+  private def handleGetReducerFileGroup(context: RpcCallContext,
     applicationId: String,
     shuffleId: Int): Unit = {
 
@@ -525,7 +525,7 @@ private[deploy] class Master(
       .map(entry => (entry._1, new util.HashSet(entry._2.map(_.toString).asJava)))
       .toMap
 
-    context.reply(GetShuffleFileGroupResponse(StatusCode.Success, new util.HashMap(shuffleFileGroup.asJava)))
+    context.reply(GetReducerFileGroupResponse(StatusCode.Success, new util.HashMap(shuffleFileGroup.asJava)))
   }
 
   private def handleSlaveLost(context: RpcCallContext,
@@ -732,6 +732,11 @@ private[deploy] class Master(
       context.reply(UnregisterShuffleResponse(StatusCode.PartitionExists))
       return
     }
+    // clear reducerFileGroup for the shuffle
+    reducerFileGroup.synchronized {
+      val keys = reducerFileGroup.keySet()
+      keys.filter(key => key.startsWith(shuffleKey)).foreach(key => reducerFileGroup.remove(key))
+    }
     // delete shuffle files
     val shuffleDir = EssPathUtil.GetShuffleDir(conf, appId, shuffleId)
     val success = fs.delete(shuffleDir, true)
@@ -783,6 +788,11 @@ private[deploy] class Master(
         nextShufflePartitions = getNextShufflePartitions(worker)
       }
     })
+    // clear reducerFileGroup for the application
+    reducerFileGroup.synchronized {
+      val keys = reducerFileGroup.keySet()
+      keys.filter(key => key.startsWith(appId)).foreach(key => reducerFileGroup.remove(key))
+    }
     // delete files for the application
     val appPath = EssPathUtil.GetAppDir(conf, appId)
     if (fs.delete(appPath, true)) {

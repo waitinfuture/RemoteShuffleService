@@ -73,7 +73,7 @@ public class ShuffleClientImpl extends ShuffleClient {
             for (int i = 0; i < response.partitionLocations().size(); i++) {
                 PartitionLocation partitionLoc = response.partitionLocations().get(i);
                 String partitionKey =
-                    Utils.makePartitionKey(applicationId, shuffleId, partitionLoc.getReduceId());
+                    Utils.makeReducerKey(applicationId, shuffleId, partitionLoc.getReduceId());
                 PartitionLocation prev = partitionMap.putIfAbsent(
                     partitionKey,
                     partitionLoc
@@ -105,7 +105,7 @@ public class ShuffleClientImpl extends ShuffleClient {
         // per partitionKey only serve single PartitionLocation in Client Cache.
         if (response.status().equals(StatusCode.Success)) {
             partitionMap.put(
-                Utils.makePartitionKey(applicationId, shuffleId, reduceId),
+                Utils.makeReducerKey(applicationId, shuffleId, reduceId),
                 response.partitionLocation()
             );
             return true;
@@ -128,7 +128,7 @@ public class ShuffleClientImpl extends ShuffleClient {
         int reduceId,
         ByteBuf data) {
         String partitionKey =
-            Utils.makePartitionKey(applicationId, shuffleId, reduceId);
+            Utils.makeReducerKey(applicationId, shuffleId, reduceId);
         PartitionLocation loc = partitionMap.get(partitionKey);
         return pushData(applicationId, shuffleId, reduceId, loc.getUUID(), data, loc, true);
     }
@@ -217,7 +217,7 @@ public class ShuffleClientImpl extends ShuffleClient {
         for (int i = 0; i < partitionLocations.size(); i++) {
             PartitionLocation partitionLoc = partitionLocations.get(i);
             partitionMap.put(
-                Utils.makePartitionKey(applicationId, shuffleId, partitionLoc.getReduceId()),
+                Utils.makeReducerKey(applicationId, shuffleId, partitionLoc.getReduceId()),
                 partitionLoc
             );
         }
