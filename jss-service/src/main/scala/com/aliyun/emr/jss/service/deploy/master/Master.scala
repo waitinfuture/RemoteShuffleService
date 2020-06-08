@@ -512,13 +512,17 @@ private[deploy] class Master(
     applicationId: String,
     shuffleId: Int): Unit = {
 
-    val partitionKeyPrefix = Utils.makeShuffleKey(applicationId, shuffleId)
+    val shuffleKey = Utils.makeShuffleKey(applicationId, shuffleId)
     val shuffleFileGroup = reducerFileGroup
-      .filter(entry => entry._1.startsWith(partitionKeyPrefix))
+      .filter(entry => entry._1.startsWith(shuffleKey))
       .map(entry => (entry._1, new util.HashSet(entry._2.map(_.toString).asJava)))
       .toMap
 
-    context.reply(GetReducerFileGroupResponse(StatusCode.Success, new util.HashMap(shuffleFileGroup.asJava)))
+    context.reply(GetReducerFileGroupResponse(
+      StatusCode.Success,
+      new util.HashMap(shuffleFileGroup.asJava),
+      shuffleMapperAttempts.get(shuffleKey)
+    ))
   }
 
   private def handleSlaveLost(context: RpcCallContext,

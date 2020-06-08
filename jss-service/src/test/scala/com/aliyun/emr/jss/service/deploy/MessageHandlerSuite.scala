@@ -1810,7 +1810,9 @@ class MessageHandlerSuite
     0 until 10 foreach(reduceId => {
       0 until 10 foreach(mapId => {
         val data = new Array[Byte](63)
-//        Random.nextBytes(data)
+        Random.nextBytes(data)
+        0 until data.size foreach(ind => print((data(ind) & 0xFF)))
+        println
         res = client.pushData(appId, shuffleId, mapId, 0, reduceId, data)
       })
       assert(res)
@@ -1826,14 +1828,22 @@ class MessageHandlerSuite
     res = client.stageEnd(appId, shuffleId)
     assert(res)
 
-    waitUntilDataFinishFlushing(worker1, shuffleKey)
-    waitUntilDataFinishFlushing(worker2, shuffleKey)
-    waitUntilDataFinishFlushing(worker3, shuffleKey)
-
     // read partition
     0 until 10 foreach (reduceId =>{
-      client.readPartition(appId, shuffleId, reduceId)
+      val input = client.readPartition(appId, shuffleId, reduceId)
+      var b = input.read()
+      var count = 0
+      while(b != -1) {
+        count += 1
+        print(b)
+        b = input.read()
+      }
+      assert(count == 630)
+      input.close()
     })
+
+    // unregister shuffle
+    client.unregisterShuffle(appId, shuffleId)
 
     stop(3)
   }

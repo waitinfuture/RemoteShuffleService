@@ -79,7 +79,9 @@ object ControlMessages {
   // Path can't be serialized
   case class GetReducerFileGroupResponse(
     status: StatusCode,
-    fileGroup: util.HashMap[String, util.Set[String]]) extends MasterMessage
+    fileGroup: util.HashMap[String, util.Set[String]],
+    attempts: Array[Int]
+  ) extends MasterMessage
 
   case class WorkerLost(
     host: String,

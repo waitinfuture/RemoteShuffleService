@@ -6,24 +6,7 @@ import net.jpountz.xxhash.XXHashFactory;
 
 import java.util.zip.Checksum;
 
-public class EssLz4Compressor {
-    private static final byte[] MAGIC = new byte[] { 'L', 'Z', '4', 'B', 'l', 'o', 'c', 'k' };
-    private static final int MAGIC_LENGTH = MAGIC.length;
-
-    private static final int HEADER_LENGTH =
-        MAGIC_LENGTH // magic bytes
-            + 1          // token
-            + 4          // compressed length
-            + 4          // decompressed length
-            + 4;         // checksum
-
-    private static final int COMPRESSION_LEVEL_BASE = 10;
-
-    private static final int COMPRESSION_METHOD_RAW = 0x10;
-    private static final int COMPRESSION_METHOD_LZ4 = 0x20;
-
-    private static final int DEFAULT_SEED = 0x9747b28c;
-
+public class EssLz4Compressor extends EssLz4CompressorTrait {
     private final int compressionLevel;
     private final LZ4Compressor compressor;
     private final Checksum checksum;

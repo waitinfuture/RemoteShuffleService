@@ -16,6 +16,7 @@ import com.aliyun.emr.jss.protocol.message.StatusCode;
 import com.aliyun.emr.network.buffer.NettyManagedBuffer;
 import com.aliyun.emr.network.client.TransportClient;
 import com.aliyun.emr.network.protocol.ess.PushData;
+import com.aliyun.emr.jss.client.stream.EssInputStream;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 import org.apache.hadoop.conf.Configuration;
@@ -24,7 +25,6 @@ import org.apache.hadoop.fs.Path;
 import org.apache.log4j.Logger;
 import scala.reflect.ClassTag$;
 
-import javax.rmi.CORBA.Util;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.ByteBuffer;
@@ -34,7 +34,6 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 
 public class ShuffleClientImpl extends ShuffleClient {
-
     private static Logger logger = Logger.getLogger(ShuffleClientImpl.class);
 
     private EssConf conf;
@@ -43,7 +42,9 @@ public class ShuffleClientImpl extends ShuffleClient {
     // key: appId-shuffleId-reduceId   value: PartitionLocation
     private Map<String, PartitionLocation> reducePartitionMap = null;
     // key: appId-shuffleId-reduceId   value: file path set
-    private Map<String, Set<String>> reducerFileGroup = new HashMap<>();
+    private Map<String, Set<String>> reducerFileGroup = new ConcurrentHashMap<>();
+    // key: appId-shuffleId    value: attempts
+    private Map<String, int[]> mapAttempts = new HashMap<>();
     // key: appId-shuffleId-mapId-attemptId  value: partitions written
     private Map<String, Set<PartitionLocation>> mapWrittenPartitions = new ConcurrentHashMap<>();
     // key: appId-shuffleId-mapId-attemptId  value: batchId
@@ -55,7 +56,8 @@ public class ShuffleClientImpl extends ShuffleClient {
     ThreadLocal<EssLz4Compressor> lz4CompressorThreadlocal = new ThreadLocal<EssLz4Compressor>() {
         @Override
         protected EssLz4Compressor initialValue() {
-            return new EssLz4Compressor();
+            int blockSize = conf.getInt("ess.compressBuffer.size", 256 * 1024);
+            return new EssLz4Compressor(blockSize);
         }
     };
 
@@ -146,23 +148,23 @@ public class ShuffleClientImpl extends ShuffleClient {
 
     @Override
     public boolean pushData(String applicationId,
-                         int shuffleId,
-                         int mapId,
-                         int attempId,
-                         int reduceId,
-                         byte[] data) {
+                            int shuffleId,
+                            int mapId,
+                            int attempId,
+                            int reduceId,
+                            byte[] data) {
         return pushData(applicationId, shuffleId, mapId, attempId, reduceId, data, 0, data.length);
     }
 
     @Override
     public boolean pushData(String applicationId,
-                         int shuffleId,
-                         int mapId,
-                         int attempId,
-                         int reduceId,
-                         byte[] data,
-                         int offset,
-                         int length) {
+                            int shuffleId,
+                            int mapId,
+                            int attempId,
+                            int reduceId,
+                            byte[] data,
+                            int offset,
+                            int length) {
         // TODO add logic later
         // pushData might not keep partitionLocation with
 
@@ -180,13 +182,13 @@ public class ShuffleClientImpl extends ShuffleClient {
 
         // copy compressed to ByteBuffer
         // TODO optimize ByteBuffer
-        int batchSize = 4 * 4 + compressor.getCompressedTotalSize();
-        ByteBuffer byteBuffer = ByteBuffer.allocate(batchSize);
+        int compressedTotalSize = compressor.getCompressedTotalSize();
+        ByteBuffer byteBuffer = ByteBuffer.allocate(4 * 4 + compressedTotalSize);
         byteBuffer.putInt(mapId);
         byteBuffer.putInt(attempId);
         byteBuffer.putInt(nextBatchId);
-        byteBuffer.putInt(batchSize);
-        byteBuffer.put(compressor.getCompressedBuffer(), 0, compressor.getCompressedTotalSize());
+        byteBuffer.putInt(compressedTotalSize);
+        byteBuffer.put(compressor.getCompressedBuffer(), 0, compressedTotalSize);
         byteBuffer.flip();
 
         ByteBuf buf = Unpooled.wrappedBuffer(byteBuffer);
@@ -287,23 +289,19 @@ public class ShuffleClientImpl extends ShuffleClient {
         );
 
         // clear status
-        synchronized (reducePartitionMap) {
-            Set<String> keys = reducePartitionMap.keySet();
-            keys.forEach(key -> {
-                if (key.startsWith(shuffleKey)) {
-                    reducePartitionMap.remove(key);
-                }
-            });
+        Set<String> keys = reducePartitionMap.keySet();
+        keys.forEach(key -> {
+            if (key.startsWith(shuffleKey)) {
+                reducePartitionMap.remove(key);
+            }
+        });
+        keys = reducerFileGroup.keySet();
+        for (String key : keys) {
+            if (key.startsWith(shuffleKey)) {
+                reducerFileGroup.remove(key);
+            }
         }
-        synchronized (reducerFileGroup) {
-            Set<String> keys = reducerFileGroup.keySet();
-            keys.forEach(key -> {
-                if (key.startsWith(shuffleKey)) {
-                    reducerFileGroup.remove(key);
-                }
-            });
-        }
-        Set<String> keys = mapWrittenPartitions.keySet();
+        keys = mapWrittenPartitions.keySet();
         keys.forEach(key -> {
             if (key.startsWith(shuffleKey)) {
                 mapWrittenPartitions.remove(key);
@@ -329,50 +327,32 @@ public class ShuffleClientImpl extends ShuffleClient {
 
     @Override
     public InputStream readPartition(String applicationId, int shuffleId, int reduceId) {
+        String shuffleKey = Utils.makeShuffleKey(applicationId, shuffleId);
         String reducerKey = Utils.makeReducerKey(applicationId, shuffleId, reduceId);
         if (!reducerFileGroup.containsKey(reducerKey)) {
-            synchronized (reducerFileGroup) {
-                if (!reducerFileGroup.containsKey(reducerKey)) {
-                    GetReducerFileGroupResponse response = _master.askSync(
-                        new GetReducerFileGroup(applicationId, shuffleId),
-                        ClassTag$.MODULE$.apply(GetReducerFileGroupResponse.class)
-                    );
-                    if (response.status() != StatusCode.Success) {
-                        logger.error("GetReducerFileGroup failed! status: " + response.status());
-                        return null;
-                    }
-                    reducerFileGroup.putAll(response.fileGroup());
-                }
-            }
-        }
-        Set<String> filePaths = reducerFileGroup.get(reducerKey);
-        if (filePaths.size() <= 0) {
-            return null;
-        } else {
-            for (String file: filePaths) {
-                Path path = new Path(file);
-                try {
-                    byte[] sizeBuf = new byte[4];
-                    InputStream inputStream = fs.open(path);
-                    inputStream.read(sizeBuf);
-                    ByteBuffer byteBuffer = ByteBuffer.wrap(sizeBuf);
-                    int mapId = byteBuffer.getInt();
-                    inputStream.read(sizeBuf);
-                    byteBuffer = ByteBuffer.wrap(sizeBuf);
-                    int attempId = byteBuffer.getInt();
-                    inputStream.read(sizeBuf);
-                    byteBuffer = ByteBuffer.wrap(sizeBuf);
-                    int batchId = byteBuffer.getInt();
-                    byteBuffer = ByteBuffer.wrap(sizeBuf);
-                    int size = byteBuffer.getInt();
-                } catch (IOException e) {
-                    e.printStackTrace();
+            if (!reducerFileGroup.containsKey(reducerKey)) {
+                GetReducerFileGroupResponse response = _master.askSync(
+                    new GetReducerFileGroup(applicationId, shuffleId),
+                    ClassTag$.MODULE$.apply(GetReducerFileGroupResponse.class)
+                );
+                if (response.status() != StatusCode.Success) {
+                    logger.error("GetReducerFileGroup failed! status: " + response.status());
                     return null;
                 }
+                // update reducerFileGroup
+                reducerFileGroup.putAll(response.fileGroup());
+                // update attempts
+                mapAttempts.put(shuffleKey, response.attempts());
             }
-
-            return null;
         }
+
+        EssInputStream inputStream = new EssInputStream(
+            conf,
+            reducerFileGroup.get(reducerKey),
+            mapAttempts.get(shuffleKey)
+        );
+
+        return inputStream;
     }
 
     @Override
