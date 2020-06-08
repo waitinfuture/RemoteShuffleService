@@ -1,7 +1,5 @@
 package com.aliyun.emr.jss.client;
 
-import com.aliyun.emr.jss.client.impl.ShuffleClientImpl;
-import com.aliyun.emr.jss.common.EssConf;
 import com.aliyun.emr.jss.protocol.PartitionLocation;
 import com.aliyun.emr.jss.protocol.message.StatusCode;
 import io.netty.buffer.ByteBuf;
@@ -15,26 +13,6 @@ import java.util.List;
  */
 public abstract class ShuffleClient implements Cloneable
 {
-    private static volatile ShuffleClient _instance;
-    protected ShuffleClient() {
-
-    }
-
-    public static ShuffleClient get() {
-        return ShuffleClient.get(new EssConf());
-    }
-
-    public static ShuffleClient get(EssConf conf) {
-        if (null == _instance) {
-            synchronized (ShuffleClient.class) {
-                if (null == _instance) {
-                    _instance = new ShuffleClientImpl(conf);
-                }
-            }
-        }
-        return _instance;
-    }
-
     /**
      * 一般在Shuffle启动时候由Driver仅调用一次
      * @param applicationId
@@ -55,17 +33,23 @@ public abstract class ShuffleClient implements Cloneable
      * @param applicationId
      * @param shuffleId
      * @param mapId taskContext.partitionId
-     * @param attemptId taskContext.attemptNumber()
+     * @param attempId taskContext.attemptNumber()
      * @param reduceId
      * @param data
-     * @param offset
-     * @param length
      */
     public abstract boolean pushData(
         String applicationId,
         int shuffleId,
         int mapId,
-        int attemptId,
+        int attempId,
+        int reduceId,
+        byte[] data);
+
+    public abstract boolean pushData(
+        String applicationId,
+        int shuffleId,
+        int mapId,
+        int attempId,
         int reduceId,
         byte[] data,
         int offset,
@@ -75,7 +59,7 @@ public abstract class ShuffleClient implements Cloneable
         String applicationId,
         int shuffleId,
         int mapId,
-        int attemptId,
+        int attempId,
         int reduceId,
         ByteBuf data);
 
@@ -84,14 +68,14 @@ public abstract class ShuffleClient implements Cloneable
      * @param applicationId
      * @param shuffleId
      * @param mapId
-     * @param attemptId
+     * @param attempId
      * @return
      */
     public abstract boolean mapperEnd(
         String applicationId,
         int shuffleId,
         int mapId,
-        int attemptId
+        int attempId
     );
 
     /**

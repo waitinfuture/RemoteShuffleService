@@ -95,10 +95,3 @@ spark-warehouse/
 *.Rproj.*
 
 .Rproj.user
-
-log4j.properties
-master.log
-worker1.log
-worker2.log
-worker3.log
-

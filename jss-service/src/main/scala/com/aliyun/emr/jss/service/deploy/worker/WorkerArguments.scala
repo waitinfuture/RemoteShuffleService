@@ -38,7 +38,7 @@ class WorkerArguments(args: Array[String], conf: EssConf) {
 
   parse(args.toList)
 
-  propertiesFile = Utils.loadDefaultEssProperties(conf, propertiesFile)
+  propertiesFile = Utils.loadDefaultJindoProperties(conf, propertiesFile)
 
   @tailrec
   private def parse(args: List[String]): Unit = args match {

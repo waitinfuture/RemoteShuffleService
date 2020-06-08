@@ -45,7 +45,7 @@ public class ShuffleClientImpl extends ShuffleClient {
     // key: appId-shuffleId-reduceId   value: file path set
     private Map<String, Set<String>> reducerFileGroup = new HashMap<>();
     // key: appId-shuffleId-mapId-attemptId  value: partitions written
-    public Map<String, Set<PartitionLocation>> mapWrittenPartitions = new ConcurrentHashMap<>();
+    private Map<String, Set<PartitionLocation>> mapWrittenPartitions = new ConcurrentHashMap<>();
     // key: appId-shuffleId-mapId-attemptId  value: batchId
     private Map<String, AtomicInteger> mapBatchIds = new ConcurrentHashMap<>();
     private Map<PartitionLocation, RpcEndpointRef> workers = new HashMap<>();
@@ -64,7 +64,6 @@ public class ShuffleClientImpl extends ShuffleClient {
     }
 
     public ShuffleClientImpl(EssConf conf) {
-        super();
         this.conf = conf;
         init();
     }
@@ -149,7 +148,17 @@ public class ShuffleClientImpl extends ShuffleClient {
     public boolean pushData(String applicationId,
                          int shuffleId,
                          int mapId,
-                         int attemptId,
+                         int attempId,
+                         int reduceId,
+                         byte[] data) {
+        return pushData(applicationId, shuffleId, mapId, attempId, reduceId, data, 0, data.length);
+    }
+
+    @Override
+    public boolean pushData(String applicationId,
+                         int shuffleId,
+                         int mapId,
+                         int attempId,
                          int reduceId,
                          byte[] data,
                          int offset,
@@ -158,7 +167,7 @@ public class ShuffleClientImpl extends ShuffleClient {
         // pushData might not keep partitionLocation with
 
         // increment batchId
-        String mapKey = Utils.makeMapKey(applicationId, shuffleId, mapId, attemptId);
+        String mapKey = Utils.makeMapKey(applicationId, shuffleId, mapId, attempId);
         if (!mapBatchIds.containsKey(mapKey)) {
             mapBatchIds.put(mapKey, new AtomicInteger());
         }
@@ -174,7 +183,7 @@ public class ShuffleClientImpl extends ShuffleClient {
         int batchSize = 4 * 4 + compressor.getCompressedTotalSize();
         ByteBuffer byteBuffer = ByteBuffer.allocate(batchSize);
         byteBuffer.putInt(mapId);
-        byteBuffer.putInt(attemptId);
+        byteBuffer.putInt(attempId);
         byteBuffer.putInt(nextBatchId);
         byteBuffer.putInt(batchSize);
         byteBuffer.put(compressor.getCompressedBuffer(), 0, compressor.getCompressedTotalSize());
@@ -182,7 +191,7 @@ public class ShuffleClientImpl extends ShuffleClient {
 
         ByteBuf buf = Unpooled.wrappedBuffer(byteBuffer);
 
-        return pushData(applicationId, shuffleId, mapId, attemptId, reduceId, buf);
+        return pushData(applicationId, shuffleId, mapId, attempId, reduceId, buf);
     }
 
     @Override
@@ -190,7 +199,7 @@ public class ShuffleClientImpl extends ShuffleClient {
         String applicationId,
         int shuffleId,
         int mapId,
-        int attemptId,
+        int attempId,
         int reduceId,
         ByteBuf data) {
         String partitionKey =
@@ -199,7 +208,7 @@ public class ShuffleClientImpl extends ShuffleClient {
         boolean res = pushData(applicationId, shuffleId, reduceId, data, loc, true);
         // update mapWrittenPartitions
         if (res) {
-            String mapKey = Utils.makeMapKey(applicationId, shuffleId, mapId, attemptId);
+            String mapKey = Utils.makeMapKey(applicationId, shuffleId, mapId, attempId);
             if (!mapWrittenPartitions.containsKey(mapKey)) {
                 if (!mapWrittenPartitions.containsKey(mapKey)) {
                     Set<PartitionLocation> locations = new HashSet<>();
@@ -254,12 +263,12 @@ public class ShuffleClientImpl extends ShuffleClient {
         String applicationId,
         int shuffleId,
         int mapId,
-        int attemptId
+        int attempId
     ) {
-        String mapKey = Utils.makeMapKey(applicationId, shuffleId, mapId, attemptId);
+        String mapKey = Utils.makeMapKey(applicationId, shuffleId, mapId, attempId);
         Set<PartitionLocation> locations = mapWrittenPartitions.get(mapKey);
         MapperEndResponse response = _master.askSync(
-            new MapperEnd(applicationId, shuffleId, mapId, attemptId, locations),
+            new MapperEnd(applicationId, shuffleId, mapId, attempId, locations),
             ClassTag$.MODULE$.apply(MapperEndResponse.class)
         );
         if (response.status() != StatusCode.Success) {
@@ -350,7 +359,7 @@ public class ShuffleClientImpl extends ShuffleClient {
                     int mapId = byteBuffer.getInt();
                     inputStream.read(sizeBuf);
                     byteBuffer = ByteBuffer.wrap(sizeBuf);
-                    int attemptId = byteBuffer.getInt();
+                    int attempId = byteBuffer.getInt();
                     inputStream.read(sizeBuf);
                     byteBuffer = ByteBuffer.wrap(sizeBuf);
                     int batchId = byteBuffer.getInt();

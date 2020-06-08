@@ -1811,7 +1811,7 @@ class MessageHandlerSuite
       0 until 10 foreach(mapId => {
         val data = new Array[Byte](63)
 //        Random.nextBytes(data)
-        res = client.pushData(appId, shuffleId, mapId, 0, reduceId, data, 0, 63)
+        res = client.pushData(appId, shuffleId, mapId, 0, reduceId, data)
       })
       assert(res)
     })
