@@ -1716,7 +1716,7 @@ class MessageHandlerSuite
     assert(resRedGrp.fileGroup.size() == 0)
 
     // mapper end
-    0 until 10 foreach(mapId => {
+    0 until 9 foreach(mapId => {
       val res = master.askSync[MapperEndResponse](
         MapperEnd(appId, shuffleId, mapId, 0, toJavaSet(resReg.partitionLocations))
       )
@@ -1754,7 +1754,7 @@ class MessageHandlerSuite
 
     // mapper end
     val res2 = master.askSync[MapperEndResponse](
-      MapperEnd(appId, shuffleId, 0, 0, toJavaSet(List(resRev.partitionLocation)))
+      MapperEnd(appId, shuffleId, 9, 0, toJavaSet(List(resRev.partitionLocation)))
     )
     assert(res2.status == StatusCode.Success)
 
@@ -1783,12 +1783,6 @@ class MessageHandlerSuite
       }
     })
 
-
-    // trigger stage end
-    val resStageEnd = master.askSync[StageEndResponse](
-      StageEnd(appId, shuffleId)
-    )
-    assert(resStageEnd.status == StatusCode.Success)
     assertFileLength(shuffleKey, resReg.partitionLocations, 63 * 10)
     assertFileLength(shuffleKey, List(resRev.partitionLocation), 63)
 
@@ -1823,10 +1817,6 @@ class MessageHandlerSuite
       res = client.mapperEnd(appId, shuffleId, mapId, 0)
       assert(res)
     })
-
-    // stage end
-    res = client.stageEnd(appId, shuffleId)
-    assert(res)
 
     // read partition
     0 until 10 foreach (reduceId =>{

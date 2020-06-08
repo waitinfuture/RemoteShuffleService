@@ -6,7 +6,7 @@ import org.apache.hadoop.fs.Path;
 public class EssPathUtil
 {
     public static String workerBaseDir(EssConf conf) {
-        return conf.get("ess.worker.base.dir", "file:///tmp/Aliyun-EMR-SS/");
+        return conf.get("ess.worker.base.dir", "hdfs://11.158.199.162:9000/tmp/ess-test/");
     }
 
     public static Path GetBaseDir(EssConf conf) {

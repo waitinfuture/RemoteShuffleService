@@ -1,11 +1,11 @@
 package com.aliyun.emr.jss.service.deploy.master
 
+import java.net.URI
 import java.util
 import java.util.concurrent.{ConcurrentHashMap, ScheduledFuture, TimeUnit}
 
 import scala.collection.JavaConversions._
 import scala.collection.JavaConverters._
-
 import com.aliyun.emr.jss.common.EssConf
 import com.aliyun.emr.jss.common.internal.Logging
 import com.aliyun.emr.jss.common.rpc._
@@ -15,7 +15,7 @@ import com.aliyun.emr.jss.protocol.message.ControlMessages._
 import com.aliyun.emr.jss.protocol.message.StatusCode
 import com.aliyun.emr.jss.service.deploy.worker.WorkerInfo
 import org.apache.hadoop.conf.Configuration
-import org.apache.hadoop.fs.Path
+import org.apache.hadoop.fs.{FileSystem, Path}
 
 private[deploy] class Master(
   override val rpcEnv: RpcEnv,
@@ -410,7 +410,7 @@ private[deploy] class Master(
     val locations: List[PartitionLocation] = slots.flatMap(_._2._1).toList
     shuffleMapperAttempts.synchronized {
       val attempts = new Array[Int](numMappers)
-      0 until numMappers foreach (idx => attempts(idx) = 0)
+      0 until numMappers foreach (idx => attempts(idx) = -1)
       shuffleMapperAttempts.put(shuffleKey, attempts)
     }
     shuffleCommittedPartitions.synchronized {
@@ -473,6 +473,7 @@ private[deploy] class Master(
     mapId: Int,
     attemptId: Int,
     partitionLocations: util.Set[PartitionLocation]): Unit = {
+    var askStageEnd: Boolean = false
     val shuffleKey = Utils.makeShuffleKey(applicationId, shuffleId)
     // update max attemptId
     shuffleMapperAttempts.synchronized {
@@ -483,8 +484,16 @@ private[deploy] class Master(
         return
       }
 
-      if (attempts(mapId) < attemptId) {
+      if (attempts(mapId) < 0) {
         attempts(mapId) = attemptId
+      } else {
+        // Mapper with another attemptId called, skip this request
+        context.reply(MapperEndResponse(StatusCode.Success))
+        return
+      }
+
+      if (!attempts.exists(_ < 0)) {
+        askStageEnd = true
       }
     }
 
@@ -502,6 +511,12 @@ private[deploy] class Master(
           reducerFileGroup.putIfAbsent(entry._1, new util.HashSet[Path]())
           reducerFileGroup.get(entry._1).addAll(entry._2)
         })
+    }
+
+    if (askStageEnd) {
+      // last mapper finished. call mapper end
+      logInfo(s"Last MapperEnd, call StageEnd with $applicationId, $shuffleId")
+      self.askSync[StageEndResponse](StageEnd(applicationId, shuffleId))
     }
 
     // reply success
