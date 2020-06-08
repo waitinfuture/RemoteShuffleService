@@ -49,7 +49,7 @@ class EssConf(loadDefaults: Boolean) extends Cloneable with Logging with Seriali
 
   private[jss] def loadFromSystemProperties(silent: Boolean): EssConf = {
     // Load any spark.* system properties
-    for ((key, value) <- Utils.getSystemProperties if key.startsWith("jindo.")) {
+    for ((key, value) <- Utils.getSystemProperties if key.startsWith("ess.")) {
       set(key, value, silent)
     }
     this

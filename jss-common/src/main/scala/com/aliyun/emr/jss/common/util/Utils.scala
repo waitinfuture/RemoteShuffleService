@@ -420,11 +420,11 @@ object Utils extends Logging {
     // scalastyle:on classforname
   }
 
-  def loadDefaultJindoProperties(conf: EssConf, filePath: String = null): String = {
+  def loadDefaultEssProperties(conf: EssConf, filePath: String = null): String = {
     val path = Option(filePath).getOrElse(getDefaultPropertiesFile())
     Option(path).foreach { confFile =>
       getPropertiesFromFile(confFile).filter { case (k, v) =>
-        k.startsWith("emr.shuffle.")
+        k.startsWith("ess.")
       }.foreach { case (k, v) =>
         conf.setIfMissing(k, v)
         sys.props.getOrElseUpdate(k, v)
@@ -434,9 +434,9 @@ object Utils extends Logging {
   }
 
   def getDefaultPropertiesFile(env: Map[String, String] = sys.env): String = {
-    env.get("JINDO_CONF_DIR")
-      .orElse(env.get("JINDO_HOME").map { t => s"$t${File.separator}conf" })
-      .map { t => new File(s"$t${File.separator}jindo-defaults.conf")}
+    env.get("ESS_CONF_DIR")
+      .orElse(env.get("ESS_HOME").map { t => s"$t${File.separator}conf" })
+      .map { t => new File(s"$t${File.separator}ess-defaults.conf")}
       .filter(_.isFile)
       .map(_.getAbsolutePath)
       .orNull

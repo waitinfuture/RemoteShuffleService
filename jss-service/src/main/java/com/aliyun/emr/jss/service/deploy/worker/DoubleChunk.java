@@ -158,7 +158,8 @@ public class DoubleChunk {
                             ostream = fs.append(fileName);
                             getLease = true;
                         } catch (Exception e) {
-                            logger.warn("append failed, try again");
+                            logger.warn(String.format("append %s failed, try again", fileName
+                                .toString()), e);
                             try {
                                 Thread.sleep(100);
                             } catch (Exception ex) {
