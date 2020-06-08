@@ -64,7 +64,7 @@ object ControlMessages {
     shuffleId: Int,
     mapId: Int,
     attemptId: Int,
-    partitionLocations: util.List[PartitionLocation]
+    partitionLocations: util.Set[PartitionLocation]
   ) extends MasterMessage
 
   case class MapperEndResponse(

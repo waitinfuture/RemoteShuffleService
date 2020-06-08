@@ -5,14 +5,14 @@ import java.util.concurrent.{ConcurrentHashMap, ScheduledFuture, TimeUnit}
 
 import scala.collection.JavaConversions._
 import scala.collection.JavaConverters._
+
 import com.aliyun.emr.jss.common.EssConf
 import com.aliyun.emr.jss.common.internal.Logging
 import com.aliyun.emr.jss.common.rpc._
-import com.aliyun.emr.jss.common.util.{ThreadUtils, Utils}
+import com.aliyun.emr.jss.common.util.{EssPathUtil, ThreadUtils, Utils}
 import com.aliyun.emr.jss.protocol.{PartitionLocation, RpcNameConstants}
 import com.aliyun.emr.jss.protocol.message.ControlMessages._
 import com.aliyun.emr.jss.protocol.message.StatusCode
-import com.aliyun.emr.jss.service.deploy.common.EssPathUtil
 import com.aliyun.emr.jss.service.deploy.worker.WorkerInfo
 import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.fs.Path
@@ -53,7 +53,6 @@ private[deploy] class Master(
   private val registeredShuffle = new util.HashSet[String]()
   private val shuffleMapperAttempts = new util.HashMap[String, Array[Int]]()
   private val shuffleCommittedPartitions = new util.HashMap[String, util.Set[String]]()
-  private val shufflePartitionsWritten = new util.HashMap[String, util.Set[String]]()
   private val reducerFileGroup = new util.HashMap[String, util.Set[Path]]()
   private val appHeartbeatTime = new util.HashMap[String, Long]()
 
@@ -166,12 +165,13 @@ private[deploy] class Master(
     case RegisterShuffle(applicationId, shuffleId, numMappers, numPartitions) =>
       logInfo(s"received RegisterShuffle request, $applicationId, $shuffleId, $numMappers, $numPartitions")
       handleRegisterShuffle(context, applicationId, shuffleId, numMappers, numPartitions)
+
     case Revive(applicationId, shuffleId, reduceId) =>
       logInfo(s"received Revive request, $applicationId, $shuffleId, $reduceId")
       handleRevive(context, applicationId, shuffleId, reduceId)
-    case MapperEnd(applicationId: String, shuffleId: Int, mapId: Int,
-    attemptId: Int, partitionLocations: util.List[PartitionLocation]) =>
-      logInfo(s"received MapperEnd request, $applicationId, $shuffleId, $mapId, $attemptId, $partitionLocations")
+
+    case MapperEnd(applicationId, shuffleId, mapId, attemptId, partitionLocations) =>
+      logInfo(s"received MapperEnd request, $applicationId, $shuffleId, $mapId, $attemptId")
       handleMapperEnd(context, applicationId, shuffleId, mapId, attemptId, partitionLocations)
 
     case GetReducerFileGroup(applicationId: String, shuffleId: Int) =>
@@ -472,7 +472,7 @@ private[deploy] class Master(
     shuffleId: Int,
     mapId: Int,
     attemptId: Int,
-    partitionLocations: util.List[PartitionLocation]): Unit = {
+    partitionLocations: util.Set[PartitionLocation]): Unit = {
     val shuffleKey = Utils.makeShuffleKey(applicationId, shuffleId)
     // update max attemptId
     shuffleMapperAttempts.synchronized {
@@ -489,13 +489,6 @@ private[deploy] class Master(
     }
 
     // update partitions written
-    // TODO shufflePartitionsWritten might need to change to new util.HashMap[String, util.Set[PartitionLocation]]()
-    shufflePartitionsWritten.synchronized {
-      shufflePartitionsWritten.putIfAbsent(shuffleKey, new util.HashSet[String]())
-      val partitionsWritten = shufflePartitionsWritten.get(shuffleKey)
-      partitionsWritten.addAll(partitionLocations.map(_.getUUID))
-    }
-
     reducerFileGroup.synchronized {
       partitionLocations
         .map(loc => {
@@ -700,19 +693,19 @@ private[deploy] class Master(
     // check if committed files contains all files mappers written
     val lostFiles = new util.ArrayList[String]()
     val committedPartitions = shuffleCommittedPartitions.get(shuffleKey)
-    if (shufflePartitionsWritten.contains(shuffleKey)) {
-      shufflePartitionsWritten.get(shuffleKey).foreach(id => {
-        if (!committedPartitions.contains(id)) {
-          lostFiles.add(id)
-        }
-      })
-    } else {
-      logWarning(s"No written partitions found for shuffle ${shuffleKey}!")
-    }
+    reducerFileGroup.filter(entry => entry._1.startsWith(shuffleKey))
+        .foreach(entry => {
+          val paths = entry._2
+          paths.foreach(path => {
+            if (!committedPartitions.contains(path.getName)) {
+              lostFiles.add(path.getName)
+            }
+          })
+        })
 
-    // clear shufflePartitionsWritten for current shuffle
-    shufflePartitionsWritten.synchronized {
-      shufflePartitionsWritten.remove(shuffleKey)
+    // clear committed files
+    shuffleCommittedPartitions.synchronized {
+      shuffleCommittedPartitions.remove(shuffleKey)
     }
 
     // reply

@@ -36,6 +36,11 @@
             <artifactId>jss-common</artifactId>
             <version>${project.version}</version>
         </dependency>
+        <dependency>
+            <groupId>org.lz4</groupId>
+            <artifactId>lz4-java</artifactId>
+            <version>1.4.0</version>
+        </dependency>
     </dependencies>
 
     <build>

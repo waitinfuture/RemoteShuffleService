@@ -22,15 +22,15 @@ import java.util.concurrent.TimeUnit
 
 import scala.collection.JavaConversions._
 import scala.util.control.Breaks._
+
 import com.aliyun.emr.jss.common.EssConf
 import com.aliyun.emr.jss.common.internal.Logging
 import com.aliyun.emr.jss.common.rpc._
-import com.aliyun.emr.jss.common.util.{ThreadUtils, Utils}
+import com.aliyun.emr.jss.common.util.{EssPathUtil, ThreadUtils, Utils}
 import com.aliyun.emr.jss.protocol.{PartitionLocation, RpcNameConstants}
 import com.aliyun.emr.jss.protocol.message.ControlMessages._
 import com.aliyun.emr.jss.protocol.message.DataMessages._
 import com.aliyun.emr.jss.protocol.message.StatusCode
-import com.aliyun.emr.jss.service.deploy.common.EssPathUtil
 import com.aliyun.emr.network.buffer.{ManagedBuffer, NettyManagedBuffer}
 import com.aliyun.emr.network.client.TransportClient
 import com.aliyun.emr.network.protocol.ess.PushData

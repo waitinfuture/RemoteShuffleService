@@ -29,50 +29,54 @@ public abstract class ShuffleClient implements Cloneable
     );
 
     /**
-     * 当pushData接口异常时，需要调用revive接口来获取一个新的可用的ShuffleWorker
-     * 该接口的粒度到具体的一个reduceId
-     * 最终一个reduceId可能会对应多个ShuffleWorker
-     * @param applicationId
-     * @param shuffleId
-     * @param reduceId
-     * @return
-     */
-    public abstract boolean revive(
-        String applicationId,
-        int shuffleId,
-        int reduceId
-    );
-
-    /**
      * 往具体的一个reduce partition里写数据
      * @param applicationId
      * @param shuffleId
-     * @param reduceId
      * @param mapId taskContext.partitionId
-     * @param mapAttemptNum taskContext.attemptNumber()
+     * @param attempId taskContext.attemptNumber()
+     * @param reduceId
      * @param data
      */
-    public abstract void pushData(
+    public abstract boolean pushData(
         String applicationId,
         int shuffleId,
-        int reduceId,
         int mapId,
-        int mapAttemptNum,
+        int attempId,
+        int reduceId,
         byte[] data);
 
     public abstract boolean pushData(
         String applicationId,
         int shuffleId,
+        int mapId,
+        int attempId,
+        int reduceId,
+        byte[] data,
+        int offset,
+        int length);
+
+    public abstract boolean pushData(
+        String applicationId,
+        int shuffleId,
+        int mapId,
+        int attempId,
         int reduceId,
         ByteBuf data);
 
     /**
-     * 注销
+     * report partitionlocations written by the completed map task
      * @param applicationId
      * @param shuffleId
+     * @param mapId
+     * @param attempId
      * @return
      */
-    public abstract boolean unregisterShuffle(String applicationId, int shuffleId);
+    public abstract boolean mapperEnd(
+        String applicationId,
+        int shuffleId,
+        int mapId,
+        int attempId
+    );
 
     /**
      * commit files, update status
@@ -96,6 +100,14 @@ public abstract class ShuffleClient implements Cloneable
         int shuffleId,
         int reduceId
     );
+
+    /**
+     * 注销
+     * @param applicationId
+     * @param shuffleId
+     * @return
+     */
+    public abstract boolean unregisterShuffle(String applicationId, int shuffleId);
 
     /**
      * 从Client缓存中提取Shuffle相关的PartitionLocation

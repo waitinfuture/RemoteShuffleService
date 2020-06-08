@@ -5,15 +5,15 @@ import java.util
 import scala.collection.JavaConversions._
 import scala.collection.JavaConverters._
 import scala.util.Random
+
 import com.aliyun.emr.jss.client.impl.ShuffleClientImpl
 import com.aliyun.emr.jss.common.rpc.{RpcAddress, RpcEndpointRef, RpcEnv}
-import com.aliyun.emr.jss.common.util.Utils
+import com.aliyun.emr.jss.common.util.{EssPathUtil, Utils}
 import com.aliyun.emr.jss.common.EssConf
 import com.aliyun.emr.jss.protocol.{PartitionLocation, RpcNameConstants}
 import com.aliyun.emr.jss.protocol.message.ControlMessages._
 import com.aliyun.emr.jss.protocol.message.DataMessages.{GetDoubleChunkInfo, GetDoubleChunkInfoResponse, PushDataResponse}
 import com.aliyun.emr.jss.protocol.message.StatusCode
-import com.aliyun.emr.jss.service.deploy.common.EssPathUtil
 import com.aliyun.emr.jss.service.deploy.master.{Master, MasterArguments}
 import com.aliyun.emr.jss.service.deploy.worker._
 import com.aliyun.emr.network.buffer.NettyManagedBuffer
@@ -301,6 +301,12 @@ class MessageHandlerSuite
     }
   }
 
+  def toJavaSet(locs: util.List[PartitionLocation]): util.HashSet[PartitionLocation] = {
+    val locSet = new util.HashSet[PartitionLocation]()
+    locSet.addAll(locs)
+    locSet
+  }
+
   /**
    * ===============================
    * start testing
@@ -559,7 +565,7 @@ class MessageHandlerSuite
         1,
         0,
         0,
-        mapper1Locations
+        toJavaSet(mapper1Locations)
       )
     )
     assert(res.status.equals(StatusCode.Success))
@@ -582,7 +588,7 @@ class MessageHandlerSuite
         1,
         1,
         0,
-        mapper2Locations
+        toJavaSet(mapper2Locations)
       )
     )
     assert(res.status.equals(StatusCode.Success))
@@ -609,7 +615,7 @@ class MessageHandlerSuite
         1,
         2,
         0,
-        mapper3Locations
+        toJavaSet(mapper3Locations)
       )
     )
     assert(res.status.equals(StatusCode.Success))
@@ -1641,7 +1647,7 @@ class MessageHandlerSuite
       0 until 11 foreach (reduceId => {
         val data = new Array[Byte](63)
         val buf = Unpooled.copiedBuffer(data)
-        val res = client.pushData(appId, shuffleId1, reduceId, buf)
+        val res = client.pushData(appId, shuffleId1, 0, 0, reduceId, buf)
         assert(res)
       })
     })
@@ -1712,7 +1718,7 @@ class MessageHandlerSuite
     // mapper end
     0 until 10 foreach(mapId => {
       val res = master.askSync[MapperEndResponse](
-        MapperEnd(appId, shuffleId, mapId, 0, resReg.partitionLocations)
+        MapperEnd(appId, shuffleId, mapId, 0, toJavaSet(resReg.partitionLocations))
       )
       assert(res.status == StatusCode.Success)
     })
@@ -1748,7 +1754,7 @@ class MessageHandlerSuite
 
     // mapper end
     val res2 = master.askSync[MapperEndResponse](
-      MapperEnd(appId, shuffleId, 0, 0, List(resRev.partitionLocation))
+      MapperEnd(appId, shuffleId, 0, 0, toJavaSet(List(resRev.partitionLocation)))
     )
     assert(res2.status == StatusCode.Success)
 
@@ -1785,6 +1791,49 @@ class MessageHandlerSuite
     assert(resStageEnd.status == StatusCode.Success)
     assertFileLength(shuffleKey, resReg.partitionLocations, 63 * 10)
     assertFileLength(shuffleKey, List(resRev.partitionLocation), 63)
+
+    stop(3)
+  }
+
+  test("ReadPartition") {
+    init(3)
+
+    val appId = "appId"
+    val shuffleId = 0
+    val shuffleKey = Utils.makeShuffleKey(appId, shuffleId)
+    val client = new ShuffleClientImpl(conf)
+    // register shuffle
+    var res = client.registerShuffle(appId, shuffleId, 10, 10)
+    assert(res)
+
+    // push Data
+    0 until 10 foreach(reduceId => {
+      0 until 10 foreach(mapId => {
+        val data = new Array[Byte](63)
+//        Random.nextBytes(data)
+        res = client.pushData(appId, shuffleId, mapId, 0, reduceId, data)
+      })
+      assert(res)
+    })
+
+    // mapper end
+    0 until 10 foreach(mapId => {
+      res = client.mapperEnd(appId, shuffleId, mapId, 0)
+      assert(res)
+    })
+
+    // stage end
+    res = client.stageEnd(appId, shuffleId)
+    assert(res)
+
+    waitUntilDataFinishFlushing(worker1, shuffleKey)
+    waitUntilDataFinishFlushing(worker2, shuffleKey)
+    waitUntilDataFinishFlushing(worker3, shuffleKey)
+
+    // read partition
+    0 until 10 foreach (reduceId =>{
+      client.readPartition(appId, shuffleId, reduceId)
+    })
 
     stop(3)
   }

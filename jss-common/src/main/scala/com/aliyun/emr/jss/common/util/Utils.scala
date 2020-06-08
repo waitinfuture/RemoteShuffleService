@@ -484,4 +484,16 @@ object Utils extends Logging {
   def makeReducerKey(applicationId: String, shuffleId: Int, reduceId: Int): String = {
     s"$applicationId-$shuffleId-$reduceId"
   }
+
+  def makeMapKey(applicationId: String, shuffleId: Int, mapId: Int, attempId: Int): String =  {
+    s"$applicationId-$shuffleId-$mapId-$attempId"
+  }
+
+  def bytesToInt(bytes: Array[Byte], bigEndian: Boolean = true): Int = {
+    if (bigEndian) {
+      bytes(0) << 24 | bytes(1) << 16 | bytes(2) << 8 |bytes(3)
+    } else {
+      bytes(3) << 24 | bytes(2) << 16 | bytes(1) << 8 | bytes(0)
+    }
+  }
 }

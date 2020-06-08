@@ -1,4 +1,4 @@
-package com.aliyun.emr.jss.service.deploy.common;
+package com.aliyun.emr.jss.common.util;
 
 import com.aliyun.emr.jss.common.EssConf;
 import org.apache.hadoop.fs.Path;
