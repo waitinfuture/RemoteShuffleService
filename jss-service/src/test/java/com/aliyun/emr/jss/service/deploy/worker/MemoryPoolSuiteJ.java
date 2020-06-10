@@ -32,7 +32,7 @@ public class MemoryPoolSuiteJ
             fs.delete(file, true);
         }
 
-        DoubleChunk doubleChunk = new DoubleChunk(ch1, ch2, memoryPool, file);
+        DoubleChunk doubleChunk = new DoubleChunk(ch1, ch2, memoryPool, file, fs);
         byte[] bytes = new byte[64];
         ByteBuf data = Unpooled.copiedBuffer(bytes);
         doubleChunk.append(data);

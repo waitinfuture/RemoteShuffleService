@@ -32,15 +32,14 @@ public class DoubleChunk {
         Ready, Flushing;
     }
 
-    public DoubleChunk(Chunk ch1, Chunk ch2, MemoryPool memoryPool, Path fileName) throws IOException
+    public DoubleChunk(Chunk ch1, Chunk ch2, MemoryPool memoryPool, Path fileName, FileSystem fs)
     {
         chunks[0] = ch1;
         chunks[1] = ch2;
         this.memoryPool = memoryPool;
         this.fileName = fileName;
         working = 0;
-        Configuration hadoopConf = new Configuration();
-        fs = fileName.getFileSystem(hadoopConf);
+        this.fs = fs;
     }
 
     public void initWithData(int working, byte[] masterData, byte[] slaveData) {

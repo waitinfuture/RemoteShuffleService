@@ -1,8 +1,12 @@
 package com.aliyun.emr.jss.service.deploy.worker;
 
 import com.aliyun.emr.jss.unsafe.Platform;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 public class MemoryPool {
+    private static final Logger logger = LoggerFactory.getLogger(DoubleChunk.class);
+
     private long capacity;
     private long chunkSize;
     private long memoryPoolAddress;
@@ -14,7 +18,8 @@ public class MemoryPool {
         this.capacity = capacity;
         this.chunkSize = chunkSize;
         memoryPoolAddress = Platform.allocateMemory(capacity);
-        numSlots = (int)(capacity / chunkSize);
+        logger.info("allocated memory, size " + capacity);
+        numSlots = (int) (capacity / chunkSize);
         startAddresses = new long[numSlots];
         empty = new boolean[numSlots];
         long curAddress = memoryPoolAddress;
@@ -29,15 +34,13 @@ public class MemoryPool {
      * @return allocated address, null if failed
      */
     public Chunk allocateChunk() {
-        synchronized (this) {
-            for (int i = 0; i < numSlots; i++) {
-                if (empty[i]) {
-                    empty[i] = false;
-                    return new Chunk(i, startAddresses[i], startAddresses[i] + chunkSize);
-                }
+        for (int i = 0; i < numSlots; i++) {
+            if (empty[i]) {
+                empty[i] = false;
+                return new Chunk(i, startAddresses[i], startAddresses[i] + chunkSize);
             }
-            return null;
         }
+        return null;
     }
 
     public void returnChunk(Chunk chunk) {

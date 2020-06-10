@@ -34,6 +34,8 @@ import com.aliyun.emr.jss.protocol.message.StatusCode
 import com.aliyun.emr.network.buffer.{ManagedBuffer, NettyManagedBuffer}
 import com.aliyun.emr.network.client.TransportClient
 import com.aliyun.emr.network.protocol.ess.PushData
+import org.apache.hadoop.conf.Configuration
+import org.apache.hadoop.fs.Path
 
 private[deploy] class Worker(
   override val rpcEnv: RpcEnv,
@@ -74,6 +76,12 @@ private[deploy] class Worker(
 
   // Structs
   var memoryUsed = 0
+
+  // shared FileSystem
+  val hadoopConf = new Configuration
+  val path = new Path(conf.get("ess.worker.base.dir", "hdfs://11.158.199.162:9000/tmp/ess-test/"))
+  logInfo(s"path ${path}")
+  val fs = path.getFileSystem(hadoopConf)
 
   def memoryFree: Long = memory - memoryUsed
 
@@ -154,28 +162,31 @@ private[deploy] class Worker(
     slaveLocations: util.List[PartitionLocation]): Unit = {
     val masterDoubleChunks = new util.ArrayList[PartitionLocation]()
     breakable({
-      for (ind <- 0 until masterLocations.size()) {
-        val ch1 = memoryPool.allocateChunk()
-        if (ch1 == null) {
-          break()
-        } else {
-          val ch2 = memoryPool.allocateChunk()
-          if (ch2 == null) {
-            memoryPool.returnChunk(ch1)
+      memoryPool.synchronized {
+        for (ind <- 0 until masterLocations.size()) {
+          val ch1 = memoryPool.allocateChunk()
+          if (ch1 == null) {
             break()
           } else {
-            masterDoubleChunks.add(
-              new PartitionLocationWithDoubleChunks(
-                masterLocations.get(ind),
-                new DoubleChunk(ch1, ch2, memoryPool,
-                  EssPathUtil.GetPartitionPath(conf,
-                    shuffleKey.split("-").dropRight(1).mkString("-"),
-                    shuffleKey.split("-").last.toInt,
-                    masterLocations.get(ind).getReduceId,
-                    masterLocations.get(ind).getUUID)
+            val ch2 = memoryPool.allocateChunk()
+            if (ch2 == null) {
+              memoryPool.returnChunk(ch1)
+              break()
+            } else {
+              masterDoubleChunks.add(
+                new PartitionLocationWithDoubleChunks(
+                  masterLocations.get(ind),
+                  new DoubleChunk(ch1, ch2, memoryPool,
+                    EssPathUtil.GetPartitionPath(conf,
+                      shuffleKey.split("-").dropRight(1).mkString("-"),
+                      shuffleKey.split("-").last.toInt,
+                      masterLocations.get(ind).getReduceId,
+                      masterLocations.get(ind).getUUID),
+                    fs
+                  )
                 )
               )
-            )
+            }
           }
         }
       }
@@ -189,27 +200,30 @@ private[deploy] class Worker(
     }
     val slaveDoubleChunks = new util.ArrayList[PartitionLocation]()
     breakable({
-      for (ind <- 0 until slaveLocations.size()) {
-        val ch1 = memoryPool.allocateChunk()
-        if (ch1 == null) {
-          break()
-        } else {
-          val ch2 = memoryPool.allocateChunk()
-          if (ch2 == null) {
+      memoryPool.synchronized {
+        for (ind <- 0 until slaveLocations.size()) {
+          val ch1 = memoryPool.allocateChunk()
+          if (ch1 == null) {
             break()
           } else {
-            slaveDoubleChunks.add(
-              new PartitionLocationWithDoubleChunks(
-                slaveLocations.get(ind),
-                new DoubleChunk(ch1, ch2, memoryPool,
-                  EssPathUtil.GetPartitionPath(conf,
-                    shuffleKey.split("-").dropRight(1).mkString("-"),
-                    shuffleKey.split("-").last.toInt,
-                    slaveLocations.get(ind).getReduceId,
-                    slaveLocations.get(ind).getUUID)
+            val ch2 = memoryPool.allocateChunk()
+            if (ch2 == null) {
+              break()
+            } else {
+              slaveDoubleChunks.add(
+                new PartitionLocationWithDoubleChunks(
+                  slaveLocations.get(ind),
+                  new DoubleChunk(ch1, ch2, memoryPool,
+                    EssPathUtil.GetPartitionPath(conf,
+                      shuffleKey.split("-").dropRight(1).mkString("-"),
+                      shuffleKey.split("-").last.toInt,
+                      slaveLocations.get(ind).getReduceId,
+                      slaveLocations.get(ind).getUUID),
+                    fs
+                  )
                 )
               )
-            )
+            }
           }
         }
       }
@@ -228,6 +242,7 @@ private[deploy] class Worker(
       workerInfo.addMasterPartition(shuffleKey, masterDoubleChunks)
       workerInfo.addSlavePartition(shuffleKey, slaveDoubleChunks)
     }
+    logInfo("reserve buffer succeed!")
     context.reply(ReserveBuffersResponse(StatusCode.Success))
   }
 
@@ -273,9 +288,10 @@ private[deploy] class Worker(
 
     // reply
     if (failedLocations.isEmpty) {
+      logInfo("CommitFile success!")
       context.reply(CommitFilesResponse(StatusCode.Success, null))
     } else {
-      logInfo("CommitFiles success!")
+      logError("CommitFiles failed!")
       context.reply(CommitFilesResponse(StatusCode.PartialSuccess, failedLocations))
     }
   }

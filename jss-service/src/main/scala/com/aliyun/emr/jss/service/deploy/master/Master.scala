@@ -6,6 +6,9 @@ import java.util.concurrent.{ConcurrentHashMap, ScheduledFuture, TimeUnit}
 
 import scala.collection.JavaConversions._
 import scala.collection.JavaConverters._
+import scala.concurrent.duration.Duration
+import scala.util.Success
+
 import com.aliyun.emr.jss.common.EssConf
 import com.aliyun.emr.jss.common.internal.Logging
 import com.aliyun.emr.jss.common.rpc._
@@ -116,6 +119,26 @@ private[deploy] class Master(
   def reserveBuffers(shuffleKey: String, slots: WorkerResource): util.List[WorkerInfo] = {
     val failed = new util.ArrayList[WorkerInfo]()
 
+    /*
+    val futures = slots.map(entry => {
+      val future = entry._1.endpoint.ask[ReserveBuffersResponse](
+        ReserveBuffers(shuffleKey, entry._2._1, entry._2._2))
+      (future, entry._1)
+    })
+
+    futures.foreach(entry => {
+      val future = entry._1
+      val worker = entry._2
+      val res = ThreadUtils.awaitResult(future, Duration.Inf)
+      if (res.status.equals(StatusCode.Success)) {
+        logInfo(s"Successfully allocated partitions buffer from worker ${worker.hostPort}")
+      } else {
+        logInfo(s"Failed to reserve buffers from worker ${worker.hostPort}")
+        failed.add(worker)
+      }
+    })
+     */
+
     slots.foreach(entry => {
       val res = entry._1.endpoint.askSync[ReserveBuffersResponse](
         ReserveBuffers(shuffleKey, entry._2._1, entry._2._2))
@@ -126,6 +149,7 @@ private[deploy] class Master(
         failed.add(entry._1)
       }
     })
+
 
     failed
   }
@@ -506,7 +530,11 @@ private[deploy] class Master(
           (partitionKey, path)
         })
         .groupBy(_._1) // Map[String,List[(String, Path)]]
-        .mapValues(r => {r.map(r => {r._2})}) // Map[String, List[Path]]
+        .mapValues(r => {
+          r.map(r => {
+            r._2
+          })
+        }) // Map[String, List[Path]]
         .foreach(entry => {
           reducerFileGroup.putIfAbsent(entry._1, new util.HashSet[Path]())
           reducerFileGroup.get(entry._1).addAll(entry._2)
@@ -713,14 +741,14 @@ private[deploy] class Master(
     val lostFiles = new util.ArrayList[String]()
     val committedPartitions = shuffleCommittedPartitions.get(shuffleKey)
     reducerFileGroup.filter(entry => entry._1.startsWith(shuffleKey))
-        .foreach(entry => {
-          val paths = entry._2
-          paths.foreach(path => {
-            if (!committedPartitions.contains(path.getName)) {
-              lostFiles.add(path.getName)
-            }
-          })
+      .foreach(entry => {
+        val paths = entry._2
+        paths.foreach(path => {
+          if (!committedPartitions.contains(path.getName)) {
+            lostFiles.add(path.getName)
+          }
         })
+      })
 
     // clear committed files
     shuffleCommittedPartitions.synchronized {
@@ -729,6 +757,7 @@ private[deploy] class Master(
 
     // reply
     if (lostFiles.isEmpty) {
+      logInfo("succeed to handle stageend!")
       context.reply(StageEndResponse(StatusCode.Success, null))
     } else {
       context.reply(StageEndResponse(StatusCode.PartialSuccess, null))
@@ -778,7 +807,7 @@ private[deploy] class Master(
     // destroy partition buffers in workers, then update info in master
     workers.foreach(worker => {
       var nextShufflePartitions = getNextShufflePartitions(worker)
-      while(nextShufflePartitions != null) {
+      while (nextShufflePartitions != null) {
         if (nextShufflePartitions != null) {
           val (shuffleKey, masterLocs, slaveLocs) = nextShufflePartitions
           // destroy partition buffers on worker
