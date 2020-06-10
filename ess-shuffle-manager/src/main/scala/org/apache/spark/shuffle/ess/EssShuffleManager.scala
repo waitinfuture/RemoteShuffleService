@@ -4,7 +4,7 @@ import com.aliyun.emr.jss.client.ShuffleClient
 import com.aliyun.emr.jss.client.impl.ShuffleClientImpl
 import com.aliyun.emr.jss.common.EssConf
 import com.aliyun.emr.jss.protocol.PartitionLocation
-import org.apache.spark.{ShuffleDependency, SparkConf, SparkEnv, TaskContext}
+import org.apache.spark._
 import org.apache.spark.internal.Logging
 import org.apache.spark.shuffle._
 
@@ -65,7 +65,11 @@ class EssShuffleManager(conf: SparkConf) extends ShuffleManager with Logging {
   }
 
   override def unregisterShuffle(shuffleId: Int): Boolean = {
-    essShuffleClient.unregisterShuffle(conf.getAppId, shuffleId)
+    if (SparkEnv.get.executorId == SparkContext.DRIVER_IDENTIFIER) {
+      essShuffleClient.unregisterShuffle(conf.getAppId, shuffleId)
+    } else {
+      true
+    }
   }
 
   override def shuffleBlockResolver: ShuffleBlockResolver = null
