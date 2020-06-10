@@ -22,9 +22,9 @@ package com.aliyun.emr.jss.common.util
  * the number of megabytes. Supports the same formats as Utils.memoryStringToMb.
  */
 private[jss] object MemoryParam {
-  def unapply(str: String): Option[Int] = {
+  def unapply(str: String): Option[Long] = {
     try {
-      Some(Utils.memoryStringToMb(str))
+      Some(Utils.byteStringAsBytes(str))
     } catch {
       case e: NumberFormatException => None
     }

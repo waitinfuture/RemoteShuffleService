@@ -83,7 +83,9 @@ public class ShuffleClientImpl extends ShuffleClient {
             localhost,
             0,
             this.conf);
-        _master = _env.setupEndpointRef(new RpcAddress(localhost, 9099), RpcNameConstants.MASTER_EP);
+        _master = _env.setupEndpointRef(new RpcAddress(conf.get(
+            "ess.master.host", localhost
+        ), conf.getInt("ess.master.port", 9099)), RpcNameConstants.MASTER_EP);
 
         reducePartitionMap = new ConcurrentHashMap<>();
         Configuration hadoopConf = new Configuration();

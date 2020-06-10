@@ -21,11 +21,11 @@ class EssShuffleReader[K, C](
 
     val serializerInstance = dep.serializer.newInstance()
 
-    val recordIter = (startPartition until endPartition).flatMap(reduceId => {
-      serializerInstance.deserializeStream(
-        essShuffleClient.readPartition(sparkConf.getAppId, handle.shuffleId, reduceId)
-      ).asKeyValueIterator
-    }).toIterator
+    val recordIter = (startPartition until endPartition).map(reduceId => {
+      essShuffleClient.readPartition(sparkConf.getAppId, handle.shuffleId, reduceId)
+    }).toIterator.flatMap(
+      serializerInstance.deserializeStream(_).asKeyValueIterator
+    )
 
     // Update the context task metrics for each record read.
     val readMetrics = context.taskMetrics.createTempShuffleReadMetrics()

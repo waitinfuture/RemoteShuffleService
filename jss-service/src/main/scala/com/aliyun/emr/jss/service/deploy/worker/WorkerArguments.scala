@@ -33,7 +33,7 @@ class WorkerArguments(args: Array[String], conf: EssConf) {
   var propertiesFile: String = null
 
   if (conf.getenv("JINDO_WORKER_MEMORY") != null) {
-    memory = Utils.memoryStringToMb(conf.getenv("JINDO_WORKER_MEMORY"))
+    memory = Utils.byteStringAsBytes(conf.getenv("JINDO_WORKER_MEMORY"))
   }
 
   parse(args.toList)
