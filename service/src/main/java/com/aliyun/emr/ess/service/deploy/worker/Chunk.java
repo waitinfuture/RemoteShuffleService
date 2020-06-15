@@ -1,0 +1,97 @@
+package com.aliyun.emr.ess.service.deploy.worker;
+
+import com.aliyun.emr.ess.unsafe.Platform;
+import io.netty.buffer.ByteBuf;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.io.IOException;
+import java.io.OutputStream;
+
+public class Chunk {
+    private static final Logger logger = LoggerFactory.getLogger(Chunk.class);
+
+    private int id;
+    private long startAddress;
+    private long endAddress;
+    private long currentAddress;
+
+    public Chunk(int id, long startAddress, long endAddress) {
+        this.id = id;
+        this.startAddress = startAddress;
+        this.endAddress = endAddress;
+        this.currentAddress = startAddress;
+    }
+
+    public int remaining() {
+        return (int)(endAddress - currentAddress);
+    }
+
+    public void append(byte[] data) {
+        Platform.copyMemory(data, Platform.BYTE_ARRAY_OFFSET, null, startAddress, data.length);
+        currentAddress += data.length;
+    }
+
+    public void append(ByteBuf data) {
+        for (int i = data.readerIndex(); i < data.writerIndex(); i++) {
+            Platform.putByte(null, currentAddress, data.getByte(i));
+            currentAddress++;
+        }
+    }
+
+    public void clear() {
+        currentAddress = startAddress;
+    }
+
+    public boolean flushData(OutputStream ostream) {
+        return flushData(ostream, true);
+    }
+    /**
+     *
+     * @param ostream
+     * @param flush whether to flush or just clear buffer
+     * @return
+     */
+    public boolean flushData(OutputStream ostream, boolean flush) {
+        try {
+            if (flush) {
+                for (long addr = startAddress; addr < currentAddress; addr++) {
+                    ostream.write(Platform.getByte(null, addr));
+                }
+            }
+            currentAddress = startAddress;
+            return true;
+        } catch (IOException e) {
+            logger.error("flush data failed", e);
+        }
+        return false;
+    }
+
+    public byte[] toBytes() {
+        byte[] data = new byte[(int)(currentAddress - startAddress)];
+        for (long addr = startAddress; addr < currentAddress; addr++) {
+            data[(int)(addr - startAddress)] = Platform.getByte(null, addr);
+        }
+        return data;
+    }
+
+    public boolean hasData() {
+        return (currentAddress > startAddress);
+    }
+
+    public int getId() {
+        return id;
+    }
+
+    public long getStartAddress() {
+        return startAddress;
+    }
+
+    public long getEndAddress() {
+        return endAddress;
+    }
+
+    public long getCurrentAddress() {
+        return currentAddress;
+    }
+}

@@ -1,6 +1,6 @@
 package org.apache.spark.shuffle.ess;
 
-import com.aliyun.emr.jss.client.ShuffleClient;
+import com.aliyun.emr.ess.client.ShuffleClient;
 import org.apache.spark.Partitioner;
 import org.apache.spark.ShuffleDependency;
 import org.apache.spark.SparkConf;
@@ -83,6 +83,11 @@ public class EssShuffleWriter<K, V, C> extends ShuffleWriter<K, V> {
     private byte[][] sendBuffers;
     private int[] sendOffsets;
 
+    private long[] mapStatusLengths;
+    private long[] mapStatusRecords;
+    private long[] tmpLengthMap;
+    private long[] tmpRecordMap;
+
     /**
      * Are we in the process of stopping? Because map tasks can call stop() with success = true
      * and then call stop() with success = false if they get an exception, we want to make sure
@@ -116,6 +121,11 @@ public class EssShuffleWriter<K, V, C> extends ShuffleWriter<K, V> {
 
         sendBuffers = new byte[partitioner.numPartitions()][];
         sendOffsets = new int[partitioner.numPartitions()];
+
+        mapStatusLengths = new long[partitioner.numPartitions()];
+        mapStatusRecords = new long[partitioner.numPartitions()];
+        tmpLengthMap = new long[partitioner.numPartitions()];
+        tmpRecordMap = new long[partitioner.numPartitions()];
     }
 
     private void updatePeakMemoryUsed() {
@@ -171,6 +181,7 @@ public class EssShuffleWriter<K, V, C> extends ShuffleWriter<K, V> {
                 byte[] tmpBuffer = new byte[SEND_BUFFER_SIZE];
                 System.arraycopy(buffer, 0, tmpBuffer, 0, SEND_BUFFER_SIZE);
                 flushSendBuffer(partitionId, tmpBuffer, offset);
+                updateMapStatus();
                 offset = 0;
             }
 
@@ -178,6 +189,8 @@ public class EssShuffleWriter<K, V, C> extends ShuffleWriter<K, V> {
             Platform.copyMemory(row.getBaseObject(), row.getBaseOffset(),
                 buffer, Platform.BYTE_ARRAY_OFFSET + offset + 4, rowSize);
             sendOffsets[partitionId] = offset + serializedRecordSize;
+            tmpLengthMap[partitionId] += serializedRecordSize;
+            tmpRecordMap[partitionId] += 1;
         }
     }
 
@@ -207,10 +220,13 @@ public class EssShuffleWriter<K, V, C> extends ShuffleWriter<K, V> {
                 byte[] tmpBuffer = new byte[SEND_BUFFER_SIZE];
                 System.arraycopy(buffer, 0, tmpBuffer, 0, SEND_BUFFER_SIZE);
                 flushSendBuffer(partitionId, tmpBuffer, offset);
+                updateMapStatus();
                 offset = 0;
             }
             System.arraycopy(serBuffer.getBuf(), 0, buffer, offset, serializedRecordSize);
             sendOffsets[partitionId] = offset + serializedRecordSize;
+            tmpLengthMap[partitionId] += serializedRecordSize;
+            tmpRecordMap[partitionId] += 1;
         }
     }
 
@@ -250,6 +266,9 @@ public class EssShuffleWriter<K, V, C> extends ShuffleWriter<K, V> {
                 flushSendBuffer(i, sendBuffers[i], size);
             }
         }
+
+        updateMapStatus();
+
         sendBuffers = null;
         sendOffsets = null;
 
@@ -268,7 +287,23 @@ public class EssShuffleWriter<K, V, C> extends ShuffleWriter<K, V> {
         BlockManagerId dummyId = BlockManagerId$.MODULE$.apply(
             "amor", "127.0.0.1", 1111, Option.apply(null));
         mapStatus = MapStatus$.MODULE$.apply(
-            dummyId, new long[partitioner.numPartitions()], new long[0]);
+            dummyId, mapStatusLengths, mapStatusRecords);
+    }
+
+    private void updateMapStatus()
+    {
+        long bytesWritten = 0;
+        long recordsWritten = 0;
+        for (int i = 0; i < partitioner.numPartitions(); i ++) {
+            mapStatusLengths[i] += tmpLengthMap[i];
+            bytesWritten += tmpLengthMap[i];
+            tmpLengthMap[i] = 0;
+            mapStatusRecords[i] += tmpRecordMap[i];
+            recordsWritten += tmpRecordMap[i];
+            tmpRecordMap[i] = 0;
+        }
+        writeMetrics.incBytesWritten(bytesWritten);
+        writeMetrics.incRecordsWritten(recordsWritten);
     }
 
     @Override

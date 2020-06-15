@@ -20,19 +20,19 @@
     <modelVersion>4.0.0</modelVersion>
     <parent>
         <groupId>com.aliyun.emr</groupId>
-        <artifactId>emr-jindo-ss</artifactId>
+        <artifactId>emr-shuffle</artifactId>
         <version>1.0.0-SNAPSHOT</version>
         <relativePath>../pom.xml</relativePath>
     </parent>
 
     <artifactId>ess-shuffle-manager</artifactId>
     <packaging>jar</packaging>
-    <name>Aliyun E-MapReduce ESS Spark Shuffle Manager</name>
+    <name>Aliyun E-MapReduce Shuffle Service Shuffle Manager for Spark </name>
 
     <dependencies>
         <dependency>
             <groupId>com.aliyun.emr</groupId>
-            <artifactId>jss-client-java</artifactId>
+            <artifactId>ess-client-java</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>

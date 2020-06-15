@@ -1,9 +1,9 @@
 package org.apache.spark.shuffle.ess
 
-import com.aliyun.emr.jss.client.ShuffleClient
-import com.aliyun.emr.jss.client.impl.ShuffleClientImpl
-import com.aliyun.emr.jss.common.EssConf
-import com.aliyun.emr.jss.protocol.PartitionLocation
+import com.aliyun.emr.ess.client.ShuffleClient
+import com.aliyun.emr.ess.client.impl.ShuffleClientImpl
+import com.aliyun.emr.ess.common.EssConf
+import com.aliyun.emr.ess.protocol.PartitionLocation
 import org.apache.spark._
 import org.apache.spark.internal.Logging
 import org.apache.spark.shuffle._

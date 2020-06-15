@@ -1,6 +1,9 @@
 package org.apache.spark.shuffle.ess
 
-import com.aliyun.emr.jss.client.ShuffleClient
+import java.io.InputStream
+
+import com.aliyun.emr.ess.client.stream.EssInputStream
+import com.aliyun.emr.ess.client.{MetricsCallback, ShuffleClient}
 import org.apache.spark.{InterruptibleIterator, SparkConf, TaskContext}
 import org.apache.spark.internal.Logging
 import org.apache.spark.shuffle.{BaseShuffleHandle, ShuffleReader}
@@ -21,14 +24,24 @@ class EssShuffleReader[K, C](
 
     val serializerInstance = dep.serializer.newInstance()
 
+    // Update the context task metrics for each record read.
+    val readMetrics = context.taskMetrics.createTempShuffleReadMetrics()
+    val metricsCallback = new MetricsCallback {
+      override def bytesWritten(bytesWritten: Long): Unit = {
+        readMetrics.incRemoteBytesRead(bytesWritten)
+      }
+    }
+
     val recordIter = (startPartition until endPartition).map(reduceId => {
-      essShuffleClient.readPartition(sparkConf.getAppId, handle.shuffleId, reduceId)
+      val inputStream =
+        essShuffleClient.readPartition(
+          sparkConf.getAppId, handle.shuffleId, reduceId)
+      inputStream.asInstanceOf[EssInputStream].setCallback(metricsCallback)
+      inputStream
     }).toIterator.flatMap(
       serializerInstance.deserializeStream(_).asKeyValueIterator
     )
 
-    // Update the context task metrics for each record read.
-    val readMetrics = context.taskMetrics.createTempShuffleReadMetrics()
     val metricIter = CompletionIterator[(Any, Any), Iterator[(Any, Any)]](
       recordIter.map { record =>
         readMetrics.incRecordsRead(1)
