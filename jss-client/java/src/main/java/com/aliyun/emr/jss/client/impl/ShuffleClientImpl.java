@@ -25,6 +25,8 @@ import org.apache.hadoop.fs.Path;
 import org.apache.log4j.Logger;
 import scala.reflect.ClassTag$;
 
+import java.io.File;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.ByteBuffer;
@@ -42,11 +44,11 @@ public class ShuffleClientImpl extends ShuffleClient {
     // key: appId-shuffleId-reduceId   value: PartitionLocation
     private Map<String, PartitionLocation> reducePartitionMap = null;
     // key: appId-shuffleId-reduceId   value: file path set
-    private Map<String, Set<String>> reducerFileGroup = new ConcurrentHashMap<>();
+    private Map<String, HashSet<String>> reducerFileGroup = new HashMap<>();
     // key: appId-shuffleId    value: attempts
     private Map<String, int[]> mapAttempts = new HashMap<>();
     // key: appId-shuffleId-mapId-attemptId  value: partitions written
-    public Map<String, Set<PartitionLocation>> mapWrittenPartitions = new ConcurrentHashMap<>();
+    public Map<String, HashSet<PartitionLocation>> mapWrittenPartitions = new ConcurrentHashMap<>();
     // key: appId-shuffleId-mapId-attemptId  value: batchId
     private Map<String, AtomicInteger> mapBatchIds = new ConcurrentHashMap<>();
     private Map<PartitionLocation, RpcEndpointRef> workers = new HashMap<>();
@@ -151,23 +153,23 @@ public class ShuffleClientImpl extends ShuffleClient {
 
     @Override
     public boolean pushData(String applicationId,
-        int shuffleId,
-        int mapId,
-        int attemptId,
-        int reduceId,
-        byte[] data) {
+                            int shuffleId,
+                            int mapId,
+                            int attemptId,
+                            int reduceId,
+                            byte[] data) {
         return pushData(applicationId, shuffleId, mapId, attemptId, reduceId, data, 0, data.length);
     }
 
     @Override
     public boolean pushData(String applicationId,
-        int shuffleId,
-        int mapId,
-        int attemptId,
-        int reduceId,
-        byte[] data,
-        int offset,
-        int length) {
+                            int shuffleId,
+                            int mapId,
+                            int attemptId,
+                            int reduceId,
+                            byte[] data,
+                            int offset,
+                            int length) {
         // TODO add logic later
         // pushData might not keep partitionLocation with
 
@@ -196,7 +198,7 @@ public class ShuffleClientImpl extends ShuffleClient {
 
         ByteBuf buf = Unpooled.wrappedBuffer(byteBuffer);
 
-        return pushData(applicationId, shuffleId, mapId, attemptId, reduceId, buf);
+        return pushData(applicationId, shuffleId, mapId, attemptId, reduceId, buf, nextBatchId);
     }
 
     @Override
@@ -206,17 +208,19 @@ public class ShuffleClientImpl extends ShuffleClient {
         int mapId,
         int attemptId,
         int reduceId,
-        ByteBuf data) {
+        ByteBuf data,
+        int batchId) {
         String partitionKey =
             Utils.makeReducerKey(applicationId, shuffleId, reduceId);
         PartitionLocation loc = reducePartitionMap.get(partitionKey);
-        boolean res = pushData(applicationId, shuffleId, reduceId, data, loc, true);
+        String id = mapId + "-" + attemptId + "-" + batchId;
+        boolean res = pushData(applicationId, shuffleId, reduceId, data, loc, true, id);
         // update mapWrittenPartitions
         if (res) {
             String mapKey = Utils.makeMapKey(applicationId, shuffleId, mapId, attemptId);
             if (!mapWrittenPartitions.containsKey(mapKey)) {
                 if (!mapWrittenPartitions.containsKey(mapKey)) {
-                    Set<PartitionLocation> locations = new HashSet<>();
+                    HashSet<PartitionLocation> locations = new HashSet<>();
                     mapWrittenPartitions.put(mapKey, locations);
                 }
             }
@@ -231,14 +235,16 @@ public class ShuffleClientImpl extends ShuffleClient {
                             int reduceId,
                             ByteBuf data,
                             PartitionLocation location,
-                            boolean firstTry) {
+                            boolean firstTry,
+                            String batchId) {
         String shuffleKey = Utils.makeShuffleKey(applicationId, shuffleId);
         PushData pushData = new PushData(
             shuffleKey,
             location.getUUID(),
             PartitionLocation.Mode.Master.mode(),
             new NettyManagedBuffer(data),
-            TransportClient.requestId()
+            TransportClient.requestId(),
+            batchId
         );
         RpcEndpointRef worker = getWorker(location);
         PushDataResponse response = worker.pushDataSync(pushData,
@@ -254,7 +260,7 @@ public class ShuffleClientImpl extends ShuffleClient {
                 }
                 // push again
                 return pushData(applicationId, shuffleId, reduceId,
-                    data, location, false);
+                    data, location, false, batchId);
             } else {
                 return false;
             }
@@ -271,9 +277,11 @@ public class ShuffleClientImpl extends ShuffleClient {
         int attemptId
     ) {
         String mapKey = Utils.makeMapKey(applicationId, shuffleId, mapId, attemptId);
-        Set<PartitionLocation> locations = mapWrittenPartitions.get(mapKey);
+        HashSet<PartitionLocation> locations = mapWrittenPartitions.getOrDefault(mapKey, new
+            HashSet<>());
         MapperEndResponse response = _master.askSync(
-            new MapperEnd(applicationId, shuffleId, mapId, attemptId, locations),
+            new MapperEnd(applicationId, shuffleId, mapId, attemptId, new ArrayList<>
+                (locations)),
             ClassTag$.MODULE$.apply(MapperEndResponse.class)
         );
         if (response.status() != StatusCode.Success) {
@@ -294,19 +302,21 @@ public class ShuffleClientImpl extends ShuffleClient {
         // clear status
         Set<String> keys = reducePartitionMap.keySet();
         keys.forEach(key -> {
-            if (key.startsWith(shuffleKey)) {
+            if (key.startsWith(Utils.shuffleKeyPrefix(shuffleKey))) {
                 reducePartitionMap.remove(key);
             }
         });
-        keys = reducerFileGroup.keySet();
-        for (String key : keys) {
-            if (key.startsWith(shuffleKey)) {
-                reducerFileGroup.remove(key);
+        synchronized (reducerFileGroup) {
+            keys = new HashSet<>(reducerFileGroup.keySet());
+            for (String key : keys) {
+                if (key.startsWith(Utils.shuffleKeyPrefix(shuffleKey))) {
+                    reducerFileGroup.remove(key);
+                }
             }
         }
         keys = mapWrittenPartitions.keySet();
         keys.forEach(key -> {
-            if (key.startsWith(shuffleKey)) {
+            if (key.startsWith(Utils.shuffleKeyPrefix(shuffleKey))) {
                 mapWrittenPartitions.remove(key);
             }
         });
@@ -332,7 +342,7 @@ public class ShuffleClientImpl extends ShuffleClient {
     public InputStream readPartition(String applicationId, int shuffleId, int reduceId) {
         String shuffleKey = Utils.makeShuffleKey(applicationId, shuffleId);
         String reducerKey = Utils.makeReducerKey(applicationId, shuffleId, reduceId);
-        if (!reducerFileGroup.containsKey(reducerKey)) {
+        synchronized (reducerFileGroup) {
             if (!reducerFileGroup.containsKey(reducerKey)) {
                 GetReducerFileGroupResponse response = _master.askSync(
                     new GetReducerFileGroup(applicationId, shuffleId),
@@ -345,15 +355,36 @@ public class ShuffleClientImpl extends ShuffleClient {
                 // update reducerFileGroup
                 reducerFileGroup.putAll(response.fileGroup());
                 // update attempts
+                logger.debug("get fileGroup success, shuflfleKey " + shuffleKey +
+                    "mapAttempts " + response.attempts());
                 mapAttempts.put(shuffleKey, response.attempts());
+            } else {
+                if (!mapAttempts.containsKey(shuffleKey)) {
+                    logger.error("reducerFileGroup contains " + reducerKey +
+                        " but mapAttempts doesn't contain " + shuffleKey);
+                } else {
+                    logger.debug("reducerFileGroup contains " + reducerKey +
+                        " and mapAttempts contains " + shuffleKey);
+                }
             }
         }
 
-        EssInputStream inputStream = new EssInputStream(
-            conf,
-            reducerFileGroup.getOrDefault(reducerKey, new HashSet<String>()),
-            mapAttempts.get(shuffleKey)
-        );
+        HashSet<String> files;
+        int[] attempts;
+        synchronized (reducerFileGroup) {
+            files = reducerFileGroup.getOrDefault(reducerKey, new HashSet<>());
+            attempts = mapAttempts.getOrDefault(shuffleKey, null);
+        }
+        EssInputStream inputStream = null;
+        if (attempts != null) {
+            inputStream = new EssInputStream(
+                conf,
+                files,
+                mapAttempts.get(shuffleKey)
+            );
+        } else {
+            logger.error("mapAttempts doesn't contains " + shuffleKey);
+        }
 
         return inputStream;
     }
@@ -406,5 +437,49 @@ public class ShuffleClientImpl extends ShuffleClient {
             workers.put(loc, worker);
             return worker;
         }
+    }
+
+    public static void main(String[] srgs) throws IOException {
+        EssConf conf = new EssConf();
+        conf.set("ess.worker.base.dir", "hdfs://11.158.199.162:9000/tmp/ess-test/");
+//        conf.set("ess.worker.base.dir", "file:///Users/linxuewei/Downloads/");
+        Set<String> set = new HashSet<>();
+        set.add("hdfs://11.158.199.162:9000/tmp/ess-test/82f8588e-11a8-42d7-814e-cd311dbbbc4e");
+//        set.add("file:///Users/linxuewei/Downloads/d1ae4b8d-dafd-43f5-9124-22c3f741377b");
+
+        int[] attempt = new int[1000];
+        for (int i = 0; i < 1000; i++) {
+            attempt[i] = 0;
+        }
+
+        InputStream t = new EssInputStream(conf, set, attempt);
+
+        try {
+            while (t.read() != -1) {
+
+            }
+        } catch (Exception ex) {
+            ex.printStackTrace();
+        }
+
+//        Path path = new Path("hdfs://11.158.199.162:9000/tmp/ess-test/d1ae4b8d-dafd-43f5-9124" +
+//            "-22c3f741377b");
+//
+//        FileSystem fs = path.getFileSystem(new Configuration());
+//
+//        File f = new File("tmp");
+//
+//        FileOutputStream os = new FileOutputStream(f);
+//
+//        InputStream in = fs.open(path);
+//
+//        int b;
+//        while ((b = in.read()) != -1) {
+//            os.write(b);
+//        }
+//
+//        os.close();
+
+
     }
 }

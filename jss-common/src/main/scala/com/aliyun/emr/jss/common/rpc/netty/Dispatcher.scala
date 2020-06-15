@@ -208,9 +208,9 @@ private[jss] class Dispatcher(nettyEnv: NettyRpcEnv, numUsableCores: Int) extend
   private val threadpool: ThreadPoolExecutor = {
     val availableCores =
       if (numUsableCores > 0) numUsableCores else Runtime.getRuntime.availableProcessors()
-    val numThreads = nettyEnv.conf.getInt("spark.rpc.netty.dispatcher.numThreads",
-      math.max(2, availableCores))
+    val numThreads = nettyEnv.conf.getInt("spark.rpc.netty.dispatcher.numThreads", availableCores)
     val pool = ThreadUtils.newDaemonFixedThreadPool(numThreads, "dispatcher-event-loop")
+    logInfo(s"numThreads: ${numThreads}")
     for (i <- 0 until numThreads) {
       pool.execute(new MessageLoop)
     }

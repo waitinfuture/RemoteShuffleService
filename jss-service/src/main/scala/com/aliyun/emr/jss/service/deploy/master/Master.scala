@@ -1,13 +1,10 @@
 package com.aliyun.emr.jss.service.deploy.master
 
-import java.net.URI
 import java.util
 import java.util.concurrent.{ConcurrentHashMap, ScheduledFuture, TimeUnit}
 
 import scala.collection.JavaConversions._
 import scala.collection.JavaConverters._
-import scala.concurrent.duration.Duration
-import scala.util.Success
 
 import com.aliyun.emr.jss.common.EssConf
 import com.aliyun.emr.jss.common.internal.Logging
@@ -18,7 +15,7 @@ import com.aliyun.emr.jss.protocol.message.ControlMessages._
 import com.aliyun.emr.jss.protocol.message.StatusCode
 import com.aliyun.emr.jss.service.deploy.worker.WorkerInfo
 import org.apache.hadoop.conf.Configuration
-import org.apache.hadoop.fs.{FileSystem, Path}
+import org.apache.hadoop.fs.Path
 
 private[deploy] class Master(
   override val rpcEnv: RpcEnv,
@@ -44,7 +41,7 @@ private[deploy] class Master(
   val fs = basePath.getFileSystem(new Configuration())
 
   // Configs
-  private val CHUNK_SIZE = conf.getSizeAsBytes("ess.partition.memory", "32m")
+  private val CHUNK_SIZE = conf.getSizeAsBytes("ess.partition.memory", "1m")
   private val WORKER_TIMEOUT_MS = conf.getLong("ess.worker.timeout", 60) * 1000
   private val APPLICATION_TIMEOUT_MS = conf.getLong("ess.application.timeout", 180) * 1000
 
@@ -56,7 +53,7 @@ private[deploy] class Master(
   private val registeredShuffle = new util.HashSet[String]()
   private val shuffleMapperAttempts = new util.HashMap[String, Array[Int]]()
   private val shuffleCommittedPartitions = new util.HashMap[String, util.Set[String]]()
-  private val reducerFileGroup = new util.HashMap[String, util.Set[Path]]()
+  private val reducerFileGroup = new util.HashMap[String, util.HashSet[Path]]()
   private val appHeartbeatTime = new util.HashMap[String, Long]()
 
   private def getChunkIndex(applicationId: String,
@@ -436,13 +433,14 @@ private[deploy] class Master(
       val attempts = new Array[Int](numMappers)
       0 until numMappers foreach (idx => attempts(idx) = -1)
       shuffleMapperAttempts.put(shuffleKey, attempts)
+      logInfo(s"shuffle Key ${shuffleKey} put into shuffleMapperAttempts")
     }
     shuffleCommittedPartitions.synchronized {
       val commitedPartitions = new util.HashSet[String]()
       shuffleCommittedPartitions.put(shuffleKey, commitedPartitions)
     }
 
-    // TODO 维护 reduceGroup ???
+    logInfo(s"Handle RegisterShuffle Success, ${shuffleKey}")
     context.reply(RegisterShuffleResponse(StatusCode.Success, locations))
   }
 
@@ -496,7 +494,7 @@ private[deploy] class Master(
     shuffleId: Int,
     mapId: Int,
     attemptId: Int,
-    partitionLocations: util.Set[PartitionLocation]): Unit = {
+    partitionLocations: util.List[PartitionLocation]): Unit = {
     var askStageEnd: Boolean = false
     val shuffleKey = Utils.makeShuffleKey(applicationId, shuffleId)
     // update max attemptId
@@ -522,23 +520,25 @@ private[deploy] class Master(
     }
 
     // update partitions written
-    reducerFileGroup.synchronized {
-      partitionLocations
-        .map(loc => {
-          val partitionKey = Utils.makeReducerKey(applicationId, shuffleId, loc.getReduceId)
-          val path = EssPathUtil.GetPartitionPath(conf, applicationId, shuffleId, loc.getReduceId, loc.getUUID)
-          (partitionKey, path)
-        })
-        .groupBy(_._1) // Map[String,List[(String, Path)]]
-        .mapValues(r => {
-          r.map(r => {
-            r._2
+    if (partitionLocations != null) {
+      reducerFileGroup.synchronized {
+        partitionLocations
+          .map(loc => {
+            val partitionKey = Utils.makeReducerKey(applicationId, shuffleId, loc.getReduceId)
+            val path = EssPathUtil.GetPartitionPath(conf, applicationId, shuffleId, loc.getReduceId, loc.getUUID)
+            (partitionKey, path)
           })
-        }) // Map[String, List[Path]]
-        .foreach(entry => {
-          reducerFileGroup.putIfAbsent(entry._1, new util.HashSet[Path]())
-          reducerFileGroup.get(entry._1).addAll(entry._2)
-        })
+          .groupBy(_._1) // Map[String,List[(String, Path)]]
+          .mapValues(r => {
+            r.map(r => {
+              r._2
+            })
+          }) // Map[String, List[Path]]
+          .foreach(entry => {
+            reducerFileGroup.putIfAbsent(entry._1, new util.HashSet[Path]())
+            reducerFileGroup.get(entry._1).addAll(entry._2)
+          })
+      }
     }
 
     if (askStageEnd) {
@@ -556,10 +556,21 @@ private[deploy] class Master(
     shuffleId: Int): Unit = {
 
     val shuffleKey = Utils.makeShuffleKey(applicationId, shuffleId)
-    val shuffleFileGroup = reducerFileGroup
-      .filter(entry => entry._1.startsWith(shuffleKey))
-      .map(entry => (entry._1, new util.HashSet(entry._2.map(_.toString).asJava)))
-      .toMap
+    val shuffleFileGroup = reducerFileGroup.synchronized {
+      reducerFileGroup
+        .filter(entry => entry._1.startsWith(Utils.shuffleKeyPrefix(shuffleKey)))
+        .map(entry => (entry._1, new util.HashSet(entry._2.map(_.toString).asJava)))
+        .toMap
+    }
+    if (!shuffleMapperAttempts.containsKey(shuffleKey)) {
+      logError(s"shuffleKey Not Found in shuffleMapperAttempts! ${shuffleKey}")
+      context.reply(GetReducerFileGroupResponse(
+        StatusCode.Failed,
+        null,
+        null
+      ))
+      return
+    }
 
     context.reply(GetReducerFileGroupResponse(
       StatusCode.Success,
@@ -708,12 +719,13 @@ private[deploy] class Master(
       })
     }
 
+    val emptyMap = new util.HashMap[PartitionLocation, PartitionLocation]()
     // ask all workers holding master/slave partition to release resource
     workers.foreach(worker => {
       val res = worker.endpoint.askSync[DestroyResponse](
         Destroy(shuffleKey,
-          worker.masterPartitionLocations.get(shuffleKey).keySet().toList,
-          worker.slavePartitionLocations.get(shuffleKey).keySet().toList)
+          worker.masterPartitionLocations.getOrDefault(shuffleKey, emptyMap).keySet().toList,
+          worker.slavePartitionLocations.getOrDefault(shuffleKey, emptyMap).keySet().toList)
       )
       // retry once to destroy
       if (res.status != StatusCode.Success) {
@@ -729,9 +741,9 @@ private[deploy] class Master(
     workers.synchronized {
       workers.foreach(worker => {
         worker.removeMasterPartition(shuffleKey,
-          worker.masterPartitionLocations.get(shuffleKey).keySet().toList)
+          worker.masterPartitionLocations.getOrDefault(shuffleKey, emptyMap).keySet().toList)
         worker.removeSlavePartition(shuffleKey,
-          worker.slavePartitionLocations.get(shuffleKey).keySet().toList)
+          worker.slavePartitionLocations.getOrDefault(shuffleKey, emptyMap).keySet().toList)
         worker.masterPartitionLocations.remove(shuffleKey)
         worker.slavePartitionLocations.remove(shuffleKey)
       })
@@ -740,15 +752,17 @@ private[deploy] class Master(
     // check if committed files contains all files mappers written
     val lostFiles = new util.ArrayList[String]()
     val committedPartitions = shuffleCommittedPartitions.get(shuffleKey)
-    reducerFileGroup.filter(entry => entry._1.startsWith(shuffleKey))
-      .foreach(entry => {
-        val paths = entry._2
-        paths.foreach(path => {
-          if (!committedPartitions.contains(path.getName)) {
-            lostFiles.add(path.getName)
-          }
+    reducerFileGroup.synchronized {
+      reducerFileGroup.filter(entry => entry._1.startsWith(shuffleKey))
+        .foreach(entry => {
+          val paths = entry._2
+          paths.foreach(path => {
+            if (!committedPartitions.contains(path.getName)) {
+              lostFiles.add(path.getName)
+            }
+          })
         })
-      })
+    }
 
     // clear committed files
     shuffleCommittedPartitions.synchronized {
@@ -773,6 +787,11 @@ private[deploy] class Master(
       context.reply(UnregisterShuffleResponse(StatusCode.PartitionExists))
       return
     }
+    // clear shuffle attempts for the shuffle
+    shuffleMapperAttempts.synchronized {
+      logInfo(s"Remove from shuffleMapperAttempts, ${shuffleKey}")
+      shuffleMapperAttempts.remove(shuffleKey)
+    }
     // clear reducerFileGroup for the shuffle
     reducerFileGroup.synchronized {
       val keys = reducerFileGroup.keySet()
@@ -787,6 +806,7 @@ private[deploy] class Master(
       logError("delete files failed!")
       context.reply(UnregisterShuffleResponse(StatusCode.DeleteFilesFailed))
     }
+    context.reply(UnregisterShuffleResponse(StatusCode.Success))
   }
 
   def handleApplicationLost(context: RpcCallContext, appId: String): Unit = {

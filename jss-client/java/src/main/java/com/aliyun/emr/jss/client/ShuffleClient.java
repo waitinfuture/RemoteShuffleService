@@ -85,7 +85,8 @@ public abstract class ShuffleClient implements Cloneable
         int mapId,
         int attemptId,
         int reduceId,
-        ByteBuf data);
+        ByteBuf data,
+        int batchId);
 
     /**
      * report partitionlocations written by the completed map task

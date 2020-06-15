@@ -22,6 +22,7 @@ import java.util.concurrent.TimeUnit
 
 import scala.collection.JavaConversions._
 import scala.util.control.Breaks._
+import scala.util.{Failure, Success}
 
 import com.aliyun.emr.jss.common.EssConf
 import com.aliyun.emr.jss.common.internal.Logging
@@ -61,7 +62,7 @@ private[deploy] class Worker(
 
   // Memory Pool
   private val MemoryPoolCapacity = conf.getSizeAsBytes("ess.memoryPool.capacity", "1G")
-  private val ChunkSize = conf.getSizeAsBytes("ess.partition.memory", "32m")
+  private val ChunkSize = conf.getSizeAsBytes("ess.partition.memory", "1m")
   private val memoryPool = new MemoryPool(MemoryPoolCapacity, ChunkSize)
 
   // worker info
@@ -152,9 +153,10 @@ private[deploy] class Worker(
       handleGetShuffleStatus(context, shuffleKey)
     case req if req.isInstanceOf[PushData] =>
       val pushData = req.asInstanceOf[PushData]
-      logInfo(s"received PushData, ${pushData.shuffleKey} ${pushData.partitionId}")
+      logDebug(s"received PushData, ${pushData.shuffleKey} ${pushData.partitionId}, ${pushData.mode}," +
+        s"batchId: ${pushData.batchId}")
       handlePushData(context, pushData.shuffleKey, pushData.partitionId,
-        PartitionLocation.getMode(pushData.mode), pushData.body())
+        PartitionLocation.getMode(pushData.mode), pushData.body(), pushData.batchId)
   }
 
   private def handleReserveBuffers(context: RpcCallContext, shuffleKey: String,
@@ -502,8 +504,8 @@ private[deploy] class Worker(
     context.reply(GetShuffleStatusResponse(!masterIdle || !slaveIdle))
   }
 
-  private def handlePushData(context: RpcCallContext, shuffleKey: String,
-    partitionId: String, mode: PartitionLocation.Mode, data: ManagedBuffer): Unit = {
+  private def handlePushData(context: RpcCallContext, shuffleKey: String, partitionId: String,
+    mode: PartitionLocation.Mode, data: ManagedBuffer, batchId: String): Unit = {
     // find DoubleChunk responsible for the data
     val shufflelocations = if (mode == PartitionLocation.Mode.Master) {
       workerInfo.masterPartitionLocations.get(shuffleKey)
@@ -543,34 +545,39 @@ private[deploy] class Worker(
 
     // for master, send data to slave
     if (mode == PartitionLocation.Mode.Master) {
-      logInfo("replicating data to slave")
       val peer = location.getPeer
+      logDebug(s"replicating data to slave, ${peer.getHost}:${peer.getPort}," +
+        s"${shuffleKey}, ${partitionId}, batchId: ${batchId}")
       val slaveEndpoint = getOrCreateEndpoint(peer.getHost, peer.getPort)
       val pushData = new PushData(
         shuffleKey,
         partitionId,
         PartitionLocation.Mode.Slave.mode(),
         data,
-        TransportClient.requestId())
-      var res = slaveEndpoint.pushDataSync[PushDataResponse](pushData)
-      if (res.status != StatusCode.Success) {
-        // retry once
-        res = slaveEndpoint.pushDataSync[PushDataResponse](pushData)
-      }
-      if (res.status == StatusCode.Success) {
-        logInfo("Finished processing PushData, mode " + mode)
-        context.reply(PushDataResponse(StatusCode.Success))
-      } else {
-        val msg = s"send data to slave failed! ${res.status}"
-        logError(msg)
-        // send SlaveLost to self
-        self.send(SlaveLost(shuffleKey, location, peer))
-        context.reply(PushDataResponse(StatusCode.ReplicateDataFailed))
-      }
+        TransportClient.requestId(),
+        batchId)
+
+
+      val future = slaveEndpoint.pushData[PushDataResponse](pushData)
+      future.onComplete {
+        case Success(res) => {
+            if (res.status != StatusCode.Success) {
+              logError(s"send data to slave failed! ${res.status}")
+              self.send(SlaveLost(shuffleKey, location, peer))
+              context.reply(PushDataResponse(StatusCode.ReplicateDataFailed))
+            } else {
+              logDebug(s"Finished processing PushData, mode ${mode}, partitionId ${partitionId}," +
+                s"batchId: ${batchId}")
+              context.reply(PushDataResponse(StatusCode.Success))
+            }
+        }
+        case Failure(e) =>
+      }(ThreadUtils.sameThread)
     } else {
       // for slave, release data
       data.release()
-      logInfo("Finished processing PushData, mode " + mode)
+      logDebug(s"Finished processing PushData, mode ${mode}, partitionId ${partitionId}," +
+        s"batchId: ${batchId}")
       context.reply(PushDataResponse(StatusCode.Success))
     }
   }

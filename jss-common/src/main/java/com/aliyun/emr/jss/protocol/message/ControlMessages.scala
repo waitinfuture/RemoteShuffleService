@@ -64,7 +64,7 @@ object ControlMessages {
     shuffleId: Int,
     mapId: Int,
     attemptId: Int,
-    partitionLocations: util.Set[PartitionLocation]
+    partitionLocations: util.ArrayList[PartitionLocation]
   ) extends MasterMessage
 
   case class MapperEndResponse(
@@ -79,7 +79,7 @@ object ControlMessages {
   // Path can't be serialized
   case class GetReducerFileGroupResponse(
     status: StatusCode,
-    fileGroup: util.HashMap[String, util.Set[String]],
+    fileGroup: util.HashMap[String, util.HashSet[String]],
     attempts: Array[Int]
   ) extends MasterMessage
 

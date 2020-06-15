@@ -29,6 +29,7 @@ import scala.Product2;
 import scala.concurrent.Future;
 import scala.concurrent.Promise$;
 import scala.concurrent.duration.Duration;
+import scala.concurrent.duration.FiniteDuration;
 import scala.reflect.ClassTag;
 import scala.reflect.ClassTag$;
 import scala.runtime.BoxedUnit;
@@ -38,11 +39,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.util.LinkedList;
 import java.util.List;
-import java.util.concurrent.ArrayBlockingQueue;
-import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 
 @Private
@@ -65,11 +62,9 @@ public class EssShuffleWriter<K, V, C> extends ShuffleWriter<K, V> {
     private final TaskContext taskContext;
     private final SparkConf sparkConf;
     private final ShuffleClient essShuffleClient;
-    private final int THREAD_NUM = 4;
-    final BlockingQueue<Runnable> queue = new ArrayBlockingQueue<>(100);
     private final ExecutorService executorService =
-        new ThreadPoolExecutor(
-            THREAD_NUM, THREAD_NUM, 0L, TimeUnit.MILLISECONDS, queue);
+        ThreadUtils.newDaemonCachedThreadPool(
+            "EssShuffleWriter-Client", 8 ,60);
 
     @Nullable private MapStatus mapStatus;
     private long peakMemoryUsedBytes = 0;
@@ -173,7 +168,9 @@ public class EssShuffleWriter<K, V, C> extends ShuffleWriter<K, V> {
 
             int offset = sendOffsets[partitionId];
             if ((SEND_BUFFER_SIZE - offset) < serializedRecordSize) {
-                flushSendBuffer(partitionId, buffer, offset);
+                byte[] tmpBuffer = new byte[SEND_BUFFER_SIZE];
+                System.arraycopy(buffer, 0, tmpBuffer, 0, SEND_BUFFER_SIZE);
+                flushSendBuffer(partitionId, tmpBuffer, offset);
                 offset = 0;
             }
 
@@ -207,7 +204,9 @@ public class EssShuffleWriter<K, V, C> extends ShuffleWriter<K, V> {
 
             int offset = sendOffsets[partitionId];
             if ((SEND_BUFFER_SIZE - offset) < serializedRecordSize) {
-                flushSendBuffer(partitionId, buffer, offset);
+                byte[] tmpBuffer = new byte[SEND_BUFFER_SIZE];
+                System.arraycopy(buffer, 0, tmpBuffer, 0, SEND_BUFFER_SIZE);
+                flushSendBuffer(partitionId, tmpBuffer, offset);
                 offset = 0;
             }
             System.arraycopy(serBuffer.getBuf(), 0, buffer, offset, serializedRecordSize);
@@ -256,7 +255,7 @@ public class EssShuffleWriter<K, V, C> extends ShuffleWriter<K, V> {
 
         for (Future<BoxedUnit> future : futures) {
             try {
-                ThreadUtils.awaitReady(future, Duration.Inf());
+                ThreadUtils.awaitReady(future, new FiniteDuration(30, TimeUnit.SECONDS));
             } catch (SparkException e) {
                 throw new IOException("Failed to get future result.", e);
             }

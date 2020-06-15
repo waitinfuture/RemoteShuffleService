@@ -1,6 +1,7 @@
 package com.aliyun.emr.jss.service.deploy
 
 import java.util
+import java.util.concurrent.atomic.AtomicInteger
 
 import scala.collection.JavaConversions._
 import scala.collection.JavaConverters._
@@ -192,6 +193,8 @@ class MessageHandlerSuite
 
   var fs: FileSystem = null
 
+  var atomic = new AtomicInteger()
+
   def getInfosInMaster(): Unit = {
     val workerInfosMaster = master.askSync[GetWorkerInfosResponse](GetWorkerInfos).workerInfos
       .asInstanceOf[util.List[WorkerInfo]]
@@ -301,10 +304,10 @@ class MessageHandlerSuite
     }
   }
 
-  def toJavaSet(locs: util.List[PartitionLocation]): util.HashSet[PartitionLocation] = {
+  def toJavaList(locs: util.List[PartitionLocation]): util.ArrayList[PartitionLocation] = {
     val locSet = new util.HashSet[PartitionLocation]()
     locSet.addAll(locs)
-    locSet
+    new util.ArrayList[PartitionLocation](locSet)
   }
 
   /**
@@ -428,7 +431,8 @@ class MessageHandlerSuite
       worker1Location.getUUID,
       PartitionLocation.Mode.Master.mode,
       buf,
-      TransportClient.requestId()
+      TransportClient.requestId(),
+      atomic.getAndAdd(1).toString
     )
     buf.retain()
     var res1 = worker1.pushDataSync[PushDataResponse](pushDataMsg1)
@@ -462,7 +466,8 @@ class MessageHandlerSuite
       worker2Location.getUUID,
       PartitionLocation.Mode.Master.mode(),
       buf,
-      TransportClient.requestId()
+      TransportClient.requestId(),
+      atomic.getAndAdd(1).toString
     )
     buf.retain()
     var res = worker2.pushDataSync[PushDataResponse](pushDataMsg2)
@@ -498,7 +503,8 @@ class MessageHandlerSuite
       worker2Location2.getUUID,
       PartitionLocation.Mode.Master.mode(),
       buf,
-      TransportClient.requestId()
+      TransportClient.requestId(),
+      atomic.getAndAdd(1).toString
     )
     buf.retain()
     res = worker2.pushDataSync[PushDataResponse](pushDataMsg3)
@@ -565,7 +571,7 @@ class MessageHandlerSuite
         1,
         0,
         0,
-        toJavaSet(mapper1Locations)
+        toJavaList(mapper1Locations)
       )
     )
     assert(res.status.equals(StatusCode.Success))
@@ -588,7 +594,7 @@ class MessageHandlerSuite
         1,
         1,
         0,
-        toJavaSet(mapper2Locations)
+        toJavaList(mapper2Locations)
       )
     )
     assert(res.status.equals(StatusCode.Success))
@@ -615,7 +621,7 @@ class MessageHandlerSuite
         1,
         2,
         0,
-        toJavaSet(mapper3Locations)
+        toJavaList(mapper3Locations)
       )
     )
     assert(res.status.equals(StatusCode.Success))
@@ -801,7 +807,8 @@ class MessageHandlerSuite
           lostSlave.getPeer.getUUID,
           PartitionLocation.Mode.Master.mode(),
           buf,
-          TransportClient.requestId()
+          TransportClient.requestId(),
+          atomic.getAndAdd(1).toString
         )
       )
     })
@@ -871,8 +878,12 @@ class MessageHandlerSuite
         val data = new Array[Byte](63)
         val buf = new NettyManagedBuffer(Unpooled.copiedBuffer(data))
         val res = worker.pushDataSync[PushDataResponse](
-          new PushData(shuffleKey, loc.getUUID, PartitionLocation.Mode.Master.mode,
-            buf, TransportClient.requestId())
+          new PushData(shuffleKey,
+            loc.getUUID,
+            PartitionLocation.Mode.Master.mode,
+            buf,
+            TransportClient.requestId(),
+            atomic.getAndAdd(1).toString)
         )
         assert(res.status == StatusCode.Success)
       })
@@ -933,8 +944,12 @@ class MessageHandlerSuite
         Random.nextBytes(data)
         val buf = new NettyManagedBuffer(Unpooled.copiedBuffer(data))
         val res = getWorker(loc).pushDataSync[PushDataResponse](
-          new PushData(shuffleKey, loc.getUUID, PartitionLocation.Mode.Master.mode(),
-            buf, TransportClient.requestId())
+          new PushData(shuffleKey,
+            loc.getUUID,
+            PartitionLocation.Mode.Master.mode(),
+            buf,
+            TransportClient.requestId(),
+            atomic.getAndAdd(1).toString)
         )
         assert(res.status == StatusCode.Success)
       })
@@ -999,8 +1014,12 @@ class MessageHandlerSuite
         Random.nextBytes(data)
         val buf = new NettyManagedBuffer(Unpooled.copiedBuffer(data))
         val res = worker.pushDataSync[PushDataResponse](
-          new PushData(shuffleKey, loc.getUUID, PartitionLocation.Mode.Master.mode(),
-            buf, TransportClient.requestId())
+          new PushData(shuffleKey,
+            loc.getUUID,
+            PartitionLocation.Mode.Master.mode(),
+            buf,
+            TransportClient.requestId(),
+            atomic.getAndAdd(1).toString)
         )
         assert(res.status == StatusCode.Success)
       })
@@ -1052,8 +1071,12 @@ class MessageHandlerSuite
         Random.nextBytes(data)
         val buf = new NettyManagedBuffer(Unpooled.copiedBuffer(data))
         val res = worker.pushDataSync[PushDataResponse](
-          new PushData(shuffleKey2, loc.getUUID, PartitionLocation.Mode.Master.mode,
-            buf, TransportClient.requestId())
+          new PushData(shuffleKey2,
+            loc.getUUID,
+            PartitionLocation.Mode.Master.mode,
+            buf,
+            TransportClient.requestId(),
+            atomic.getAndAdd(1).toString)
         )
         assert(res.status == StatusCode.Success)
       })
@@ -1087,8 +1110,12 @@ class MessageHandlerSuite
         Random.nextBytes(data)
         val buf = new NettyManagedBuffer(Unpooled.copiedBuffer(data))
         val res = worker.pushDataSync[PushDataResponse](
-          new PushData(shuffleKey3, loc.getUUID, PartitionLocation.Mode.Master.mode,
-            buf, TransportClient.requestId())
+          new PushData(shuffleKey3,
+            loc.getUUID,
+            PartitionLocation.Mode.Master.mode,
+            buf,
+            TransportClient.requestId(),
+            atomic.getAndAdd(1).toString)
         )
         assert(res.status == StatusCode.Success)
       })
@@ -1170,8 +1197,12 @@ class MessageHandlerSuite
         Random.nextBytes(data)
         val buf = new NettyManagedBuffer(Unpooled.copiedBuffer(data))
         val res = worker.pushDataSync[PushDataResponse](
-          new PushData(shuffleKey1, loc.getUUID, PartitionLocation.Mode.Master.mode(),
-            buf, TransportClient.requestId())
+          new PushData(shuffleKey1,
+            loc.getUUID,
+            PartitionLocation.Mode.Master.mode(),
+            buf,
+            TransportClient.requestId(),
+            atomic.getAndAdd(1).toString)
         )
         assert(res.status == StatusCode.Success)
       })
@@ -1256,8 +1287,12 @@ class MessageHandlerSuite
         Random.nextBytes(data)
         val buf = new NettyManagedBuffer(Unpooled.copiedBuffer(data))
         val res = worker.pushDataSync[PushDataResponse](
-          new PushData(shuffleKey1, loc.getUUID, PartitionLocation.Mode.Master.mode,
-            buf, TransportClient.requestId())
+          new PushData(shuffleKey1,
+            loc.getUUID,
+            PartitionLocation.Mode.Master.mode,
+            buf,
+            TransportClient.requestId(),
+            atomic.getAndAdd(1).toString)
         )
         assert(res.status == StatusCode.Success)
       })
@@ -1279,7 +1314,7 @@ class MessageHandlerSuite
         val buf = new NettyManagedBuffer(Unpooled.copiedBuffer(data))
         val res = worker.pushDataSync[PushDataResponse](
           new PushData(shuffleKey2, loc.getUUID, PartitionLocation.Mode.Master.mode,
-            buf, TransportClient.requestId())
+            buf, TransportClient.requestId(), atomic.getAndAdd(1).toString)
         )
         assert(res.status == StatusCode.Success)
       })
@@ -1301,7 +1336,7 @@ class MessageHandlerSuite
         val buf = new NettyManagedBuffer(Unpooled.copiedBuffer(data))
         val res = worker.pushDataSync[PushDataResponse](
           new PushData(shuffleKey3, loc.getUUID, PartitionLocation.Mode.Master.mode(),
-            buf, TransportClient.requestId())
+            buf, TransportClient.requestId(), atomic.getAndAdd(1).toString)
         )
         assert(res.status == StatusCode.Success)
       })
@@ -1427,7 +1462,7 @@ class MessageHandlerSuite
         val buf = new NettyManagedBuffer(Unpooled.copiedBuffer(data))
         worker.pushDataSync[PushDataResponse](
           new PushData(shuffleKey, loc.getUUID, PartitionLocation.Mode.Master.mode,
-            buf, TransportClient.requestId())
+            buf, TransportClient.requestId(), atomic.getAndAdd(1).toString)
         )
       })
     })
@@ -1451,7 +1486,7 @@ class MessageHandlerSuite
     0 until 1 foreach (_ => {
       val resSend = worker.pushDataSync[PushDataResponse](
         new PushData(shuffleKey, newLoc.getUUID, PartitionLocation.Mode.Master.mode(),
-          buf, TransportClient.requestId())
+          buf, TransportClient.requestId(), atomic.getAndAdd(1).toString)
       )
       assert(resSend.status == StatusCode.Success)
     })
@@ -1497,7 +1532,7 @@ class MessageHandlerSuite
         val buf = new NettyManagedBuffer(Unpooled.copiedBuffer(data))
         val res = worker.pushDataSync[PushDataResponse](
           new PushData(shuffleKey, loc.getUUID, PartitionLocation.Mode.Master.mode(),
-            buf, TransportClient.requestId())
+            buf, TransportClient.requestId(), atomic.getAndAdd(1).toString)
         )
         assert(res.status == StatusCode.Success)
       })
@@ -1556,7 +1591,7 @@ class MessageHandlerSuite
         val buf = new NettyManagedBuffer(Unpooled.copiedBuffer(data))
         val res = worker.pushDataSync[PushDataResponse](
           new PushData(shuffleKey1, loc.getUUID, PartitionLocation.Mode.Master.mode(),
-            buf, TransportClient.requestId())
+            buf, TransportClient.requestId(), atomic.getAndAdd(1).toString)
         )
         assert(res.status == StatusCode.Success)
       })
@@ -1577,7 +1612,7 @@ class MessageHandlerSuite
         val buf = new NettyManagedBuffer(Unpooled.copiedBuffer(data))
         val res = worker.pushDataSync[PushDataResponse](
           new PushData(shuffleKey2, loc.getUUID, PartitionLocation.Mode.Master.mode(),
-            buf, TransportClient.requestId())
+            buf, TransportClient.requestId(), atomic.getAndAdd(1).toString)
         )
         assert(res.status == StatusCode.Success)
       })
@@ -1598,7 +1633,7 @@ class MessageHandlerSuite
         val buf = new NettyManagedBuffer(Unpooled.copiedBuffer(data))
         val res = worker.pushDataSync[PushDataResponse](
           new PushData(shuffleKey3, loc.getUUID, PartitionLocation.Mode.Master.mode(),
-            buf, TransportClient.requestId())
+            buf, TransportClient.requestId(), atomic.getAndAdd(1).toString)
         )
         assert(res.status == StatusCode.Success)
       })
@@ -1647,7 +1682,7 @@ class MessageHandlerSuite
       0 until 11 foreach (reduceId => {
         val data = new Array[Byte](63)
         val buf = Unpooled.copiedBuffer(data)
-        val res = client.pushData(appId, shuffleId1, 0, 0, reduceId, buf)
+        val res = client.pushData(appId, shuffleId1, 0, 0, reduceId, buf, atomic.getAndAdd(1))
         assert(res)
       })
     })
@@ -1702,7 +1737,7 @@ class MessageHandlerSuite
         val buf = new NettyManagedBuffer(Unpooled.copiedBuffer(data))
         val res = worker.pushDataSync[PushDataResponse](
           new PushData(shuffleKey, loc.getUUID, PartitionLocation.Mode.Master.mode(),
-            buf, TransportClient.requestId())
+            buf, TransportClient.requestId(), atomic.getAndAdd(1).toString)
         )
         assert(res.status == StatusCode.Success)
       })
@@ -1718,7 +1753,7 @@ class MessageHandlerSuite
     // mapper end
     0 until 9 foreach(mapId => {
       val res = master.askSync[MapperEndResponse](
-        MapperEnd(appId, shuffleId, mapId, 0, toJavaSet(resReg.partitionLocations))
+        MapperEnd(appId, shuffleId, mapId, 0, toJavaList(resReg.partitionLocations))
       )
       assert(res.status == StatusCode.Success)
     })
@@ -1748,13 +1783,13 @@ class MessageHandlerSuite
     val buf = new NettyManagedBuffer(Unpooled.copiedBuffer(data))
     val res = worker.pushDataSync[PushDataResponse](
       new PushData(shuffleKey, resRev.partitionLocation.getUUID, PartitionLocation.Mode.Master.mode(),
-        buf, TransportClient.requestId())
+        buf, TransportClient.requestId(), atomic.getAndAdd(1).toString)
     )
     assert(res.status == StatusCode.Success)
 
     // mapper end
     val res2 = master.askSync[MapperEndResponse](
-      MapperEnd(appId, shuffleId, 9, 0, toJavaSet(List(resRev.partitionLocation)))
+      MapperEnd(appId, shuffleId, 9, 0, toJavaList(List(resRev.partitionLocation)))
     )
     assert(res2.status == StatusCode.Success)
 

@@ -6,6 +6,7 @@ import com.aliyun.emr.jss.client.impl.ShuffleClientImpl;
 import com.aliyun.emr.jss.common.EssConf;
 import com.aliyun.emr.jss.common.util.EssPathUtil;
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.FSDataInputStream;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.log4j.Logger;
@@ -32,7 +33,7 @@ public class EssInputStream extends InputStream {
     private String[] filePaths;
     private int fileIndex = 0;
     private FileSystem fs = null;
-    private InputStream fileInputStream = null;
+    private FSDataInputStream fileInputStream = null;
     private EssLz4Decompressor decompressor;
 
     // mapId, attempId, batchId, size
@@ -51,7 +52,7 @@ public class EssInputStream extends InputStream {
             ind++;
         }
 
-        blockSize = conf.getInt("ess.decompressedBuffer.size", 256 * 1024 + EssLz4CompressorTrait.HEADER_LENGTH);
+        blockSize = conf.getInt("ess.decompressedBuffer.size", 256 * 1024) + EssLz4CompressorTrait.HEADER_LENGTH;
         compressedBuf = new byte[blockSize];
         decompressedBuf = new byte[blockSize];
 
@@ -83,20 +84,19 @@ public class EssInputStream extends InputStream {
             fileInputStream = fs.open(path);
         }
 
-        int bytesRead = fileInputStream.read(sizeBuf);
-        if (bytesRead == -1) {
+        try {
+            fileInputStream.readFully(sizeBuf);
+        } catch (Exception ex) {
+            // exception means file reach eof
+            fileInputStream.close();
+            fileInputStream = null;
+            fileIndex ++;
             if (fileIndex < filePaths.length) {
-                fileInputStream.close();
                 fileInputStream = fs.open(new Path(filePaths[fileIndex]));
-                bytesRead = fileInputStream.read(sizeBuf);
-                fileIndex++;
+                fileInputStream.readFully(sizeBuf);
             } else {
                 return -1;
             }
-        }
-
-        if (bytesRead != 16) {
-            throw new IOException("read error! " + filePaths[fileIndex]);
         }
 
         ByteBuffer byteBuffer = ByteBuffer.wrap(sizeBuf);
@@ -105,7 +105,7 @@ public class EssInputStream extends InputStream {
         int batchId = byteBuffer.getInt();
         int size = byteBuffer.getInt();
 
-        fileInputStream.read(compressedBuf, 0, size);
+        fileInputStream.readFully(compressedBuf, 0, size);
         // de-duplicate
         if (attempId == attempts[mapId]) {
             if (!batchesRead.containsKey(mapId)) {

@@ -32,14 +32,16 @@ public final class PushData extends AbstractMessage implements RequestMessage {
   // 0 for master, 1 for slave, see PartitionLocation.Mode
   public final byte mode;
   public final long requestId;
+  public final String batchId;
 
   public PushData(String shuffleKey, String partitionId, byte mode, ManagedBuffer buffer,
-                  long requestId) {
+                  long requestId, String batchId) {
     super(buffer, true);
     this.shuffleKey = shuffleKey;
     this.partitionId = partitionId;
     this.mode = mode;
     this.requestId = requestId;
+    this.batchId = batchId;
   }
 
   @Override
@@ -49,7 +51,7 @@ public final class PushData extends AbstractMessage implements RequestMessage {
   public int encodedLength() {
     return Encoders.Strings.encodedLength(shuffleKey)
         + Encoders.Strings.encodedLength(partitionId)
-        + 8 + 1;
+        + 8 + 1 + Encoders.Strings.encodedLength(batchId);
   }
 
   /** Encoding does NOT include 'buffer' itself. See {@link MessageEncoder}. */
@@ -59,6 +61,7 @@ public final class PushData extends AbstractMessage implements RequestMessage {
     Encoders.Strings.encode(buf, partitionId);
     buf.writeByte(mode);
     buf.writeLong(requestId);
+    Encoders.Strings.encode(buf, batchId);
   }
 
   /** Decoding uses the given ByteBuf as our data, and will retain() it. */
@@ -67,9 +70,10 @@ public final class PushData extends AbstractMessage implements RequestMessage {
     String partitionId = Encoders.Strings.decode(buf);
     byte mode = buf.readByte();
     long requestId = buf.readLong();
+    String batchId = Encoders.Strings.decode(buf);
     buf.retain();
     NettyManagedBuffer managedBuf = new NettyManagedBuffer(buf.duplicate());
-    return new PushData(shuffleKey, partitionId, mode, managedBuf, requestId);
+    return new PushData(shuffleKey, partitionId, mode, managedBuf, requestId, batchId);
   }
 
   @Override

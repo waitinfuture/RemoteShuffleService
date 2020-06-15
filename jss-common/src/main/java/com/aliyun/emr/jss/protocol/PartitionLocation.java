@@ -125,6 +125,7 @@ public class PartitionLocation implements Serializable
 
     @Override
     public String toString() {
-        return reduceId + " " + UUID + " " + host + ":" + port + " " + "Mode: " + mode;
+        return reduceId + " " + UUID + " " + host + ":" + port + " " + "Mode: " + mode + (peer ==
+            null);
     }
 }
