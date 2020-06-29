@@ -477,7 +477,7 @@ private[ess] object EssConf extends Logging {
   }
 
   def essPushDataBufferSize(conf: EssConf): Long = {
-    conf.getSizeAsBytes("ess.push.data.buffer.size", "1m")
+    conf.getSizeAsBytes("ess.push.data.buffer.size", "128k")
   }
 
   def essPushDataMaxInflight(conf: EssConf): Int = {

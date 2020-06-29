@@ -237,14 +237,17 @@ public class EssShuffleWriter<K, V, C> extends ShuffleWriter<K, V> {
     }
 
     private void limitMaxInFlight() {
-        while (futures.size() > MAX_INFLIGHT) {
+        if (futures.size() > MAX_INFLIGHT) {
             futures.removeIf(Future::isCompleted);
+        }
+        while (futures.size() > MAX_INFLIGHT) {
             try {
                 Thread.sleep(50);
                 logger.info("reach max inflight, wait...");
             } catch (Exception e) {
                 logger.error("sleep caught exception");
             }
+            futures.removeIf(Future::isCompleted);
         }
     }
 
