@@ -187,7 +187,6 @@ public class EssShuffleWriter<K, V, C> extends ShuffleWriter<K, V> {
 
             int offset = sendOffsets[partitionId];
             if ((SEND_BUFFER_SIZE - offset) < serializedRecordSize) {
-                limitMaxInFlight();
                 flushSendBuffer(partitionId, buffer, offset);
                 updateMapStatus();
                 offset = 0;
@@ -251,6 +250,7 @@ public class EssShuffleWriter<K, V, C> extends ShuffleWriter<K, V> {
 
     private void flushSendBuffer(int partitionId, byte[] buffer, int size) throws IOException {
         long flushStartTime = System.nanoTime();
+        limitMaxInFlight();
         Future<BoxedUnit> future = essShuffleClient.pushData(
             sparkConf.getAppId(),
             shuffleId,

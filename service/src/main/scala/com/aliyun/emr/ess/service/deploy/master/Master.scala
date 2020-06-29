@@ -830,6 +830,7 @@ private[deploy] class Master(
       logError("delete files failed!")
       context.reply(UnregisterShuffleResponse(StatusCode.DeleteFilesFailed))
     }
+    logInfo("unregister success")
     context.reply(UnregisterShuffleResponse(StatusCode.Success))
   }
 
