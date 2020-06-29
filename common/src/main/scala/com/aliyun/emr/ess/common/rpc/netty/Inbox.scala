@@ -22,7 +22,6 @@ import scala.util.control.NonFatal
 import com.aliyun.emr.ess.common.EssException
 import com.aliyun.emr.ess.common.internal.Logging
 import com.aliyun.emr.ess.common.rpc.{RpcAddress, RpcEndpoint, ThreadSafeRpcEndpoint}
-import com.aliyun.emr.network.protocol.ess.PushData
 import javax.annotation.concurrent.GuardedBy
 
 
@@ -38,11 +37,6 @@ private[ess] case class RpcMessage(
   content: Any,
   context: NettyRpcCallContext)
   extends InboxMessage
-
-private[ess] case class PushDataMessage(
-  pushData: PushData,
-  context: NettyRpcCallContext
-) extends InboxMessage
 
 private[ess] case object OnStart
   extends InboxMessage
@@ -121,17 +115,6 @@ private[ess] class Inbox(
                 context.sendFailure(e)
                 // Throw the exception -- this exception will be caught by the safelyCall function.
                 // The endpoint's onError function will be called.
-                throw e
-            }
-
-          case PushDataMessage(pushData, context) =>
-            try {
-              endpoint.receiveAndReply(context).applyOrElse[Any, Unit](pushData, { msg =>
-                throw new EssException(s"Unsupported message $message")
-              })
-            } catch {
-              case e: Throwable =>
-                context.sendFailure(e)
                 throw e
             }
 

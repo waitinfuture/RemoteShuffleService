@@ -1,7 +1,6 @@
 package org.apache.spark.shuffle.ess
 
 import com.aliyun.emr.ess.client.ShuffleClient
-import com.aliyun.emr.ess.client.impl.ShuffleClientImpl
 import com.aliyun.emr.ess.common.EssConf
 import com.aliyun.emr.ess.protocol.PartitionLocation
 import org.apache.spark._

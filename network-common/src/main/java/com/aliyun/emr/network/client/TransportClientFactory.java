@@ -99,6 +99,7 @@ public class TransportClientFactory implements Closeable {
 
     IOMode ioMode = IOMode.valueOf(conf.ioMode());
     this.socketChannelClass = NettyUtils.getClientChannelClass(ioMode);
+    logger.info("mode " + ioMode + " threads " + conf.clientThreads());
     this.workerGroup = NettyUtils.createEventLoop(
         ioMode,
         conf.clientThreads(),

@@ -17,7 +17,7 @@
 
 package com.aliyun.emr.ess.common.rpc.netty
 
-import java.util.concurrent.{ConcurrentHashMap, ConcurrentMap, LinkedBlockingQueue, ThreadPoolExecutor, TimeUnit}
+import java.util.concurrent._
 
 import com.aliyun.emr.ess.common.EssException
 import com.aliyun.emr.ess.common.internal.Logging
@@ -29,7 +29,6 @@ import scala.util.control.NonFatal
 import com.aliyun.emr.ess.common.rpc._
 import com.aliyun.emr.ess.common.util.ThreadUtils
 import com.aliyun.emr.network.client.RpcResponseCallback
-import com.aliyun.emr.network.protocol.ess.PushData
 
 /**
  * A message dispatcher, responsible for routing RPC messages to the appropriate endpoint(s).
@@ -136,16 +135,6 @@ private[ess] class Dispatcher(nettyEnv: NettyRpcEnv, numUsableCores: Int) extend
     postMessage(message.receiver.name, rpcMessage, (e) => p.tryFailure(e))
   }
 
-  /** Posts a message sent by a local endpoint. */
-  def postLocalMessage(message: PushData, receiver: NettyRpcEndpointRef, p: Promise[Any]): Unit = {
-    val rpcCallContext = new LocalNettyRpcCallContext(nettyEnv.address, p)
-    val pushDataMessage = PushDataMessage(
-      message,
-      rpcCallContext
-    )
-    postMessage(receiver.name, pushDataMessage, (e) => p.tryFailure(e))
-  }
-
   /** Posts a one-way message. */
   def postOneWayMessage(message: RequestMessage): Unit = {
     postMessage(message.receiver.name, OneWayMessage(message.senderAddress, message.content),
@@ -210,7 +199,7 @@ private[ess] class Dispatcher(nettyEnv: NettyRpcEnv, numUsableCores: Int) extend
       if (numUsableCores > 0) numUsableCores else Runtime.getRuntime.availableProcessors()
     val numThreads = nettyEnv.conf.getInt("spark.rpc.netty.dispatcher.numThreads", availableCores)
     val pool = ThreadUtils.newDaemonFixedThreadPool(numThreads, "dispatcher-event-loop")
-    logInfo(s"numThreads: ${numThreads}")
+    logInfo(s"dispatcher numThreads: ${numThreads}")
     for (i <- 0 until numThreads) {
       pool.execute(new MessageLoop)
     }

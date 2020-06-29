@@ -1,12 +1,17 @@
 package com.aliyun.emr.ess.service.deploy.master;
 
 import com.aliyun.emr.ess.protocol.PartitionLocation;
+import com.aliyun.emr.ess.service.deploy.worker.Chunk;
 import com.aliyun.emr.ess.service.deploy.worker.WorkerInfo;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import scala.Tuple2;
 
 import java.util.*;
 
 public class MasterUtil {
+    private static final Logger logger = LoggerFactory.getLogger(MasterUtil.class);
+
     public static void releaseSlots(String shuffleKey, Map<WorkerInfo,
         Tuple2<List<PartitionLocation>, List<PartitionLocation>>> slots) {
         Iterator<WorkerInfo> workers = slots.keySet().iterator();
@@ -25,6 +30,7 @@ public class MasterUtil {
             List<WorkerInfo> workers,
             List<Integer> reduceIds) {
         // master partition index
+        logger.info("inside offerSlots, reduceId num " + reduceIds.size());
         int masterInd = 0;
         Map<WorkerInfo, Tuple2<List<PartitionLocation>, List<PartitionLocation>>> slots =
                 new HashMap<>();
@@ -37,6 +43,7 @@ public class MasterUtil {
                 if (nextMasterInd == masterInd) {
                     // no available slot, release allocated resource
                     releaseSlots(shuffleKey, slots);
+                    logger.error("No available slot for master");
                     return null;
                 }
             }
@@ -47,12 +54,14 @@ public class MasterUtil {
                 if (nextSlaveInd == nextMasterInd) {
                     // no available slot, release allocated resource
                     releaseSlots(shuffleKey, slots);
+                    logger.error("No available slot for slave");
                     return null;
                 }
             }
             if (nextSlaveInd == nextMasterInd) {
                 // no available slot, release allocated resource
                 releaseSlots(shuffleKey, slots);
+                logger.error("No available slot for slave");
                 return null;
             }
             // now nextMasterInd/nextSlaveInd point to

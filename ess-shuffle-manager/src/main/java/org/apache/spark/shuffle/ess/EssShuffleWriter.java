@@ -1,6 +1,7 @@
 package org.apache.spark.shuffle.ess;
 
 import com.aliyun.emr.ess.client.ShuffleClient;
+import com.aliyun.emr.ess.common.EssConf;
 import org.apache.spark.Partitioner;
 import org.apache.spark.ShuffleDependency;
 import org.apache.spark.SparkConf;
@@ -24,6 +25,7 @@ import org.apache.spark.unsafe.Platform;
 import org.apache.spark.util.ThreadUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
 import scala.Option;
 import scala.Product2;
 import scala.concurrent.Future;
@@ -37,8 +39,10 @@ import scala.runtime.BoxedUnit;
 import javax.annotation.Nullable;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.util.Iterator;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.TimeUnit;
 
@@ -50,8 +54,9 @@ public class EssShuffleWriter<K, V, C> extends ShuffleWriter<K, V> {
     private static final ClassTag<Object> OBJECT_CLASS_TAG = ClassTag$.MODULE$.Object();
 
     private static final int DEFAULT_INITIAL_SER_BUFFER_SIZE = 1024 * 1024;
-    private static final int SEND_BUFFER_SIZE = 128 * 1024;
+    private final int MAX_INFLIGHT;
 
+    private final int SEND_BUFFER_SIZE;
     private final TaskMemoryManager memoryManager;
     private final ShuffleDependency<K, V, C> dep;
     private final SerializerInstance serializer;
@@ -62,19 +67,24 @@ public class EssShuffleWriter<K, V, C> extends ShuffleWriter<K, V> {
     private final TaskContext taskContext;
     private final SparkConf sparkConf;
     private final ShuffleClient essShuffleClient;
-    private final ExecutorService executorService =
-        ThreadUtils.newDaemonCachedThreadPool(
-            "EssShuffleWriter-Client", 8 ,60);
 
-    @Nullable private MapStatus mapStatus;
+    @Nullable
+    private MapStatus mapStatus;
     private long peakMemoryUsedBytes = 0;
 
-    private final List<Future<BoxedUnit>> futures = new LinkedList<>();
+    private final ConcurrentLinkedQueue<Future<BoxedUnit>> futures = new ConcurrentLinkedQueue<>();
 
-    /** Subclass of ByteArrayOutputStream that exposes `buf` directly. */
+    /**
+     * Subclass of ByteArrayOutputStream that exposes `buf` directly.
+     */
     private static final class MyByteArrayOutputStream extends ByteArrayOutputStream {
-        MyByteArrayOutputStream(int size) { super(size); }
-        public byte[] getBuf() { return buf; }
+        MyByteArrayOutputStream(int size) {
+            super(size);
+        }
+
+        public byte[] getBuf() {
+            return buf;
+        }
     }
 
     private final MyByteArrayOutputStream serBuffer;
@@ -110,7 +120,8 @@ public class EssShuffleWriter<K, V, C> extends ShuffleWriter<K, V> {
         this.writeMetrics = taskContext.taskMetrics().shuffleWriteMetrics();
         this.taskContext = taskContext;
         this.sparkConf = sparkConf;
-        this.essShuffleClient = ShuffleClient.get(EssShuffleManager.fromSparkConf(this.sparkConf));
+        EssConf conf = EssShuffleManager.fromSparkConf(this.sparkConf);
+        this.essShuffleClient = ShuffleClient.get(conf);
         this.essShuffleClient.applyShuffleInfo(
             sparkConf.getAppId(),
             shuffleId,
@@ -119,36 +130,33 @@ public class EssShuffleWriter<K, V, C> extends ShuffleWriter<K, V> {
         serBuffer = new MyByteArrayOutputStream(DEFAULT_INITIAL_SER_BUFFER_SIZE);
         serOutputStream = serializer.serializeStream(serBuffer);
 
-        sendBuffers = new byte[partitioner.numPartitions()][];
-        sendOffsets = new int[partitioner.numPartitions()];
 
         mapStatusLengths = new long[partitioner.numPartitions()];
         mapStatusRecords = new long[partitioner.numPartitions()];
         tmpLengthMap = new long[partitioner.numPartitions()];
         tmpRecordMap = new long[partitioner.numPartitions()];
-    }
 
-    private void updatePeakMemoryUsed() {
-    }
+        SEND_BUFFER_SIZE = (int) EssConf.essPushDataBufferSize(conf);
+        MAX_INFLIGHT = EssConf.essPushDataMaxInflight(conf);
 
-    /**
-     * Return the peak memory used so far, in bytes.
-     */
-    public long getPeakMemoryUsedBytes() {
-        updatePeakMemoryUsed();
-        return peakMemoryUsedBytes;
+        sendBuffers = new byte[partitioner.numPartitions()][];
+
+        sendOffsets = new int[partitioner.numPartitions()];
     }
 
     @Override
     public void write(scala.collection.Iterator<Product2<K, V>> records) throws IOException {
         if (canUseFastWrite()) {
+            logger.info("fast write");
             fastWrite0(records);
         } else if (dep.mapSideCombine()) {
+            logger.info("write combine");
             if (dep.aggregator().isEmpty()) {
                 throw new UnsupportedOperationException("map side combine");
             }
             write0(dep.aggregator().get().combineValuesByKey(records, taskContext));
         } else {
+            logger.info("write no combine");
             write0(records);
         }
         close();
@@ -174,13 +182,13 @@ public class EssShuffleWriter<K, V, C> extends ShuffleWriter<K, V> {
             if (buffer == null) {
                 buffer = new byte[SEND_BUFFER_SIZE];
                 sendBuffers[partitionId] = buffer;
+                peakMemoryUsedBytes += SEND_BUFFER_SIZE;
             }
 
             int offset = sendOffsets[partitionId];
             if ((SEND_BUFFER_SIZE - offset) < serializedRecordSize) {
-                byte[] tmpBuffer = new byte[SEND_BUFFER_SIZE];
-                System.arraycopy(buffer, 0, tmpBuffer, 0, SEND_BUFFER_SIZE);
-                flushSendBuffer(partitionId, tmpBuffer, offset);
+                limitMaxInFlight();
+                flushSendBuffer(partitionId, buffer, offset);
                 updateMapStatus();
                 offset = 0;
             }
@@ -213,13 +221,12 @@ public class EssShuffleWriter<K, V, C> extends ShuffleWriter<K, V> {
             if (buffer == null) {
                 buffer = new byte[SEND_BUFFER_SIZE];
                 sendBuffers[partitionId] = buffer;
+                peakMemoryUsedBytes += SEND_BUFFER_SIZE;
             }
 
             int offset = sendOffsets[partitionId];
             if ((SEND_BUFFER_SIZE - offset) < serializedRecordSize) {
-                byte[] tmpBuffer = new byte[SEND_BUFFER_SIZE];
-                System.arraycopy(buffer, 0, tmpBuffer, 0, SEND_BUFFER_SIZE);
-                flushSendBuffer(partitionId, tmpBuffer, offset);
+                flushSendBuffer(partitionId, buffer, offset);
                 updateMapStatus();
                 offset = 0;
             }
@@ -230,32 +237,32 @@ public class EssShuffleWriter<K, V, C> extends ShuffleWriter<K, V> {
         }
     }
 
-    private void flushSendBuffer(int partitionId, byte[] buffer, int size) throws IOException {
-        scala.concurrent.Promise<BoxedUnit> action = Promise$.MODULE$.apply();
-        executorService.submit(new Runnable()
-        {
-            @Override
-            public void run()
-            {
-                boolean result = essShuffleClient.pushData(
-                    sparkConf.getAppId(),
-                    shuffleId,
-                    mapId,
-                    taskContext.attemptNumber(),
-                    partitionId,
-                    buffer,
-                    0,
-                    size
-                );
-
-                if (result) {
-                    action.success(BoxedUnit.UNIT);
-                } else {
-                    action.failure(new Exception("Push Data Failed."));
-                }
+    private void limitMaxInFlight() {
+        while (futures.size() > MAX_INFLIGHT) {
+            futures.removeIf(Future::isCompleted);
+            try {
+                Thread.sleep(50);
+                logger.info("reach max inflight, wait...");
+            } catch (Exception e) {
+                logger.error("sleep caught exception");
             }
-        });
-        futures.add(action.future());
+        }
+    }
+
+    private void flushSendBuffer(int partitionId, byte[] buffer, int size) throws IOException {
+        long flushStartTime = System.nanoTime();
+        Future<BoxedUnit> future = essShuffleClient.pushData(
+            sparkConf.getAppId(),
+            shuffleId,
+            mapId,
+            taskContext.attemptNumber(),
+            partitionId,
+            buffer,
+            0,
+            size
+        );
+        futures.offer(future);
+        writeMetrics.incWriteTime(System.nanoTime() - flushStartTime);
     }
 
     private void close() throws IOException {
@@ -272,6 +279,7 @@ public class EssShuffleWriter<K, V, C> extends ShuffleWriter<K, V> {
         sendBuffers = null;
         sendOffsets = null;
 
+        long waitStartTime = System.nanoTime();
         for (Future<BoxedUnit> future : futures) {
             try {
                 ThreadUtils.awaitReady(future, new FiniteDuration(30, TimeUnit.SECONDS));
@@ -283,6 +291,7 @@ public class EssShuffleWriter<K, V, C> extends ShuffleWriter<K, V> {
 
         essShuffleClient.mapperEnd(sparkConf.getAppId(), shuffleId, mapId, taskContext
             .attemptNumber());
+        writeMetrics.incWriteTime(System.nanoTime() - waitStartTime);
 
         BlockManagerId dummyId = BlockManagerId$.MODULE$.apply(
             "amor", "127.0.0.1", 1111, Option.apply(null));
@@ -290,11 +299,10 @@ public class EssShuffleWriter<K, V, C> extends ShuffleWriter<K, V> {
             dummyId, mapStatusLengths, mapStatusRecords);
     }
 
-    private void updateMapStatus()
-    {
+    private void updateMapStatus() {
         long bytesWritten = 0;
         long recordsWritten = 0;
-        for (int i = 0; i < partitioner.numPartitions(); i ++) {
+        for (int i = 0; i < partitioner.numPartitions(); i++) {
             mapStatusLengths[i] += tmpLengthMap[i];
             bytesWritten += tmpLengthMap[i];
             tmpLengthMap[i] = 0;
@@ -309,7 +317,7 @@ public class EssShuffleWriter<K, V, C> extends ShuffleWriter<K, V> {
     @Override
     public Option<MapStatus> stop(boolean success) {
         try {
-            taskContext.taskMetrics().incPeakExecutionMemory(getPeakMemoryUsedBytes());
+            taskContext.taskMetrics().incPeakExecutionMemory(peakMemoryUsedBytes);
 
             if (stopping) {
                 return Option.apply(null);

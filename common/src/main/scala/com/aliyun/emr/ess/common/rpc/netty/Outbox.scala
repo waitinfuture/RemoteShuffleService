@@ -26,7 +26,6 @@ import com.aliyun.emr.ess.common.EssException
 import com.aliyun.emr.ess.common.internal.Logging
 import com.aliyun.emr.ess.common.rpc.{RpcAddress, RpcEnvStoppedException}
 import com.aliyun.emr.network.client.{RpcResponseCallback, TransportClient}
-import com.aliyun.emr.network.protocol.ess.PushData
 import javax.annotation.concurrent.GuardedBy
 
 private[ess] sealed trait OutboxMessage {
@@ -65,38 +64,6 @@ private[ess] case class RpcOutboxMessage(
   override def sendWith(client: TransportClient): Unit = {
     this.client = client
     this.requestId = client.sendRpc(content, this)
-  }
-
-  def onTimeout(): Unit = {
-    if (client != null) {
-      client.removeRpcRequest(requestId)
-    } else {
-      logError("Ask timeout before connecting successfully")
-    }
-  }
-
-  override def onFailure(e: Throwable): Unit = {
-    _onFailure(e)
-  }
-
-  override def onSuccess(response: ByteBuffer): Unit = {
-    _onSuccess(client, response)
-  }
-
-}
-
-private[ess] case class DataOutboxMessage(
-  pushData: PushData,
-  _onFailure: (Throwable) => Unit,
-  _onSuccess: (TransportClient, ByteBuffer) => Unit)
-  extends OutboxMessage with RpcResponseCallback with Logging {
-
-  private var client: TransportClient = _
-  private var requestId: Long = _
-
-  override def sendWith(client: TransportClient): Unit = {
-    this.client = client
-    this.requestId = client.pushData(pushData, this)
   }
 
   def onTimeout(): Unit = {

@@ -20,5 +20,6 @@ public enum StatusCode
     PartitionExists,
     ReviveFailed,
     PushDataFailed,
-    ReplicateDataFailed
+    ReplicateDataFailed,
+    NumMapperZero,
 }

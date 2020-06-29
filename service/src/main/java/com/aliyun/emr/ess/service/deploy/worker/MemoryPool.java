@@ -13,6 +13,7 @@ public class MemoryPool {
     private long[] startAddresses;
     private boolean[] empty;
     private int numSlots;
+    private Chunk[] chunks;
 
     public MemoryPool(long capacity, long chunkSize) {
         this.capacity = capacity;
@@ -23,10 +24,13 @@ public class MemoryPool {
         startAddresses = new long[numSlots];
         empty = new boolean[numSlots];
         long curAddress = memoryPoolAddress;
+        chunks = new Chunk[numSlots];
         for (int i = 0; i < numSlots; i++) {
             empty[i] = true;
             startAddresses[i] = curAddress;
             curAddress += chunkSize;
+
+            chunks[i] = new Chunk(i, startAddresses[i], curAddress);
         }
     }
 
@@ -44,8 +48,34 @@ public class MemoryPool {
     }
 
     public void returnChunk(Chunk chunk) {
-        synchronized (this) {
-            empty[chunk.getId()] = true;
+        empty[chunk.getId()] = true;
+        chunk.reset();
+    }
+
+    public Chunk[] allocateChunks(int size) {
+        Chunk[] ret = new Chunk[size];
+        int retIndx = 0;
+        for (int i = 0; i < numSlots; i++) {
+            if (retIndx == size) {
+                break;
+            }
+            if (empty[i]) {
+                empty[i] = false;
+                ret[retIndx] = chunks[i];
+                if (ret[retIndx] == null) {
+                    logger.error("Chunk is NULL!, i " + i + " numSlots " + numSlots);
+                }
+                retIndx++;
+            }
+        }
+
+        return ret;
+    }
+
+    public void returnChunks(Chunk[] chunks) {
+        for (int i = 0; i < chunks.length; i++) {
+            empty[chunks[i].getId()] = true;
+            chunks[i].reset();
         }
     }
 }

@@ -3,8 +3,9 @@ package com.aliyun.emr.ess.client;
 import com.aliyun.emr.ess.client.impl.ShuffleClientImpl;
 import com.aliyun.emr.ess.common.EssConf;
 import com.aliyun.emr.ess.protocol.PartitionLocation;
-import com.aliyun.emr.ess.protocol.message.StatusCode;
-import io.netty.buffer.ByteBuf;
+
+import scala.concurrent.Future;
+import scala.runtime.BoxedUnit;
 
 import java.io.InputStream;
 import java.util.List;
@@ -16,9 +17,8 @@ import java.util.List;
 public abstract class ShuffleClient implements Cloneable
 {
     private static volatile ShuffleClient _instance;
-    protected ShuffleClient() {
 
-    }
+    protected ShuffleClient() {}
 
     public static ShuffleClient get() {
         return ShuffleClient.get(new EssConf());
@@ -50,7 +50,7 @@ public abstract class ShuffleClient implements Cloneable
         int numPartitions
     );
 
-    public abstract boolean pushData(
+    public abstract Future<BoxedUnit> pushData(
         String applicationId,
         int shuffleId,
         int mapId,
@@ -69,7 +69,7 @@ public abstract class ShuffleClient implements Cloneable
      * @param offset
      * @param length
      */
-    public abstract boolean pushData(
+    public abstract Future<BoxedUnit> pushData(
         String applicationId,
         int shuffleId,
         int mapId,
@@ -78,15 +78,6 @@ public abstract class ShuffleClient implements Cloneable
         byte[] data,
         int offset,
         int length);
-
-    public abstract boolean pushData(
-        String applicationId,
-        int shuffleId,
-        int mapId,
-        int attemptId,
-        int reduceId,
-        ByteBuf data,
-        int batchId);
 
     /**
      * report partitionlocations written by the completed map task

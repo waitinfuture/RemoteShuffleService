@@ -17,12 +17,12 @@
 
 package com.aliyun.emr.ess.service.deploy.worker
 
+import java.io.IOException
+import java.nio.ByteBuffer
 import java.util
-import java.util.concurrent.TimeUnit
+import java.util.concurrent.{Future, TimeUnit}
 
 import scala.collection.JavaConversions._
-import scala.util.control.Breaks._
-import scala.util.{Failure, Success}
 
 import com.aliyun.emr.ess.common.EssConf
 import com.aliyun.emr.ess.common.internal.Logging
@@ -32,28 +32,42 @@ import com.aliyun.emr.ess.protocol.{PartitionLocation, RpcNameConstants}
 import com.aliyun.emr.ess.protocol.message.ControlMessages._
 import com.aliyun.emr.ess.protocol.message.DataMessages._
 import com.aliyun.emr.ess.protocol.message.StatusCode
-import com.aliyun.emr.network.buffer.{ManagedBuffer, NettyManagedBuffer}
-import com.aliyun.emr.network.client.TransportClient
-import com.aliyun.emr.network.protocol.ess.PushData
+import com.aliyun.emr.network.TransportContext
+import com.aliyun.emr.network.buffer.NettyManagedBuffer
+import com.aliyun.emr.network.client.{RpcResponseCallback, TransportClientBootstrap}
+import com.aliyun.emr.network.protocol.PushData
+import com.aliyun.emr.network.server.TransportServerBootstrap
+import io.netty.buffer.ByteBuf
 import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.fs.Path
 
 private[deploy] class Worker(
-  override val rpcEnv: RpcEnv,
-  masterRpcAddress: RpcAddress,
-  endpointName: String,
-  val conf: EssConf)
-  extends RpcEndpoint with Logging {
+    override val rpcEnv: RpcEnv,
+    masterRpcAddress: RpcAddress,
+    endpointName: String,
+    val conf: EssConf)
+  extends RpcEndpoint with PushDataHandler with Logging {
+
+  private val (dataServer, dataClientFactory) = {
+    val transportConf = Utils.fromEssConf(conf, "data", conf.getInt("ess.data.io.threads", 0))
+    val rpcHandler = new PushDataRpcHandler(transportConf, this)
+    val transportContext: TransportContext =
+    new TransportContext(transportConf, rpcHandler, true)
+    val serverBootstraps: Seq[TransportServerBootstrap] = Nil
+    val clientBootstraps: Seq[TransportClientBootstrap] = Nil
+    (transportContext.createServer(serverBootstraps),
+      transportContext.createClientFactory(clientBootstraps))
+  }
 
   private val host = rpcEnv.address.host
-  private val port = rpcEnv.address.port
+  private val port = dataServer.getPort
 
   // master endpoint
-  val masterEndpoint: RpcEndpointRef =
+  private val masterEndpoint: RpcEndpointRef =
     rpcEnv.setupEndpointRef(masterRpcAddress, RpcNameConstants.MASTER_EP)
 
   // slave endpoints
-  val slaveEndpoints: util.Map[RpcAddress, RpcEndpointRef] =
+  private val slaveEndpoints: util.Map[RpcAddress, RpcEndpointRef] =
     new util.HashMap[RpcAddress, RpcEndpointRef]()
 
   Utils.checkHost(host)
@@ -75,15 +89,22 @@ private[deploy] class Worker(
   private val HEARTBEAT_MILLIS = EssConf.essWorkerTimeoutMs(conf) / 4
 
   // Structs
-  var memoryUsed = 0
+  private var memoryUsed = 0
 
   // shared FileSystem
-  val hadoopConf = new Configuration
-  val path = new Path(EssConf.essWorkerBaseDir(conf))
-  logInfo(s"path ${path}")
-  val fs = path.getFileSystem(hadoopConf)
+  private val fs = {
+    val hadoopConf = new Configuration
+    hadoopConf.set("dfs.replication", "2")
+    val path = new Path(EssConf.essWorkerBaseDir(conf))
+    logInfo(s"path ${path}")
+    path.getFileSystem(hadoopConf)
+  }
 
-  def memoryFree: Long = MemoryPoolCapacity - memoryUsed
+  // shared ExecutoreService for flush
+  private val flushExecutorService = ThreadUtils.newDaemonCachedThreadPool(
+    "Worker-Flush", 32);
+
+  private def memoryFree: Long = MemoryPoolCapacity - memoryUsed
 
   override def onStart(): Unit = {
     logInfo("Starting Worker %s:%d with %s RAM".format(
@@ -100,6 +121,7 @@ private[deploy] class Worker(
 
   override def onStop(): Unit = {
     forwordMessageScheduler.shutdownNow()
+    dataServer.close()
   }
 
   override def onDisconnected(remoteAddress: RpcAddress): Unit = {
@@ -120,8 +142,7 @@ private[deploy] class Worker(
 
   override def receiveAndReply(context: RpcCallContext): PartialFunction[Any, Unit] = {
     case ReserveBuffers(shuffleKey, masterLocations, slaveLocations) =>
-      logInfo("received ReserveBuffers request," +
-        s"$shuffleKey, $masterLocations, $slaveLocations")
+      logInfo(s"received ReserveBuffers request, $shuffleKey")
       handleReserveBuffers(context, shuffleKey, masterLocations, slaveLocations)
 
     case CommitFiles(shuffleKey, commitLocations, mode) =>
@@ -133,7 +154,7 @@ private[deploy] class Worker(
         s"${commitFilesTimeMs}ms")
 
     case Destroy(shuffleKey, masterLocations, slaveLocations) =>
-      logInfo(s"received Destroy request, $shuffleKey $masterLocations $slaveLocations")
+      logInfo(s"received Destroy request, $shuffleKey")
       handleDestroy(context, shuffleKey, masterLocations, slaveLocations)
     case ReplicateData(shuffleKey, partitionLocation, working, masterData, slaveData) =>
       logInfo(s"received ReplicateData request, ${shuffleKey}, ${partitionLocation}")
@@ -154,48 +175,42 @@ private[deploy] class Worker(
     case GetShuffleStatus(shuffleKey) =>
       logInfo(s"received GetShuffleStatus request, $shuffleKey")
       handleGetShuffleStatus(context, shuffleKey)
-    case req if req.isInstanceOf[PushData] =>
-      val pushData = req.asInstanceOf[PushData]
-      logDebug(s"received PushData, ${pushData.shuffleKey} ${pushData.partitionId}, ${pushData.mode}," +
-        s"batchId: ${pushData.batchId}")
-      handlePushData(context, pushData.shuffleKey, pushData.partitionId,
-        PartitionLocation.getMode(pushData.mode), pushData.body(), pushData.batchId)
   }
 
   private def handleReserveBuffers(context: RpcCallContext, shuffleKey: String,
     masterLocations: util.List[PartitionLocation],
     slaveLocations: util.List[PartitionLocation]): Unit = {
     val masterDoubleChunks = new util.ArrayList[PartitionLocation]()
-    breakable({
+    // allocate chunks for master
+    val masterChunks = memoryPool.synchronized {
+      memoryPool.allocateChunks(masterLocations.size() * 2)
+    }
+    // construct double chunks
+    if (masterChunks.size != masterLocations.size() * 2) {
+      logError("Allocate chunks failed!")
       memoryPool.synchronized {
-        for (ind <- 0 until masterLocations.size()) {
-          val ch1 = memoryPool.allocateChunk()
-          if (ch1 == null) {
-            break()
-          } else {
-            val ch2 = memoryPool.allocateChunk()
-            if (ch2 == null) {
-              memoryPool.returnChunk(ch1)
-              break()
-            } else {
-              masterDoubleChunks.add(
-                new PartitionLocationWithDoubleChunks(
-                  masterLocations.get(ind),
-                  new DoubleChunk(ch1, ch2, memoryPool,
-                    EssPathUtil.GetPartitionPath(conf,
-                      shuffleKey.split("-").dropRight(1).mkString("-"),
-                      shuffleKey.split("-").last.toInt,
-                      masterLocations.get(ind).getReduceId,
-                      masterLocations.get(ind).getUUID),
-                    fs
-                  )
-                )
-              )
-            }
-          }
-        }
+        memoryPool.returnChunks(masterChunks)
       }
-    })
+    } else {
+      for (ind <- 0 until masterLocations.size()) {
+        val ch1 = masterChunks(ind * 2)
+        val ch2 = masterChunks(ind * 2 + 1)
+        masterDoubleChunks.add(
+          new PartitionLocationWithDoubleChunks(
+            masterLocations.get(ind),
+            new DoubleChunk(ch1, ch2, memoryPool,
+              EssPathUtil.GetPartitionPath(conf,
+                shuffleKey.split("-").dropRight(1).mkString("-"),
+                shuffleKey.split("-").last.toInt,
+                masterLocations.get(ind).getReduceId,
+                masterLocations.get(ind).getUUID),
+              fs,
+              flushExecutorService
+            )
+          )
+        )
+      }
+    }
     if (masterDoubleChunks.size() < masterLocations.size()) {
       logInfo("not all master partition satisfied, return chunks")
       masterDoubleChunks.foreach(entry =>
@@ -204,35 +219,36 @@ private[deploy] class Worker(
       return
     }
     val slaveDoubleChunks = new util.ArrayList[PartitionLocation]()
-    breakable({
+    // allocate chunks for slave
+    val slaveChunks = memoryPool.synchronized {
+      memoryPool.allocateChunks(slaveLocations.size() * 2)
+    }
+    // construct double chunks
+    if (slaveChunks.size != slaveLocations.size() * 2) {
+      logError("Allocate chunks failed!")
       memoryPool.synchronized {
-        for (ind <- 0 until slaveLocations.size()) {
-          val ch1 = memoryPool.allocateChunk()
-          if (ch1 == null) {
-            break()
-          } else {
-            val ch2 = memoryPool.allocateChunk()
-            if (ch2 == null) {
-              break()
-            } else {
-              slaveDoubleChunks.add(
-                new PartitionLocationWithDoubleChunks(
-                  slaveLocations.get(ind),
-                  new DoubleChunk(ch1, ch2, memoryPool,
-                    EssPathUtil.GetPartitionPath(conf,
-                      shuffleKey.split("-").dropRight(1).mkString("-"),
-                      shuffleKey.split("-").last.toInt,
-                      slaveLocations.get(ind).getReduceId,
-                      slaveLocations.get(ind).getUUID),
-                    fs
-                  )
-                )
-              )
-            }
-          }
-        }
+        memoryPool.returnChunks(slaveChunks)
       }
-    })
+    } else {
+      for (ind <- 0 until slaveLocations.size()) {
+        val ch1 = slaveChunks(ind * 2)
+        val ch2 = slaveChunks(ind * 2 + 1)
+        slaveDoubleChunks.add(
+          new PartitionLocationWithDoubleChunks(
+            slaveLocations.get(ind),
+            new DoubleChunk(ch1, ch2, memoryPool,
+              EssPathUtil.GetPartitionPath(conf,
+                shuffleKey.split("-").dropRight(1).mkString("-"),
+                shuffleKey.split("-").last.toInt,
+                slaveLocations.get(ind).getReduceId,
+                slaveLocations.get(ind).getUUID),
+              fs,
+              flushExecutorService
+            )
+          )
+        )
+      }
+    }
     if (slaveDoubleChunks.size() < slaveLocations.size()) {
       logInfo("not all slave partition satisfied, return chunks")
       masterDoubleChunks.foreach(entry =>
@@ -247,7 +263,7 @@ private[deploy] class Worker(
       workerInfo.addMasterPartition(shuffleKey, masterDoubleChunks)
       workerInfo.addSlavePartition(shuffleKey, slaveDoubleChunks)
     }
-    logInfo("reserve buffer succeed!")
+    logInfo(s"reserve buffer succeed!, ${shuffleKey}")
     context.reply(ReserveBuffersResponse(StatusCode.Success))
   }
 
@@ -278,17 +294,25 @@ private[deploy] class Worker(
         workerInfo.slavePartitionLocations.get(shuffleKey)
     }
 
+    val futures = new util.ArrayList[Future[_]]()
     if (commitLocations != null) {
-      locations.synchronized {
-        commitLocations.foreach(loc => {
-          val target = locations.get(loc)
-          if (target != null) {
-            if (!target.asInstanceOf[PartitionLocationWithDoubleChunks].getDoubleChunk.flush()) {
-              failedLocations.add(target)
+      commitLocations.foreach(loc => {
+        val target = locations.get(loc)
+        if (target != null) {
+          val future = flushExecutorService.submit(new Runnable {
+            override def run(): Unit = {
+              val res = target.asInstanceOf[PartitionLocationWithDoubleChunks].getDoubleChunk.flush()
+              if (!res) {
+                failedLocations.synchronized {
+                  failedLocations.add(target)
+                }
+              }
             }
-          }
-        })
-      }
+          })
+          futures.add(future)
+        }
+      })
+      futures.foreach(f => f.get(30, TimeUnit.SECONDS))
     }
 
     // reply
@@ -308,7 +332,7 @@ private[deploy] class Worker(
     // check whether shuffleKey has registered
     if (!workerInfo.masterPartitionLocations.containsKey(shuffleKey) &&
       !workerInfo.slavePartitionLocations.containsKey(shuffleKey)) {
-      logError(s"shuffle $shuffleKey not registered!")
+      logError(s"[handleDestroy] shuffle $shuffleKey not registered!")
       context.reply(DestroyResponse(
         StatusCode.ShuffleNotRegistered, masterLocations, slaveLocations))
       return
@@ -507,8 +531,12 @@ private[deploy] class Worker(
     context.reply(GetShuffleStatusResponse(!masterIdle || !slaveIdle))
   }
 
-  private def handlePushData(context: RpcCallContext, shuffleKey: String, partitionId: String,
-    mode: PartitionLocation.Mode, data: ManagedBuffer, batchId: String): Unit = {
+  override def handlePushData(pushData: PushData, callback: RpcResponseCallback): Unit = {
+    val shuffleKey = pushData.shuffleKey
+    val mode = PartitionLocation.getMode(pushData.mode)
+    val partitionId = pushData.partitionId
+    val body = pushData.body.asInstanceOf[NettyManagedBuffer].getBuf
+
     // find DoubleChunk responsible for the data
     val shufflelocations = if (mode == PartitionLocation.Mode.Master) {
       workerInfo.masterPartitionLocations.get(shuffleKey)
@@ -518,70 +546,38 @@ private[deploy] class Worker(
     if (shufflelocations == null) {
       val msg = "shuffle shufflelocations not found!"
       logError(msg)
-      // release data
-      data.release()
-      context.reply(PushDataResponse(StatusCode.ShuffleNotRegistered))
+      callback.onFailure(new IOException(msg))
       return
     }
     val location = shufflelocations.keySet().find(loc => loc.getUUID == partitionId).orNull
     if (location == null) {
       val msg = "Partition Location not found!"
       logError(msg)
-      // release data
-      data.release()
-      context.reply(PushDataResponse(StatusCode.PartitionNotFound))
+      callback.onFailure(new IOException(msg))
       return
     }
     val doubleChunk = location.asInstanceOf[PartitionLocationWithDoubleChunks].getDoubleChunk
 
     // append data
-    val appended = doubleChunk.append(data.asInstanceOf[NettyManagedBuffer].getBuf(),
-      mode == PartitionLocation.Mode.Master)
+    val appended = doubleChunk.append(body, mode == PartitionLocation.Mode.Master)
     if (!appended) {
       val msg = "append data failed!"
       logError(msg)
-      // release data
-      data.release()
-      context.reply(PushDataResponse(StatusCode.PushDataFailed))
+      callback.onFailure(new IOException(msg))
       return
     }
 
     // for master, send data to slave
     if (mode == PartitionLocation.Mode.Master) {
       val peer = location.getPeer
-      logDebug(s"replicating data to slave, ${peer.getHost}:${peer.getPort}," +
-        s"${shuffleKey}, ${partitionId}, batchId: ${batchId}")
-      val slaveEndpoint = getOrCreateEndpoint(peer.getHost, peer.getPort)
-      val pushData = new PushData(
-        shuffleKey,
-        partitionId,
-        PartitionLocation.Mode.Slave.mode(),
-        data,
-        TransportClient.requestId(),
-        batchId)
-
-
-      val future = slaveEndpoint.pushData[PushDataResponse](pushData)
-      future.onComplete {
-        case Success(res) => {
-            if (res.status != StatusCode.Success) {
-              logError(s"send data to slave failed! ${res.status}")
-              self.send(SlaveLost(shuffleKey, location, peer))
-              context.reply(PushDataResponse(StatusCode.ReplicateDataFailed))
-            } else {
-              logDebug(s"Finished processing PushData, mode ${mode}, partitionId ${partitionId}," +
-                s"batchId: ${batchId}")
-              context.reply(PushDataResponse(StatusCode.Success))
-            }
-        }
-        case Failure(e) =>
-      }(ThreadUtils.sameThread)
+      val client = dataClientFactory.createClient(peer.getHost, peer.getPort)
+      val newPushData = new PushData(
+        PartitionLocation.Mode.Slave.mode(), shuffleKey, partitionId, pushData.body)
+      pushData.body().retain()
+      client.pushData(newPushData, callback)
     } else {
-      // for slave, release data
-      data.release()
-      logDebug(s"Finished processing PushData, mode ${mode}, partitionId ${partitionId}," +
-        s"batchId: ${batchId}")
-      context.reply(PushDataResponse(StatusCode.Success))
+      // for slave
+      callback.onSuccess(ByteBuffer.wrap(new Array[Byte](0)))
     }
   }
 

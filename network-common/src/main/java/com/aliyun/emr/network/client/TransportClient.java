@@ -29,7 +29,6 @@ import javax.annotation.Nullable;
 import com.aliyun.emr.network.buffer.NettyManagedBuffer;
 import com.aliyun.emr.network.buffer.NioManagedBuffer;
 import com.aliyun.emr.network.protocol.*;
-import com.aliyun.emr.network.protocol.ess.PushData;
 import com.aliyun.emr.network.util.NettyUtils;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Objects;
@@ -205,9 +204,12 @@ public class TransportClient implements Closeable {
       logger.trace("Pushing data to {}", NettyUtils.getRemoteAddress(channel));
     }
 
-    handler.addRpcRequest(pushData.requestId, callback);
+    long requestId = requestId();
+    handler.addRpcRequest(requestId, callback);
 
-    RpcChannelListener listener = new RpcChannelListener(pushData.requestId, callback);
+    pushData.requestId = requestId;
+
+    RpcChannelListener listener = new RpcChannelListener(requestId, callback);
     channel.writeAndFlush(pushData).addListener(listener);
 
     return pushData.requestId;

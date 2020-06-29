@@ -91,16 +91,4 @@ private[ess] abstract class RpcEndpointRef(conf: EssConf)
     val future = ask[T](message, timeout)
     timeout.awaitResult(future)
   }
-
-  def pushData[T: ClassTag](message: Any, timeout: RpcTimeout): Future[T]
-
-  def pushData[T: ClassTag](message: Any): Future[T] = pushData(message, defaultAskTimeout)
-
-  def pushDataSync[T: ClassTag](message: Any): T = pushDataSync(message, defaultAskTimeout)
-
-  def pushDataSync[T: ClassTag](message: Any, timeout: RpcTimeout): T = {
-    val future = pushData[T](message, timeout)
-    timeout.awaitResult(future)
-  }
-
 }

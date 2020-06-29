@@ -6,6 +6,7 @@ import com.aliyun.emr.ess.client.compress.EssLz4Decompressor;
 import com.aliyun.emr.ess.client.impl.ShuffleClientImpl;
 import com.aliyun.emr.ess.common.EssConf;
 import com.aliyun.emr.ess.common.util.EssPathUtil;
+import com.aliyun.emr.ess.unsafe.Platform;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FSDataInputStream;
 import org.apache.hadoop.fs.FileSystem;
@@ -14,32 +15,32 @@ import org.apache.log4j.Logger;
 
 import java.io.IOException;
 import java.io.InputStream;
-import java.nio.ByteBuffer;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
 
 public class EssInputStream extends InputStream {
-    private static Logger logger = Logger.getLogger(ShuffleClientImpl.class);
+    private static final Logger logger = Logger.getLogger(ShuffleClientImpl.class);
 
-    private EssConf conf;
-    private int[] attempts;
-    private Map<Integer, Set<Integer>> batchesRead = new HashMap<>();
-    private int blockSize;
-    private byte[] compressedBuf;
-    private byte[] decompressedBuf;
-    private int position = 0;
-    private int limit = 0;
-    private String[] filePaths;
-    private int fileIndex = 0;
-    private FileSystem fs = null;
-    private FSDataInputStream fileInputStream = null;
-    private EssLz4Decompressor decompressor;
-    private MetricsCallback callback = null;
+    private final EssConf conf;
+    private final int[] attempts;
+    private final Map<Integer, Set<Integer>> batchesRead = new HashMap<>();
+    private final byte[] compressedBuf;
+    private final byte[] decompressedBuf;
+    private final String[] filePaths;
+    private FileSystem fs;
+    private final EssLz4Decompressor decompressor;
+
+    private FSDataInputStream fileInputStream;
+    private int fileIndex;
+    private int position;
+    private int limit;
+
+    private MetricsCallback callback;
 
     // mapId, attempId, batchId, size
-    private byte[] sizeBuf = new byte[16];
+    private final byte[] sizeBuf = new byte[16];
 
     public EssInputStream(
         EssConf conf,
@@ -54,8 +55,8 @@ public class EssInputStream extends InputStream {
             ind++;
         }
 
-        blockSize = ((int) EssConf.essPushDataBufferSize(conf)) + EssLz4CompressorTrait
-            .HEADER_LENGTH;
+        int blockSize = ((int) EssConf.essPushDataBufferSize(conf)) + EssLz4CompressorTrait
+                .HEADER_LENGTH;
         compressedBuf = new byte[blockSize];
         decompressedBuf = new byte[blockSize];
 
@@ -68,11 +69,9 @@ public class EssInputStream extends InputStream {
         }
 
         decompressor = new EssLz4Decompressor();
-        this.callback = callback;
     }
 
-    public void setCallback(MetricsCallback callback)
-    {
+    public void setCallback(MetricsCallback callback) {
         // callback must set before read()
         this.callback = callback;
         logger.info("MetricsCallback set!");
@@ -86,9 +85,60 @@ public class EssInputStream extends InputStream {
             return b & 0xFF;
         }
 
-        if (fileInputStream == null && fileIndex >= filePaths.length) {
+        if (!fillBuffer()) {
             return -1;
         }
+
+        if (position >= limit) {
+            return read();
+        } else {
+            int b = decompressedBuf[position];
+            position++;
+            return b & 0xFF;
+        }
+    }
+
+    @Override
+    public int read(byte b[], int off, int len) throws IOException {
+        if (b == null) {
+            throw new NullPointerException();
+        } else if (off < 0 || len < 0 || len > b.length - off) {
+            throw new IndexOutOfBoundsException();
+        } else if (len == 0) {
+            return 0;
+        }
+
+        int readBytes = 0;
+        while (readBytes < len) {
+            while (position >= limit) {
+                if (!fillBuffer()) {
+                    return readBytes > 0 ? readBytes : -1;
+                }
+            }
+
+            int bytesToRead = Math.min(limit - position, len - readBytes);
+            System.arraycopy(decompressedBuf, position, b, off + readBytes, bytesToRead);
+            position += bytesToRead;
+            readBytes += bytesToRead;
+        }
+
+        return readBytes;
+    }
+
+    @Override
+    public void close() throws IOException {
+        if (fileInputStream != null) {
+            fileInputStream.close();
+            fileInputStream = null;
+        }
+    }
+
+    private boolean fillBuffer() throws IOException {
+        if (fileInputStream == null && fileIndex >= filePaths.length) {
+            return false;
+        }
+
+        long startTime = System.currentTimeMillis();
 
         if (fileInputStream == null) {
             Path path = new Path(filePaths[fileIndex]);
@@ -101,24 +151,23 @@ public class EssInputStream extends InputStream {
             // exception means file reach eof
             fileInputStream.close();
             fileInputStream = null;
-            fileIndex ++;
+            fileIndex++;
             if (fileIndex < filePaths.length) {
                 fileInputStream = fs.open(new Path(filePaths[fileIndex]));
                 fileInputStream.readFully(sizeBuf);
             } else {
-                return -1;
+                return false;
             }
         }
 
-        ByteBuffer byteBuffer = ByteBuffer.wrap(sizeBuf);
-        int mapId = byteBuffer.getInt();
-        int attempId = byteBuffer.getInt();
-        int batchId = byteBuffer.getInt();
-        int size = byteBuffer.getInt();
+        int mapId = Platform.getInt(sizeBuf, Platform.BYTE_ARRAY_OFFSET);
+        int attemptId = Platform.getInt(sizeBuf, Platform.BYTE_ARRAY_OFFSET + 4);
+        int batchId = Platform.getInt(sizeBuf, Platform.BYTE_ARRAY_OFFSET + 8);
+        int size = Platform.getInt(sizeBuf, Platform.BYTE_ARRAY_OFFSET + 12);
 
         fileInputStream.readFully(compressedBuf, 0, size);
         // de-duplicate
-        if (attempId == attempts[mapId]) {
+        if (attemptId == attempts[mapId]) {
             if (!batchesRead.containsKey(mapId)) {
                 Set<Integer> batchSet = new HashSet<>();
                 batchesRead.put(mapId, batchSet);
@@ -127,20 +176,20 @@ public class EssInputStream extends InputStream {
             if (!batchSet.contains(batchId)) {
                 batchSet.add(batchId);
                 if (callback != null) {
-                    callback.bytesWritten((long) size);
+                    callback.incBytesWritten(size);
                 }
                 // decompress data
                 limit = decompressor.decompress(compressedBuf, decompressedBuf, 0);
                 position = 0;
+            } else {
+                logger.warn("duplicate batchId! " + batchId);
             }
         }
 
-        if (position >= limit) {
-            return read();
-        } else {
-            int b = decompressedBuf[position];
-            position++;
-            return b & 0xFF;
+        if (callback != null) {
+            callback.incReadTime(System.currentTimeMillis() - startTime);
         }
+
+        return true;
     }
 }

@@ -27,7 +27,6 @@ import com.aliyun.emr.network.client.StreamCallbackWithID;
 import com.aliyun.emr.network.client.StreamInterceptor;
 import com.aliyun.emr.network.client.TransportClient;
 import com.aliyun.emr.network.protocol.*;
-import com.aliyun.emr.network.protocol.ess.PushData;
 import com.aliyun.emr.network.util.NettyUtils;
 import com.aliyun.emr.network.util.TransportFrameDecoder;
 import com.google.common.base.Throwables;

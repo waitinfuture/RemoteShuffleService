@@ -19,10 +19,8 @@ package com.aliyun.emr.network.server;
 
 import java.nio.ByteBuffer;
 
-import com.aliyun.emr.network.buffer.ManagedBuffer;
 import com.aliyun.emr.network.client.StreamCallback;
-import com.aliyun.emr.network.protocol.ess.PushData;
-import io.netty.buffer.ByteBuf;
+import com.aliyun.emr.network.protocol.PushData;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -87,7 +85,7 @@ public abstract class RpcHandler {
 
   public void receivePushData(
       TransportClient client,
-      PushData data,
+      PushData pushData,
       RpcResponseCallback callback) {
     throw new UnsupportedOperationException();
   }

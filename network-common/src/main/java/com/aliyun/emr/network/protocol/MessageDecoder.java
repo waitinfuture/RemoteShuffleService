@@ -19,7 +19,6 @@ package com.aliyun.emr.network.protocol;
 
 import java.util.List;
 
-import com.aliyun.emr.network.protocol.ess.PushData;
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.ChannelHandler;
 import io.netty.channel.ChannelHandlerContext;

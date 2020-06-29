@@ -480,6 +480,10 @@ private[ess] object EssConf extends Logging {
     conf.getSizeAsBytes("ess.push.data.buffer.size", "1m")
   }
 
+  def essPushDataMaxInflight(conf: EssConf): Int = {
+    conf.getInt("ess.push.data.max.inflight", 1024)
+  }
+
   def essWorkerTimeoutS(conf: EssConf): Long = {
     conf.getTimeAsSeconds("ess.worker.timeout", "60s")
   }
@@ -502,6 +506,14 @@ private[ess] object EssConf extends Logging {
 
   def essMasterPort(conf: EssConf): Int = {
     conf.getInt("ess.master.port", 9099)
+  }
+
+  def essWorkerFlushThread(conf: EssConf): Int = {
+    conf.getInt("ess.worker.flush.thread", 8)
+  }
+
+  def essRpcParallelism(conf: EssConf): Int = {
+    conf.getInt("ess.rpc.parallelism", 8)
   }
 }
 
