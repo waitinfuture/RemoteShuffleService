@@ -568,7 +568,7 @@ private[deploy] class Worker(
     }
 
     // for master, send data to slave
-    if (mode == PartitionLocation.Mode.Master) {
+    if (EssConf.essReplicate(conf) && mode == PartitionLocation.Mode.Master) {
       val peer = location.getPeer
       val client = dataClientFactory.createClient(peer.getHost, peer.getPort)
       val newPushData = new PushData(

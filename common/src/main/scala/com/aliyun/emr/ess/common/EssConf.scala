@@ -484,6 +484,10 @@ private[ess] object EssConf extends Logging {
     conf.getInt("ess.push.data.max.inflight", 1024)
   }
 
+  def essReplicate(conf: EssConf): Boolean = {
+    conf.getBoolean("ess.push.data.replicate", false)
+  }
+
   def essWorkerTimeoutS(conf: EssConf): Long = {
     conf.getTimeAsSeconds("ess.worker.timeout", "60s")
   }
