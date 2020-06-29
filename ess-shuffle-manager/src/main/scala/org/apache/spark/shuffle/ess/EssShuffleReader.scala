@@ -9,11 +9,12 @@ import org.apache.spark.util.CompletionIterator
 import org.apache.spark.util.collection.ExternalSorter
 
 class EssShuffleReader[K, C](
-  handle: BaseShuffleHandle[K, _, C],
-  startPartition: Int,
-  endPartition: Int,
-  context: TaskContext,
-  sparkConf: SparkConf) extends ShuffleReader[K, C] with Logging {
+    handle: BaseShuffleHandle[K, _, C],
+    startPartition: Int,
+    endPartition: Int,
+    context: TaskContext,
+    sparkConf: SparkConf)
+  extends ShuffleReader[K, C] with Logging {
 
   private val dep = handle.dependency
   private val essShuffleClient = ShuffleClient.get(EssShuffleManager.fromSparkConf(sparkConf))

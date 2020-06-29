@@ -14,9 +14,9 @@ class EssShuffleManager(conf: SparkConf) extends ShuffleManager with Logging {
   private lazy val essShuffleClient = ShuffleClient.get(essConf)
 
   override def registerShuffle[K, V, C](
-    shuffleId: Int,
-    numMaps: Int,
-    dependency: ShuffleDependency[K, V, C]): ShuffleHandle = {
+      shuffleId: Int,
+      numMaps: Int,
+      dependency: ShuffleDependency[K, V, C]): ShuffleHandle = {
     val registered = essShuffleClient.registerShuffle(conf.getAppId,
       shuffleId,
       numMaps,
@@ -34,9 +34,9 @@ class EssShuffleManager(conf: SparkConf) extends ShuffleManager with Logging {
   }
 
   override def getWriter[K, V](
-    handle: ShuffleHandle,
-    mapId: Int,
-    context: TaskContext): ShuffleWriter[K, V] = {
+      handle: ShuffleHandle,
+      mapId: Int,
+      context: TaskContext): ShuffleWriter[K, V] = {
     handle match {
       case h: BaseShuffleHandle[K@unchecked, V@unchecked, _] =>
         new EssShuffleWriter(
@@ -45,21 +45,22 @@ class EssShuffleManager(conf: SparkConf) extends ShuffleManager with Logging {
   }
 
   override def getReader[K, C](
-    handle: ShuffleHandle,
-    startPartition: Int,
-    endPartition: Int,
-    context: TaskContext): ShuffleReader[K, C] = {
+      handle: ShuffleHandle,
+      startPartition: Int,
+      endPartition: Int,
+      context: TaskContext): ShuffleReader[K, C] = {
     new EssShuffleReader(handle.asInstanceOf[BaseShuffleHandle[K, _, C]],
       startPartition, endPartition, context, conf)
   }
 
-  override def getReader[K, C](
-    handle: ShuffleHandle,
-    startPartition: Int,
-    endPartition: Int,
-    context: TaskContext,
-    startMapId: Int,
-    endMapId: Int): ShuffleReader[K, C] = {
+  // remove override for compatibility
+  def getReader[K, C](
+      handle: ShuffleHandle,
+      startPartition: Int,
+      endPartition: Int,
+      context: TaskContext,
+      startMapId: Int,
+      endMapId: Int): ShuffleReader[K, C] = {
     throw new UnsupportedOperationException("Do not support Ess Shuffle and AE at the same time.")
   }
 
@@ -95,8 +96,8 @@ object EssShuffleManager {
 }
 
 class EssShuffleHandle[K, V](val initPartitionLocations: java.util.List[PartitionLocation],
-  shuffleId: Int,
-  numMaps: Int,
-  dependency: ShuffleDependency[K, V, V])
+    shuffleId: Int,
+    numMaps: Int,
+    dependency: ShuffleDependency[K, V, V])
   extends BaseShuffleHandle(shuffleId, numMaps, dependency) {
 }
