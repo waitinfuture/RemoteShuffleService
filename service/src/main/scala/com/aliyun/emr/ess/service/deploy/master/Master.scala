@@ -48,7 +48,7 @@ private[deploy] class Master(
   // key: "appId_shuffleId"
   private val registeredShuffle = new util.HashSet[String]()
   private val shuffleMapperAttempts = new util.HashMap[String, Array[Int]]()
-  private val shuffleCommittedPartitions = new util.HashMap[String, util.Set[String]]()
+  private val shuffleCommittedPartitions = new util.HashMap[String, util.Set[PartitionLocation]]()
   private val reducerFileGroup = new util.HashMap[String, util.HashSet[Path]]()
   private val appHeartbeatTime = new util.HashMap[String, Long]()
   private val stageEndShuffleSet = new util.HashSet[String]()
@@ -175,9 +175,9 @@ private[deploy] class Master(
       logInfo(s"received Revive request, $applicationId, $shuffleId, $reduceId")
       handleRevive(context, applicationId, shuffleId, reduceId)
 
-    case MapperEnd(applicationId, shuffleId, mapId, attemptId, partitionLocations) =>
+    case MapperEnd(applicationId, shuffleId, mapId, attemptId) =>
       logDebug(s"received MapperEnd request, $applicationId, $shuffleId, $mapId, $attemptId")
-      handleMapperEnd(context, applicationId, shuffleId, mapId, attemptId, partitionLocations)
+      handleMapperEnd(context, applicationId, shuffleId, mapId, attemptId)
 
     case GetReducerFileGroup(applicationId: String, shuffleId: Int) =>
       logDebug(s"received GetShuffleFileGroup request, $applicationId, $shuffleId")
@@ -281,12 +281,12 @@ private[deploy] class Master(
         val committedPartitions = shuffleCommittedPartitions.get(shuffleKey)
         if (res.failedLocations == null || res.failedLocations.isEmpty) {
           committedPartitions.synchronized {
-            committedPartitions.addAll(elem._2.map(_.getUUID))
+            committedPartitions.addAll(elem._2)
           }
         } else {
           committedPartitions.synchronized {
             committedPartitions.addAll(
-              elem._2.filter(p => !res.failedLocations.contains(p)).map(_.getUUID)
+              elem._2.filter(p => !res.failedLocations.contains(p))
             )
           }
         }
@@ -429,7 +429,7 @@ private[deploy] class Master(
       logInfo(s"shuffle Key ${shuffleKey} put into shuffleMapperAttempts")
     }
     shuffleCommittedPartitions.synchronized {
-      val commitedPartitions = new util.HashSet[String]()
+      val commitedPartitions = new util.HashSet[PartitionLocation]()
       shuffleCommittedPartitions.put(shuffleKey, commitedPartitions)
     }
 
@@ -486,8 +486,7 @@ private[deploy] class Master(
     applicationId: String,
     shuffleId: Int,
     mapId: Int,
-    attemptId: Int,
-    partitionLocations: util.List[PartitionLocation]): Unit = {
+    attemptId: Int): Unit = {
     var askStageEnd: Boolean = false
     val shuffleKey = Utils.makeShuffleKey(applicationId, shuffleId)
     // update max attemptId
@@ -509,28 +508,6 @@ private[deploy] class Master(
 
       if (!attempts.exists(_ < 0)) {
         askStageEnd = true
-      }
-    }
-
-    // update partitions written
-    if (partitionLocations != null) {
-      reducerFileGroup.synchronized {
-        partitionLocations
-          .map(loc => {
-            val partitionKey = Utils.makeReducerKey(applicationId, shuffleId, loc.getReduceId)
-            val path = EssPathUtil.GetPartitionPath(conf, applicationId, shuffleId, loc.getReduceId, loc.getUUID)
-            (partitionKey, path)
-          })
-          .groupBy(_._1) // Map[String,List[(String, Path)]]
-          .mapValues(r => {
-            r.map(r => {
-              r._2
-            })
-          }) // Map[String, List[Path]]
-          .foreach(entry => {
-            reducerFileGroup.putIfAbsent(entry._1, new util.HashSet[Path]())
-            reducerFileGroup.get(entry._1).addAll(entry._2)
-          })
       }
     }
 
@@ -662,24 +639,9 @@ private[deploy] class Master(
       return
     }
 
-    def addCommitedPartitions(failedLocations: util.List[PartitionLocation],
-      allLocations: util.Set[PartitionLocation]): Unit = {
-      val committedPartitions = shuffleCommittedPartitions.get(shuffleKey)
-      if (failedLocations == null) {
-        committedPartitions.synchronized {
-          committedPartitions.addAll(allLocations.map(_.getUUID))
-        }
-      } else {
-        committedPartitions.synchronized {
-          committedPartitions.addAll(
-            allLocations.filter(loc => !failedLocations.contains(loc)).map(_.getUUID)
-          )
-        }
-      }
-    }
-
     // ask allLocations workers holding master partitions to commit files
     val failedMasters: util.List[PartitionLocation] = new util.ArrayList[PartitionLocation]()
+    val failedSlaves: util.List[PartitionLocation] = new util.ArrayList[PartitionLocation]()
 
     ThreadUtils.parmap(
       workers.to, "CommitFiles Master", EssConf.essRpcParallelism(conf)
@@ -697,8 +659,10 @@ private[deploy] class Master(
             failedMasters.addAll(res.failedLocations)
           }
           // record commited partitionIds
-          addCommitedPartitions(failedMasters,
-            worker.masterPartitionLocations.get(shuffleKey).keySet())
+          val committedPartitions = shuffleCommittedPartitions.get(shuffleKey)
+          committedPartitions.synchronized {
+            committedPartitions.addAll(res.committedLocations)
+          }
           logDebug(s"Finished CommitFiles Master Mode for worker ${worker.endpoint.address
             .toEssURL} in ${System.currentTimeMillis() - start}ms")
         }
@@ -708,7 +672,6 @@ private[deploy] class Master(
     if (!failedMasters.isEmpty) {
       // group allLocations failedMasters partitions by location
       val grouped = failedMasters.map(_.getPeer).groupBy(loc => loc.hostPort())
-      val failedSlaves: util.List[PartitionLocation] = new util.ArrayList[PartitionLocation]()
       ThreadUtils.parmap(
         grouped.to, "", EssConf.essRpcParallelism(conf)
       ) {
@@ -726,8 +689,10 @@ private[deploy] class Master(
             failedSlaves.addAll(res.failedLocations)
           }
           // record commited partitionids
-          addCommitedPartitions(failedSlaves,
-            worker.slavePartitionLocations.get(shuffleKey).keySet())
+          val committedPartitions = shuffleCommittedPartitions.get(shuffleKey)
+          committedPartitions.synchronized {
+            committedPartitions.addAll(res.committedLocations)
+          }
           logDebug(s"Finished CommitFiles Slave Mode for worker ${worker.endpoint.address
             .toEssURL} in ${System.currentTimeMillis() - start}ms")
       }
@@ -764,18 +729,16 @@ private[deploy] class Master(
     }
 
     // check if committed files contains all files mappers written
-    val lostFiles = new util.ArrayList[String]()
     val committedPartitions = shuffleCommittedPartitions.get(shuffleKey)
+    val map = new util.HashMap[String, util.HashSet[Path]]()
+    committedPartitions.foreach(partition => {
+      val key = Utils.makeReducerKey(applicationId, shuffleId, partition.getReduceId)
+      val value = EssPathUtil.GetPartitionPath(conf, applicationId, shuffleId, partition.getReduceId, partition.getUUID)
+      map.putIfAbsent(key, new util.HashSet[Path]())
+      map.get(key).add(value)
+    })
     reducerFileGroup.synchronized {
-      reducerFileGroup.filter(entry => entry._1.startsWith(Utils.shuffleKeyPrefix(shuffleKey)))
-        .foreach(entry => {
-          val paths = entry._2
-          paths.foreach(path => {
-            if (!committedPartitions.contains(path.getName)) {
-              lostFiles.add(path.getName)
-            }
-          })
-        })
+      reducerFileGroup.putAll(map)
     }
 
     // clear committed files
@@ -784,7 +747,7 @@ private[deploy] class Master(
     }
 
     // reply
-    if (lostFiles.isEmpty) {
+    if (failedSlaves.isEmpty) {
       // record in stageEndShuffleSet
       stageEndShuffleSet.synchronized {
         stageEndShuffleSet.add(shuffleKey)
@@ -794,8 +757,8 @@ private[deploy] class Master(
         context.reply(StageEndResponse(StatusCode.Success, null))
       }
     } else {
+      logError(s"failed to handle stageend, lost file! ${shuffleKey}")
       if (context != null) {
-        logError(s"failed to handle stageend, lost file! ${shuffleKey}")
         context.reply(StageEndResponse(StatusCode.PartialSuccess, null))
       }
     }

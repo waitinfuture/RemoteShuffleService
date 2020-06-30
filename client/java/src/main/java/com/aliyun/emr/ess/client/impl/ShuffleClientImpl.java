@@ -313,8 +313,7 @@ public class ShuffleClientImpl extends ShuffleClient {
         Set<PartitionLocation> locations = mapWrittenPartitions.getOrDefault(mapKey,
             new ConcurrentSet<>());
         MapperEndResponse response = master.askSync(
-            new MapperEnd(applicationId, shuffleId, mapId, attemptId, new ArrayList<>
-                (locations)),
+            new MapperEnd(applicationId, shuffleId, mapId, attemptId),
             ClassTag$.MODULE$.apply(MapperEndResponse.class)
         );
         if (response.status() != StatusCode.Success) {

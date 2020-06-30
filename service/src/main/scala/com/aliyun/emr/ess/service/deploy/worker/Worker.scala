@@ -94,6 +94,7 @@ private[deploy] class Worker(
   // shared FileSystem
   private val fs = {
     val hadoopConf = new Configuration
+    hadoopConf.set("dfs.checksum.type", "NULL")
     hadoopConf.set("dfs.replication", "2")
     val path = new Path(EssConf.essWorkerBaseDir(conf))
     logInfo(s"path ${path}")
@@ -275,18 +276,19 @@ private[deploy] class Worker(
     if (mode == PartitionLocation.Mode.Master) {
       if (!workerInfo.masterPartitionLocations.containsKey(shuffleKey)) {
         logError(s"shuffle ${shuffleKey} doesn't exist!")
-        context.reply(CommitFilesResponse(StatusCode.ShuffleNotRegistered, commitLocations))
+        context.reply(CommitFilesResponse(StatusCode.ShuffleNotRegistered, commitLocations, null))
         return
       }
     } else {
       if (!workerInfo.slavePartitionLocations.containsKey(shuffleKey)) {
         logError(s"shuffle ${shuffleKey} doesn't exist!")
-        context.reply(CommitFilesResponse(StatusCode.ShuffleNotRegistered, commitLocations))
+        context.reply(CommitFilesResponse(StatusCode.ShuffleNotRegistered, commitLocations, null))
         return
       }
     }
 
     val failedLocations = new util.ArrayList[PartitionLocation]()
+    val committedLocations = new util.ArrayList[PartitionLocation]()
     val locations = mode match {
       case PartitionLocation.Mode.Master =>
         workerInfo.masterPartitionLocations.get(shuffleKey)
@@ -302,9 +304,13 @@ private[deploy] class Worker(
           val future = flushExecutorService.submit(new Runnable {
             override def run(): Unit = {
               val res = target.asInstanceOf[PartitionLocationWithDoubleChunks].getDoubleChunk.flush()
-              if (!res) {
+              if (res == -1) {
                 failedLocations.synchronized {
                   failedLocations.add(target)
+                }
+              } else if (res == 0) {
+                committedLocations.synchronized {
+                  committedLocations.add(target)
                 }
               }
             }
@@ -318,10 +324,10 @@ private[deploy] class Worker(
     // reply
     if (failedLocations.isEmpty) {
       logInfo("CommitFile success!")
-      context.reply(CommitFilesResponse(StatusCode.Success, null))
+      context.reply(CommitFilesResponse(StatusCode.Success, null, committedLocations))
     } else {
       logError("CommitFiles failed!")
-      context.reply(CommitFilesResponse(StatusCode.PartialSuccess, failedLocations))
+      context.reply(CommitFilesResponse(StatusCode.PartialSuccess, failedLocations, committedLocations))
     }
   }
 

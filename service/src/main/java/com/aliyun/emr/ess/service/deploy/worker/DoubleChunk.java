@@ -176,10 +176,14 @@ public class DoubleChunk {
         }
     }
 
-    public boolean flush() {
+    /**
+     *
+     * @return 0: success and file not empty; 1: file empty; -1: fail
+     */
+    public int flush() {
         if (flushed) {
             logger.error("already flushed!");
-            return false;
+            return -1;
         }
         synchronized (this) {
             // wait for flush slave chunk to finish
@@ -189,7 +193,7 @@ public class DoubleChunk {
                     Thread.sleep(50);
                 } catch (Exception e) {
                     logger.error("sleep throws Exception", e);
-                    return false;
+                    return -1;
                 }
             }
             masterState = ChunkState.Flushing;
@@ -202,14 +206,16 @@ public class DoubleChunk {
 
                     chunks[working].flushData(ostream);
                     ostream.close();
+                } else if (ostream == null) {
+                    return 1;
                 }
             } catch (IOException e) {
                 logger.error("flush data failed!", e);
-                return false;
+                return -1;
             }
             masterState = ChunkState.Ready;
             flushed = true;
-            return true;
+            return 0;
         }
     }
 

@@ -2,11 +2,7 @@ package org.apache.spark.shuffle.ess;
 
 import com.aliyun.emr.ess.client.ShuffleClient;
 import com.aliyun.emr.ess.common.EssConf;
-import org.apache.spark.Partitioner;
-import org.apache.spark.ShuffleDependency;
-import org.apache.spark.SparkConf;
-import org.apache.spark.SparkException;
-import org.apache.spark.TaskContext;
+import org.apache.spark.*;
 import org.apache.spark.annotation.Private;
 import org.apache.spark.executor.ShuffleWriteMetrics;
 import org.apache.spark.memory.TaskMemoryManager;
@@ -25,12 +21,9 @@ import org.apache.spark.unsafe.Platform;
 import org.apache.spark.util.ThreadUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
 import scala.Option;
 import scala.Product2;
 import scala.concurrent.Future;
-import scala.concurrent.Promise$;
-import scala.concurrent.duration.Duration;
 import scala.concurrent.duration.FiniteDuration;
 import scala.reflect.ClassTag;
 import scala.reflect.ClassTag$;
@@ -39,11 +32,7 @@ import scala.runtime.BoxedUnit;
 import javax.annotation.Nullable;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.util.Iterator;
-import java.util.LinkedList;
-import java.util.List;
 import java.util.concurrent.ConcurrentLinkedQueue;
-import java.util.concurrent.ExecutorService;
 import java.util.concurrent.TimeUnit;
 
 @Private
@@ -291,10 +280,10 @@ public class EssShuffleWriter<K, V, C> extends ShuffleWriter<K, V> {
             }
         }
         futures.clear();
+        writeMetrics.incWriteTime(System.nanoTime() - waitStartTime);
 
         essShuffleClient.mapperEnd(sparkConf.getAppId(), shuffleId, mapId, taskContext
             .attemptNumber());
-        writeMetrics.incWriteTime(System.nanoTime() - waitStartTime);
 
         BlockManagerId dummyId = BlockManagerId$.MODULE$.apply(
             "amor", "127.0.0.1", 1111, Option.apply(null));

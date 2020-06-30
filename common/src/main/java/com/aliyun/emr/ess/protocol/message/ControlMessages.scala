@@ -63,8 +63,7 @@ object ControlMessages {
     applicationId: String,
     shuffleId: Int,
     mapId: Int,
-    attemptId: Int,
-    partitionLocations: util.ArrayList[PartitionLocation]
+    attemptId: Int
   ) extends MasterMessage
 
   case class MapperEndResponse(
@@ -163,7 +162,8 @@ object ControlMessages {
 
   case class CommitFilesResponse(
     status: StatusCode,
-    failedLocations: util.List[PartitionLocation]
+    failedLocations: util.List[PartitionLocation],
+    committedLocations: util.List[PartitionLocation]
   ) extends WorkerMessage
 
   case class Destroy(
