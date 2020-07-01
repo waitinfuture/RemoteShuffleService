@@ -49,7 +49,7 @@ private[deploy] class Master(
   private val registeredShuffle = new util.HashSet[String]()
   private val shuffleMapperAttempts = new util.HashMap[String, Array[Int]]()
   private val shuffleCommittedPartitions = new util.HashMap[String, util.Set[PartitionLocation]]()
-  private val reducerFileGroup = new util.HashMap[String, util.HashSet[Path]]()
+  private val reducerFileGroup = new ConcurrentHashMap[String, util.HashMap[String, util.HashSet[String]]]()
   private val appHeartbeatTime = new util.HashMap[String, Long]()
   private val stageEndShuffleSet = new util.HashSet[String]()
 
@@ -532,12 +532,8 @@ private[deploy] class Master(
       Thread.sleep(50)
     }
 
-    val shuffleFileGroup = reducerFileGroup.synchronized {
-      reducerFileGroup
-        .filter(entry => entry._1.startsWith(Utils.shuffleKeyPrefix(shuffleKey)))
-        .map(entry => (entry._1, new util.HashSet(entry._2.map(_.toString).asJava)))
-        .toMap
-    }
+    val shuffleFileGroup = reducerFileGroup.get(shuffleKey)
+
     if (!shuffleMapperAttempts.containsKey(shuffleKey)) {
       logWarning(s"shuffleKey Not Found in shuffleMapperAttempts! ${shuffleKey}")
       context.reply(GetReducerFileGroupResponse(
@@ -550,7 +546,7 @@ private[deploy] class Master(
 
     context.reply(GetReducerFileGroupResponse(
       StatusCode.Success,
-      new util.HashMap(shuffleFileGroup.asJava),
+      shuffleFileGroup,
       shuffleMapperAttempts.get(shuffleKey)
     ))
   }
@@ -730,16 +726,14 @@ private[deploy] class Master(
 
     // check if committed files contains all files mappers written
     val committedPartitions = shuffleCommittedPartitions.get(shuffleKey)
-    val map = new util.HashMap[String, util.HashSet[Path]]()
+    val map = new util.HashMap[String, util.HashSet[String]]()
     committedPartitions.foreach(partition => {
       val key = Utils.makeReducerKey(applicationId, shuffleId, partition.getReduceId)
       val value = EssPathUtil.GetPartitionPath(conf, applicationId, shuffleId, partition.getReduceId, partition.getUUID)
-      map.putIfAbsent(key, new util.HashSet[Path]())
-      map.get(key).add(value)
+      map.putIfAbsent(key, new util.HashSet[String]())
+      map.get(key).add(value.toString)
     })
-    reducerFileGroup.synchronized {
-      reducerFileGroup.putAll(map)
-    }
+    reducerFileGroup.put(shuffleKey, map)
 
     // clear committed files
     shuffleCommittedPartitions.synchronized {
@@ -779,11 +773,7 @@ private[deploy] class Master(
       shuffleMapperAttempts.remove(shuffleKey)
     }
     // clear reducerFileGroup for the shuffle
-    reducerFileGroup.synchronized {
-      val keys = reducerFileGroup.keySet()
-      keys.filter(key => key.startsWith(Utils.shuffleKeyPrefix(shuffleKey)))
-        .foreach(key => reducerFileGroup.remove(key))
-    }
+    reducerFileGroup.remove(shuffleKey)
     // delete shuffle files
     val shuffleDir = EssPathUtil.GetShuffleDir(conf, appId, shuffleId)
     val success = fs.delete(shuffleDir, true)
@@ -838,10 +828,8 @@ private[deploy] class Master(
       }
     })
     // clear reducerFileGroup for the application
-    reducerFileGroup.synchronized {
-      val keys = reducerFileGroup.keySet()
-      keys.filter(key => key.startsWith(appId)).foreach(key => reducerFileGroup.remove(key))
-    }
+    val keys = reducerFileGroup.keySet()
+    keys.filter(key => key.startsWith(appId)).foreach(key => reducerFileGroup.remove(key))
     // delete files for the application
     val appPath = EssPathUtil.GetAppDir(conf, appId)
     if (fs.delete(appPath, true)) {

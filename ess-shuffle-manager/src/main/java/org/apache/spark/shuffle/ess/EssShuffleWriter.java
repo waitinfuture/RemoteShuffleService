@@ -136,16 +136,13 @@ public class EssShuffleWriter<K, V, C> extends ShuffleWriter<K, V> {
     @Override
     public void write(scala.collection.Iterator<Product2<K, V>> records) throws IOException {
         if (canUseFastWrite()) {
-            logger.info("fast write");
             fastWrite0(records);
         } else if (dep.mapSideCombine()) {
-            logger.info("write combine");
             if (dep.aggregator().isEmpty()) {
                 throw new UnsupportedOperationException("map side combine");
             }
             write0(dep.aggregator().get().combineValuesByKey(records, taskContext));
         } else {
-            logger.info("write no combine");
             write0(records);
         }
         close();

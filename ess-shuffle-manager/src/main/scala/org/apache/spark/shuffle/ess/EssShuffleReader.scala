@@ -34,9 +34,11 @@ class EssShuffleReader[K, C](
     }
 
     val recordIter = (startPartition until endPartition).map(reduceId => {
+      val start = System.currentTimeMillis()
       val inputStream =
         essShuffleClient.readPartition(
           sparkConf.getAppId, handle.shuffleId, reduceId)
+      metricsCallback.incReadTime(System.currentTimeMillis() - start)
       inputStream.asInstanceOf[EssInputStream].setCallback(metricsCallback)
       inputStream
     }).toIterator.flatMap(

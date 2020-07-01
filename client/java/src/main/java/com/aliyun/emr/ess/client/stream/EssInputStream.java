@@ -74,7 +74,6 @@ public class EssInputStream extends InputStream {
     public void setCallback(MetricsCallback callback) {
         // callback must set before read()
         this.callback = callback;
-        logger.info("MetricsCallback set!");
     }
 
     @Override
