@@ -95,6 +95,7 @@ cp "$ESS_HOME"/ess-shuffle-manager/target/ess-shuffle-manager-"$VERSION"-shaded.
 # Copy other things
 mkdir "$DISTDIR/conf"
 cp "$ESS_HOME"/conf/*.template "$DISTDIR/conf"
+cp -r "$ESS_HOME/bin" "$DISTDIR"
 cp -r "$ESS_HOME/sbin" "$DISTDIR"
 
 TARDIR_NAME="ess-$VERSION-bin-$NAME"
