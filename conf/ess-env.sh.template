@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+
+# - ESS_MASTER_MEMORY, to set how much total memory of ess master (e.g. 1000m, 2g)
+# - ESS_WORKER_MEMORY, to set how much total memory of ess workers (e.g. 1000m, 2g)
+# - ESS_PID_DIR
+# - ESS_LOG_DIR

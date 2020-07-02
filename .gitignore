@@ -88,4 +88,5 @@ spark-warehouse/
 .Rproj.user
 
 logs
+pids
 

@@ -59,9 +59,11 @@ HADOOP_VERSION=$("$MVN" help:evaluate -Dexpression=hadoop.version $@ 2>/dev/null
     | grep -v "WARNING"\
     | tail -n 1)
 
+NAME="hadoop$HADOOP_VERSION"
+
 echo "ESS version is $VERSION"
 
-echo "Making ess-$VERSION-bin-$HADOOP_VERSION.tgz"
+echo "Making ess-$VERSION-bin-$NAME.tgz"
 
 # Build uber fat JAR
 cd "$ESS_HOME"
@@ -95,11 +97,11 @@ mkdir "$DISTDIR/conf"
 cp "$ESS_HOME"/conf/*.template "$DISTDIR/conf"
 cp -r "$ESS_HOME/sbin" "$DISTDIR"
 
-TARDIR_NAME="ess-$VERSION-bin-$HADOOP_VERSION"
+TARDIR_NAME="ess-$VERSION-bin-$NAME"
 TARDIR="$ESS_HOME/$TARDIR_NAME"
 rm -rf "$TARDIR"
 cp -r "$DISTDIR" "$TARDIR"
-tar czf "ess-$VERSION-bin-$HADOOP_VERSION.tgz" -C "$ESS_HOME" "$TARDIR_NAME"
+tar czf "ess-$VERSION-bin-$NAME.tgz" -C "$ESS_HOME" "$TARDIR_NAME"
 rm -rf "$TARDIR"
 
 
