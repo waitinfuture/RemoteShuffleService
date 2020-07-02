@@ -5,7 +5,6 @@ import net.jpountz.lz4.LZ4FastDecompressor;
 import net.jpountz.xxhash.XXHashFactory;
 import org.apache.log4j.Logger;
 
-import javax.ws.rs.HEAD;
 import java.util.zip.Checksum;
 
 public class EssLz4Decompressor extends EssLz4CompressorTrait {

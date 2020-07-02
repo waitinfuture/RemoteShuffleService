@@ -41,7 +41,7 @@ if [ ! -d "$ESS_JARS_DIR" ]; then
   echo "You need to build ESS with the target \"package\" before running this program." 1>&2
   exit 1
 else
-  ESS_CLASSPATH="$ESS_CONF_DIR:$ESS_JARS_DIR/*"
+  ESS_CLASSPATH="$ESS_CONF_DIR:$HADOOP_CONF_DIR:$ESS_JARS_DIR/*"
 fi
 
 # Turn off posix mode since it does not allow process substitution

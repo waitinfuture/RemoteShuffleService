@@ -7,7 +7,6 @@ import org.apache.spark.annotation.Private;
 import org.apache.spark.executor.ShuffleWriteMetrics;
 import org.apache.spark.memory.TaskMemoryManager;
 import org.apache.spark.scheduler.MapStatus;
-import org.apache.spark.scheduler.MapStatus$;
 import org.apache.spark.serializer.SerializationStream;
 import org.apache.spark.serializer.SerializerInstance;
 import org.apache.spark.shuffle.BaseShuffleHandle;
@@ -284,8 +283,7 @@ public class EssShuffleWriter<K, V, C> extends ShuffleWriter<K, V> {
 
         BlockManagerId dummyId = BlockManagerId$.MODULE$.apply(
             "amor", "127.0.0.1", 1111, Option.apply(null));
-        mapStatus = MapStatus$.MODULE$.apply(
-            dummyId, mapStatusLengths, mapStatusRecords);
+        mapStatus = SparkUtils.createMapStatus(dummyId, mapStatusLengths, mapStatusRecords);
     }
 
     private void updateMapStatus() {
