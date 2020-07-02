@@ -6,7 +6,6 @@ if [ -z "${ESS_HOME}" ]; then
   export ESS_HOME="$(cd "`dirname "$0"`"/..; pwd)"
 fi
 
-WORKER_INSTANCE="$@"
 if [ "$WORKER_INSTANCE" = "" ]; then
   WORKER_INSTANCE=1
 fi

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 
-./sbin/stop-worker.sh 1
-./sbin/stop-worker.sh 2
-./sbin/stop-worker.sh 3
+WORKER_INSTANCE=1 ./sbin/stop-worker.sh
+WORKER_INSTANCE=2 ./sbin/stop-worker.sh
+WORKER_INSTANCE=3 ./sbin/stop-worker.sh
 ./sbin/stop-master.sh
 
 
