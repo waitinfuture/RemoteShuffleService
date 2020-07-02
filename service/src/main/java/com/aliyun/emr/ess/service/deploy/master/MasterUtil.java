@@ -19,8 +19,16 @@ public class MasterUtil {
             WorkerInfo worker = workers.next();
             Tuple2<List<PartitionLocation>, List<PartitionLocation>> allocatedSlots =
                 slots.get(worker);
-            worker.removeMasterPartition(shuffleKey, allocatedSlots._1);
-            worker.removeSlavePartition(shuffleKey, allocatedSlots._2);
+            HashSet<String> ids = new HashSet<>();
+            for (int i = 0; i < allocatedSlots._1.size(); i++) {
+                ids.add(allocatedSlots._1.get(i).getUUID());
+            }
+            worker.removeMasterPartition(shuffleKey, ids);
+            ids.clear();
+            for (int i = 0; i < allocatedSlots._2.size(); i++) {
+                ids.add(allocatedSlots._2.get(i).getUUID());
+            }
+            worker.removeSlavePartition(shuffleKey, ids);
         }
     }
 

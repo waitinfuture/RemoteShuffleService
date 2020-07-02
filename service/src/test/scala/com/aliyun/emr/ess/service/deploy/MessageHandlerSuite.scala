@@ -5,11 +5,12 @@ import java.util.concurrent.atomic.AtomicInteger
 
 import scala.collection.JavaConversions._
 import scala.collection.JavaConverters._
+import scala.concurrent.duration.Duration
 import scala.util.Random
 
 import com.aliyun.emr.ess.client.impl.ShuffleClientImpl
 import com.aliyun.emr.ess.common.rpc.{RpcAddress, RpcEndpointRef, RpcEnv}
-import com.aliyun.emr.ess.common.util.{EssPathUtil, Utils}
+import com.aliyun.emr.ess.common.util.{EssPathUtil, ThreadUtils, Utils}
 import com.aliyun.emr.ess.common.EssConf
 import com.aliyun.emr.ess.protocol.{PartitionLocation, RpcNameConstants}
 import com.aliyun.emr.ess.protocol.message.ControlMessages._
@@ -18,7 +19,6 @@ import com.aliyun.emr.ess.protocol.message.StatusCode
 import com.aliyun.emr.ess.service.deploy.master.{Master, MasterArguments}
 import com.aliyun.emr.ess.service.deploy.worker._
 import com.aliyun.emr.network.buffer.NettyManagedBuffer
-import com.aliyun.emr.network.client.TransportClient
 import com.aliyun.emr.network.protocol.PushData
 import io.netty.buffer.Unpooled
 import org.apache.hadoop.conf.Configuration
@@ -382,14 +382,14 @@ class MessageHandlerSuite
     // assert master location reduceId
     assertResult((0 until 10).toList) {
       workerInfos.flatMap(w => {
-        w.masterPartitionLocations.get("appId-1").keySet()
+        w.masterPartitionLocations.get("appId-1").values()
       }).map(_.getReduceId).sorted.toList
     }
 
     // assert slave location reduceId
     assertResult((0 until 10).toList) {
       workerInfos.flatMap(w => {
-        w.slavePartitionLocations.get("appId-1").keySet()
+        w.slavePartitionLocations.get("appId-1").values()
       }).map(_.getReduceId).sorted.toList
     }
 
@@ -520,7 +520,7 @@ class MessageHandlerSuite
     val worker = workerInfos.get(0)
     assert(worker.masterPartitionLocations.size() == 1)
     assert(worker.masterPartitionLocations.contains("appId-1"))
-    assert(worker.masterPartitionLocations.get("appId-1").contains(worker2Location2))
+    assert(worker.masterPartitionLocations.get("appId-1").contains(worker2Location2.getUUID))
     val doubleChunk = worker2.askSync[GetDoubleChunkInfoResponse](
       GetDoubleChunkInfo("appId-1", PartitionLocation.Mode.Master, worker2Location2)
     )
@@ -551,8 +551,7 @@ class MessageHandlerSuite
         "appId",
         1,
         0,
-        0,
-        toJavaList(mapper1Locations)
+        0
       )
     )
     assert(res.status.equals(StatusCode.Success))
@@ -574,8 +573,7 @@ class MessageHandlerSuite
         "appId",
         1,
         1,
-        0,
-        toJavaList(mapper2Locations)
+        0
       )
     )
     assert(res.status.equals(StatusCode.Success))
@@ -601,8 +599,7 @@ class MessageHandlerSuite
         "appId",
         1,
         2,
-        0,
-        toJavaList(mapper3Locations)
+        0
       )
     )
     assert(res.status.equals(StatusCode.Success))
@@ -774,10 +771,10 @@ class MessageHandlerSuite
     assert(workerInfo.memoryUsed == 128 * 10)
     var slaveLocations = workerInfo.slavePartitionLocations.get(shuffleKey)
 
-    masterLocations.keySet().foreach(loc => assert(slaveLocations.contains(loc.getPeer)))
+    masterLocations.values().foreach(loc => assert(slaveLocations.contains(loc.getPeer.getUUID)))
 
     // send data before trigger SlaveLost
-    val lostSlave = masterLocations.head._1.getPeer
+    val lostSlave = masterLocations.head._2.getPeer
     0 until 5 foreach (_ => {
       val data = new Array[Byte](63)
       Random.nextBytes(data)
@@ -813,10 +810,10 @@ class MessageHandlerSuite
 
     val masterLocation = masterLocations.get(lostSlave.getPeer)
     val newPeer = masterLocation.getPeer
-    assert(slaveLocations.contains(newPeer))
+    assert(slaveLocations.contains(newPeer.getUUID))
     // since we have only 2 workers, newPeer should be equal to lostSlave
     assert(lostSlave.equals(newPeer))
-    assert(slaveLocations.contains(newPeer))
+    assert(slaveLocations.contains(newPeer.getUUID))
 
     assertChunkInfo(shuffleKey, List(masterLocation))
     masterLocation.setPeer(newPeer)
@@ -991,9 +988,10 @@ class MessageHandlerSuite
         Random.nextBytes(data)
         val buf = new NettyManagedBuffer(Unpooled.wrappedBuffer(data))
         val res = worker.askSync[PushDataResponse](
-          new PushData(shuffleKey,
-            loc.getUUID,
+          new PushData(
             PartitionLocation.Mode.Master.mode(),
+            shuffleKey,
+            loc.getUUID,
             buf)
         )
         assert(res.status == StatusCode.Success)
@@ -1006,11 +1004,11 @@ class MessageHandlerSuite
 
     assertInfos()
     assertChunkInfo(shuffleKey,
-      worker1InfoMaster.masterPartitionLocations.get(shuffleKey).keySet().toList)
+      worker1InfoMaster.masterPartitionLocations.get(shuffleKey).values().toList)
     assertChunkInfo(shuffleKey,
-      worker2InfoMaster.masterPartitionLocations.get(shuffleKey).keySet().toList)
+      worker2InfoMaster.masterPartitionLocations.get(shuffleKey).values().toList)
     assertChunkInfo(shuffleKey,
-      worker3InfoMaster.masterPartitionLocations.get(shuffleKey).keySet().toList)
+      worker3InfoMaster.masterPartitionLocations.get(shuffleKey).values().toList)
 
     // stage-end for shuffle-1
     val res = master.askSync[StageEndResponse](
@@ -1046,9 +1044,10 @@ class MessageHandlerSuite
         Random.nextBytes(data)
         val buf = new NettyManagedBuffer(Unpooled.wrappedBuffer(data))
         val res = worker.askSync[PushDataResponse](
-          new PushData(shuffleKey2,
-            loc.getUUID,
+          new PushData(
             PartitionLocation.Mode.Master.mode,
+            shuffleKey2,
+            loc.getUUID,
             buf)
         )
         assert(res.status == StatusCode.Success)
@@ -1060,11 +1059,11 @@ class MessageHandlerSuite
     waitUntilDataFinishFlushing(worker3, shuffleKey2)
     assertInfos()
     assertChunkInfo(shuffleKey2,
-      worker1InfoWorker.masterPartitionLocations.get(shuffleKey2).keySet().toList)
+      worker1InfoWorker.masterPartitionLocations.get(shuffleKey2).values().toList)
     assertChunkInfo(shuffleKey2,
-      worker2InfoWorker.masterPartitionLocations.get(shuffleKey2).keySet().toList)
+      worker2InfoWorker.masterPartitionLocations.get(shuffleKey2).values().toList)
     assertChunkInfo(shuffleKey2,
-      worker3InfoWorker.masterPartitionLocations.get(shuffleKey2).keySet().toList)
+      worker3InfoWorker.masterPartitionLocations.get(shuffleKey2).values().toList)
 
     /**
      * register shuffle-3
@@ -1083,9 +1082,10 @@ class MessageHandlerSuite
         Random.nextBytes(data)
         val buf = new NettyManagedBuffer(Unpooled.wrappedBuffer(data))
         val res = worker.askSync[PushDataResponse](
-          new PushData(shuffleKey3,
-            loc.getUUID,
+          new PushData(
             PartitionLocation.Mode.Master.mode,
+            shuffleKey3,
+            loc.getUUID,
             buf)
         )
         assert(res.status == StatusCode.Success)
@@ -1097,11 +1097,11 @@ class MessageHandlerSuite
     waitUntilDataFinishFlushing(worker3, shuffleKey3)
     assertInfos()
     assertChunkInfo(shuffleKey3,
-      worker1InfoMaster.masterPartitionLocations.get(shuffleKey3).keySet().toList)
+      worker1InfoMaster.masterPartitionLocations.get(shuffleKey3).values().toList)
     assertChunkInfo(shuffleKey3,
-      worker2InfoMaster.masterPartitionLocations.get(shuffleKey3).keySet().toList)
+      worker2InfoMaster.masterPartitionLocations.get(shuffleKey3).values().toList)
     assertChunkInfo(shuffleKey3,
-      worker2InfoMaster.masterPartitionLocations.get(shuffleKey3).keySet().toList)
+      worker2InfoMaster.masterPartitionLocations.get(shuffleKey3).values().toList)
 
     /**
      * stage end for shuffle-3
@@ -1116,11 +1116,11 @@ class MessageHandlerSuite
     waitUntilDataFinishFlushing(worker3, shuffleKey3)
     assertInfos()
     assertChunkInfo(shuffleKey2,
-      worker1InfoMaster.masterPartitionLocations.get(shuffleKey2).keySet().toList)
+      worker1InfoMaster.masterPartitionLocations.get(shuffleKey2).values().toList)
     assertChunkInfo(shuffleKey2,
-      worker2InfoMaster.masterPartitionLocations.get(shuffleKey2).keySet().toList)
+      worker2InfoMaster.masterPartitionLocations.get(shuffleKey2).values().toList)
     assertChunkInfo(shuffleKey2,
-      worker2InfoMaster.masterPartitionLocations.get(shuffleKey2).keySet().toList)
+      worker2InfoMaster.masterPartitionLocations.get(shuffleKey2).values().toList)
     assert(worker1InfoMaster.masterPartitionLocations.size() == 1)
     assert(worker1InfoMaster.masterPartitionLocations.contains(shuffleKey2))
     assert(worker1InfoMaster.masterPartitionLocations.get(shuffleKey2).size() == 5)
@@ -1168,9 +1168,10 @@ class MessageHandlerSuite
         Random.nextBytes(data)
         val buf = new NettyManagedBuffer(Unpooled.wrappedBuffer(data))
         val res = worker.askSync[PushDataResponse](
-          new PushData(shuffleKey1,
-            loc.getUUID,
+          new PushData(
             PartitionLocation.Mode.Master.mode(),
+            shuffleKey1,
+            loc.getUUID,
             buf)
         )
         assert(res.status == StatusCode.Success)
@@ -1193,16 +1194,16 @@ class MessageHandlerSuite
 
     assertFileLength(
       shuffleKey1,
-      worker1InfoMaster.masterPartitionLocations.get(shuffleKey1).keySet().toList,
+      worker1InfoMaster.masterPartitionLocations.get(shuffleKey1).values().toList,
       63 * 100)
     assertFileLength(
       shuffleKey1,
-      worker2InfoMaster.masterPartitionLocations.get(shuffleKey1).keySet().toList,
+      worker2InfoMaster.masterPartitionLocations.get(shuffleKey1).values().toList,
       63 * 98
     )
     assertFileLength(
       shuffleKey1,
-      worker2InfoMaster.masterPartitionLocations.get(shuffleKey1).keySet().toList,
+      worker2InfoMaster.masterPartitionLocations.get(shuffleKey1).values().toList,
       63 * 98
     )
 
@@ -1256,9 +1257,10 @@ class MessageHandlerSuite
         Random.nextBytes(data)
         val buf = new NettyManagedBuffer(Unpooled.wrappedBuffer(data))
         val res = worker.askSync[PushDataResponse](
-          new PushData(shuffleKey1,
-            loc.getUUID,
+          new PushData(
             PartitionLocation.Mode.Master.mode,
+            shuffleKey1,
+            loc.getUUID,
             buf)
         )
         assert(res.status == StatusCode.Success)
@@ -1280,7 +1282,7 @@ class MessageHandlerSuite
         Random.nextBytes(data)
         val buf = new NettyManagedBuffer(Unpooled.wrappedBuffer(data))
         val res = worker.askSync[PushDataResponse](
-          new PushData(shuffleKey2, loc.getUUID, PartitionLocation.Mode.Master.mode, buf)
+          new PushData(PartitionLocation.Mode.Master.mode, shuffleKey2, loc.getUUID, buf)
         )
         assert(res.status == StatusCode.Success)
       })
@@ -1301,7 +1303,7 @@ class MessageHandlerSuite
         Random.nextBytes(data)
         val buf = new NettyManagedBuffer(Unpooled.wrappedBuffer(data))
         val res = worker.askSync[PushDataResponse](
-          new PushData(shuffleKey3, loc.getUUID, PartitionLocation.Mode.Master.mode(), buf)
+          new PushData(PartitionLocation.Mode.Master.mode(), shuffleKey3, loc.getUUID, buf)
         )
         assert(res.status == StatusCode.Success)
       })
@@ -1326,33 +1328,33 @@ class MessageHandlerSuite
     assert(resWorkerLost.success)
     assertFileLength(
       shuffleKey1,
-      worker3InfoMaster.masterPartitionLocations.get(shuffleKey1).keySet().toList,
+      worker3InfoMaster.masterPartitionLocations.get(shuffleKey1).values().toList,
       63 * 68
     )
     assertFileLength(
       shuffleKey2,
-      worker3InfoMaster.masterPartitionLocations.get(shuffleKey2).keySet().toList,
+      worker3InfoMaster.masterPartitionLocations.get(shuffleKey2).values().toList,
       63 * 88
     )
     assertFileLength(
       shuffleKey3,
-      worker3InfoMaster.masterPartitionLocations.get(shuffleKey3).keySet().toList,
+      worker3InfoMaster.masterPartitionLocations.get(shuffleKey3).values().toList,
       63 * 172
     )
 
     assertFileLength(
       shuffleKey1,
-      worker3InfoMaster.slavePartitionLocations.get(shuffleKey1).keySet().toList,
+      worker3InfoMaster.slavePartitionLocations.get(shuffleKey1).values().toList,
       63 * 70
     )
     assertFileLength(
       shuffleKey2,
-      worker3InfoMaster.slavePartitionLocations.get(shuffleKey2).keySet().toList,
+      worker3InfoMaster.slavePartitionLocations.get(shuffleKey2).values().toList,
       63 * 90
     )
     assertFileLength(
       shuffleKey3,
-      worker3InfoMaster.slavePartitionLocations.get(shuffleKey3).keySet().toList,
+      worker3InfoMaster.slavePartitionLocations.get(shuffleKey3).values().toList,
       63 * 173
     )
 
@@ -1368,18 +1370,18 @@ class MessageHandlerSuite
 
     assertInfos()
     assertChunkInfo(shuffleKey1,
-      worker1InfoWorker.masterPartitionLocations.get(shuffleKey1).keySet().toList)
+      worker1InfoWorker.masterPartitionLocations.get(shuffleKey1).values().toList)
     assertChunkInfo(shuffleKey2,
-      worker1InfoWorker.masterPartitionLocations.get(shuffleKey2).keySet().toList)
+      worker1InfoWorker.masterPartitionLocations.get(shuffleKey2).values().toList)
     assertChunkInfo(shuffleKey3,
-      worker1InfoWorker.masterPartitionLocations.get(shuffleKey3).keySet().toList)
+      worker1InfoWorker.masterPartitionLocations.get(shuffleKey3).values().toList)
 
     assertChunkInfo(shuffleKey1,
-      worker3InfoWorker.masterPartitionLocations.get(shuffleKey1).keySet().toList)
+      worker3InfoWorker.masterPartitionLocations.get(shuffleKey1).values().toList)
     assertChunkInfo(shuffleKey2,
-      worker3InfoWorker.masterPartitionLocations.get(shuffleKey2).keySet().toList)
+      worker3InfoWorker.masterPartitionLocations.get(shuffleKey2).values().toList)
     assertChunkInfo(shuffleKey3,
-      worker3InfoWorker.masterPartitionLocations.get(shuffleKey3).keySet().toList)
+      worker3InfoWorker.masterPartitionLocations.get(shuffleKey3).values().toList)
 
     var stageEnd = master.askSync[StageEndResponse](
       StageEnd(appId, shuffleId1)
@@ -1426,7 +1428,7 @@ class MessageHandlerSuite
         Random.nextBytes(data)
         val buf = new NettyManagedBuffer(Unpooled.wrappedBuffer(data))
         worker.askSync[PushDataResponse](
-          new PushData(shuffleKey, loc.getUUID, PartitionLocation.Mode.Master.mode, buf)
+          new PushData(PartitionLocation.Mode.Master.mode, shuffleKey, loc.getUUID, buf)
         )
       })
     })
@@ -1449,7 +1451,7 @@ class MessageHandlerSuite
     val buf = new NettyManagedBuffer(Unpooled.wrappedBuffer(data))
     0 until 1 foreach (_ => {
       val resSend = worker.askSync[PushDataResponse](
-        new PushData(shuffleKey, newLoc.getUUID, PartitionLocation.Mode.Master.mode(), buf)
+        new PushData(PartitionLocation.Mode.Master.mode(), shuffleKey, newLoc.getUUID, buf)
       )
       assert(resSend.status == StatusCode.Success)
     })
@@ -1494,7 +1496,7 @@ class MessageHandlerSuite
         Random.nextBytes(data)
         val buf = new NettyManagedBuffer(Unpooled.wrappedBuffer(data))
         val res = worker.askSync[PushDataResponse](
-          new PushData(shuffleKey, loc.getUUID, PartitionLocation.Mode.Master.mode(), buf)
+          new PushData(PartitionLocation.Mode.Master.mode(), shuffleKey, loc.getUUID, buf)
         )
         assert(res.status == StatusCode.Success)
       })
@@ -1552,7 +1554,7 @@ class MessageHandlerSuite
         Random.nextBytes(data)
         val buf = new NettyManagedBuffer(Unpooled.wrappedBuffer(data))
         val res = worker.askSync[PushDataResponse](
-          new PushData(shuffleKey1, loc.getUUID, PartitionLocation.Mode.Master.mode(), buf)
+          new PushData(PartitionLocation.Mode.Master.mode(), shuffleKey1, loc.getUUID, buf)
         )
         assert(res.status == StatusCode.Success)
       })
@@ -1572,7 +1574,7 @@ class MessageHandlerSuite
         Random.nextBytes(data)
         val buf = new NettyManagedBuffer(Unpooled.wrappedBuffer(data))
         val res = worker.askSync[PushDataResponse](
-          new PushData(shuffleKey2, loc.getUUID, PartitionLocation.Mode.Master.mode(), buf)
+          new PushData(PartitionLocation.Mode.Master.mode(), shuffleKey2, loc.getUUID, buf)
         )
         assert(res.status == StatusCode.Success)
       })
@@ -1592,7 +1594,7 @@ class MessageHandlerSuite
         Random.nextBytes(data)
         val buf = new NettyManagedBuffer(Unpooled.wrappedBuffer(data))
         val res = worker.askSync[PushDataResponse](
-          new PushData(shuffleKey3, loc.getUUID, PartitionLocation.Mode.Master.mode(), buf)
+          new PushData(PartitionLocation.Mode.Master.mode(), shuffleKey3, loc.getUUID, buf)
         )
         assert(res.status == StatusCode.Success)
       })
@@ -1641,6 +1643,7 @@ class MessageHandlerSuite
       0 until 11 foreach (reduceId => {
         val data = new Array[Byte](63)
         val res = client.pushData0(appId, shuffleId1, 0, 0, reduceId, data)
+        ThreadUtils.awaitReady(res, Duration.Inf)
       })
     })
 
@@ -1693,7 +1696,7 @@ class MessageHandlerSuite
         Random.nextBytes(data)
         val buf = new NettyManagedBuffer(Unpooled.wrappedBuffer(data))
         val res = worker.askSync[PushDataResponse](
-          new PushData(shuffleKey, loc.getUUID, PartitionLocation.Mode.Master.mode(), buf)
+          new PushData(PartitionLocation.Mode.Master.mode(), shuffleKey, loc.getUUID, buf)
         )
         assert(res.status == StatusCode.Success)
       })
@@ -1709,7 +1712,7 @@ class MessageHandlerSuite
     // mapper end
     0 until 9 foreach(mapId => {
       val res = master.askSync[MapperEndResponse](
-        MapperEnd(appId, shuffleId, mapId, 0, toJavaList(resReg.partitionLocations))
+        MapperEnd(appId, shuffleId, mapId, 0)
       )
       assert(res.status == StatusCode.Success)
     })
@@ -1739,13 +1742,14 @@ class MessageHandlerSuite
     val buf = new NettyManagedBuffer(Unpooled.wrappedBuffer(data))
     val res = worker.askSync[PushDataResponse](
       new PushData(
-        shuffleKey, resRev.partitionLocation.getUUID, PartitionLocation.Mode.Master.mode(), buf)
+        PartitionLocation.Mode.Master.mode(),
+        shuffleKey, resRev.partitionLocation.getUUID, buf)
     )
     assert(res.status == StatusCode.Success)
 
     // mapper end
     val res2 = master.askSync[MapperEndResponse](
-      MapperEnd(appId, shuffleId, 9, 0, toJavaList(List(resRev.partitionLocation)))
+      MapperEnd(appId, shuffleId, 9, 0)
     )
     assert(res2.status == StatusCode.Success)
 

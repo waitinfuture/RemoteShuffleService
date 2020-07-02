@@ -157,25 +157,25 @@ object ControlMessages {
 
   case class CommitFiles(
     shuffleKey: String,
-    commitLocations: util.List[PartitionLocation],
+    commitLocationIds: util.List[String],
     mode: PartitionLocation.Mode) extends WorkerMessage
 
   case class CommitFilesResponse(
     status: StatusCode,
-    failedLocations: util.List[PartitionLocation],
-    committedLocations: util.List[PartitionLocation]
+    failedLocations: util.List[String],
+    committedLocations: util.List[String]
   ) extends WorkerMessage
 
   case class Destroy(
     shuffleKey: String,
-    masterLocations: util.List[PartitionLocation],
-    slaveLocation: util.List[PartitionLocation]
+    masterLocations: util.List[String],
+    slaveLocation: util.List[String]
   ) extends WorkerMessage
 
   case class DestroyResponse(
     status: StatusCode,
-    failedMasters: util.List[PartitionLocation],
-    failedSlaves: util.List[PartitionLocation]
+    failedMasters: util.List[String],
+    failedSlaves: util.List[String]
   ) extends WorkerMessage
 
   case class GetShuffleStatus(

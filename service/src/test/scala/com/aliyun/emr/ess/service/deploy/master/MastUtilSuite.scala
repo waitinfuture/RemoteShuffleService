@@ -12,9 +12,7 @@ class MastUtilSuite extends FunSuite{
 
   test("synchronize") {
     def foo(): Unit = {
-      println("start")
       Thread.sleep(1000)
-      println("end")
     }
 
     val lock = new Object()

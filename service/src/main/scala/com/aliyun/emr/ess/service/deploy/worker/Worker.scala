@@ -270,25 +270,25 @@ private[deploy] class Worker(
 
   private def handleCommitFiles(context: RpcCallContext,
     shuffleKey: String,
-    commitLocations: util.List[PartitionLocation],
+    commitLocationIds: util.List[String],
     mode: PartitionLocation.Mode): Unit = {
     // return null if shuffleKey does not exist
     if (mode == PartitionLocation.Mode.Master) {
       if (!workerInfo.masterPartitionLocations.containsKey(shuffleKey)) {
         logError(s"shuffle ${shuffleKey} doesn't exist!")
-        context.reply(CommitFilesResponse(StatusCode.ShuffleNotRegistered, commitLocations, null))
+        context.reply(CommitFilesResponse(StatusCode.ShuffleNotRegistered, commitLocationIds, null))
         return
       }
     } else {
       if (!workerInfo.slavePartitionLocations.containsKey(shuffleKey)) {
         logError(s"shuffle ${shuffleKey} doesn't exist!")
-        context.reply(CommitFilesResponse(StatusCode.ShuffleNotRegistered, commitLocations, null))
+        context.reply(CommitFilesResponse(StatusCode.ShuffleNotRegistered, commitLocationIds, null))
         return
       }
     }
 
-    val failedLocations = new util.ArrayList[PartitionLocation]()
-    val committedLocations = new util.ArrayList[PartitionLocation]()
+    val failedLocations = new util.ArrayList[String]()
+    val committedLocations = new util.ArrayList[String]()
     val locations = mode match {
       case PartitionLocation.Mode.Master =>
         workerInfo.masterPartitionLocations.get(shuffleKey)
@@ -297,20 +297,20 @@ private[deploy] class Worker(
     }
 
     val futures = new util.ArrayList[Future[_]]()
-    if (commitLocations != null) {
-      commitLocations.foreach(loc => {
-        val target = locations.get(loc)
+    if (commitLocationIds != null) {
+      commitLocationIds.foreach(id => {
+        val target = locations.get(id)
         if (target != null) {
           val future = flushExecutorService.submit(new Runnable {
             override def run(): Unit = {
               val res = target.asInstanceOf[PartitionLocationWithDoubleChunks].getDoubleChunk.flush()
               if (res == -1) {
                 failedLocations.synchronized {
-                  failedLocations.add(target)
+                  failedLocations.add(id)
                 }
               } else if (res == 0) {
                 committedLocations.synchronized {
-                  committedLocations.add(target)
+                  committedLocations.add(id)
                 }
               }
             }
@@ -333,8 +333,8 @@ private[deploy] class Worker(
 
   private def handleDestroy(context: RpcCallContext,
     shuffleKey: String,
-    masterLocations: util.List[PartitionLocation],
-    slaveLocations: util.List[PartitionLocation]): Unit = {
+    masterLocations: util.List[String],
+    slaveLocations: util.List[String]): Unit = {
     // check whether shuffleKey has registered
     if (!workerInfo.masterPartitionLocations.containsKey(shuffleKey) &&
       !workerInfo.slavePartitionLocations.containsKey(shuffleKey)) {
@@ -344,8 +344,8 @@ private[deploy] class Worker(
       return
     }
 
-    val failedMasters = new util.ArrayList[PartitionLocation]()
-    val failedSlaves = new util.ArrayList[PartitionLocation]()
+    val failedMasters = new util.ArrayList[String]()
+    val failedSlaves = new util.ArrayList[String]()
 
     // destroy master locations
     if (masterLocations != null && !masterLocations.isEmpty) {
@@ -427,7 +427,7 @@ private[deploy] class Worker(
       master.getDoubleChunk.returnChunks()
       workerInfo.synchronized {
         workerInfo.removeMasterPartition(shuffleKey,
-          workerInfo.masterPartitionLocations.get(shuffleKey).keySet().toList)
+          workerInfo.masterPartitionLocations.get(shuffleKey).keySet())
       }
       return
     }
@@ -439,7 +439,7 @@ private[deploy] class Worker(
       val loc = workerInfo.masterPartitionLocations.get(shuffleKey).get(masterLocation)
         .asInstanceOf[PartitionLocationWithDoubleChunks]
       workerInfo.synchronized {
-        workerInfo.removeMasterPartition(shuffleKey, masterLocation)
+        workerInfo.removeMasterPartition(shuffleKey, masterLocation.getUUID)
       }
       // flush data
       logInfo(s"worker ${workerInfo} flush data")
@@ -555,7 +555,7 @@ private[deploy] class Worker(
       callback.onFailure(new IOException(msg))
       return
     }
-    val location = shufflelocations.keySet().find(loc => loc.getUUID == partitionId).orNull
+    val location = shufflelocations.getOrDefault(partitionId, null)
     if (location == null) {
       val msg = "Partition Location not found!"
       logError(msg)

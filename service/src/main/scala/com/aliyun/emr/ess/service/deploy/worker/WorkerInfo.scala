@@ -22,10 +22,10 @@ private[ess] class WorkerInfo(
   var lastHeartbeat: Long = _
   // key: shuffleKey  value: master locations
   val masterPartitionLocations =
-    new util.HashMap[String, util.Map[PartitionLocation, PartitionLocation]]()
+    new util.HashMap[String, util.Map[String, PartitionLocation]]()
   // key: shuffleKey  value: slave locations
   val slavePartitionLocations =
-    new util.HashMap[String, util.Map[PartitionLocation, PartitionLocation]]()
+    new util.HashMap[String, util.Map[String, PartitionLocation]]()
 
   init()
 
@@ -46,42 +46,42 @@ private[ess] class WorkerInfo(
 
   def addMasterPartition(shuffleKey: String, location: PartitionLocation): Unit = {
     masterPartitionLocations.putIfAbsent(shuffleKey,
-      new util.HashMap[PartitionLocation, PartitionLocation]())
+      new util.HashMap[String, PartitionLocation]())
     val masterLocs = masterPartitionLocations.get(shuffleKey)
-    masterLocs.put(location, location)
+    masterLocs.put(location.getUUID, location)
     memoryUsed += partitionSize
   }
 
   def addMasterPartition(shuffleKey: String, locations: util.List[PartitionLocation]): Unit = {
     masterPartitionLocations.putIfAbsent(shuffleKey,
-      new util.HashMap[PartitionLocation, PartitionLocation]())
+      new util.HashMap[String, PartitionLocation]())
     val masterLocs = masterPartitionLocations.get(shuffleKey)
-    locations.foreach(loc => masterLocs.put(loc, loc))
+    locations.foreach(loc => masterLocs.put(loc.getUUID, loc))
     memoryUsed += partitionSize * locations.size()
   }
 
   def addSlavePartition(shuffleKey: String, location: PartitionLocation): Unit = {
     slavePartitionLocations.putIfAbsent(shuffleKey,
-      new util.HashMap[PartitionLocation, PartitionLocation]())
+      new util.HashMap[String, PartitionLocation]())
     val slaveLocs = slavePartitionLocations.get(shuffleKey)
-    slaveLocs.put(location, location)
+    slaveLocs.put(location.getUUID, location)
     memoryUsed += partitionSize
   }
 
   def addSlavePartition(shuffleKey: String, locations: util.List[PartitionLocation]): Unit = {
     slavePartitionLocations.putIfAbsent(shuffleKey,
-      new util.HashMap[PartitionLocation, PartitionLocation]())
+      new util.HashMap[String, PartitionLocation]())
     val slaveLocs = slavePartitionLocations.get(shuffleKey)
-    locations.foreach(loc => slaveLocs.put(loc,loc))
+    locations.foreach(loc => slaveLocs.put(loc.getUUID, loc))
     memoryUsed += partitionSize * locations.size()
   }
 
-  def removeMasterPartition(shuffleKey: String, location: PartitionLocation): Unit = {
+  def removeMasterPartition(shuffleKey: String, id: String): Unit = {
     if (!masterPartitionLocations.containsKey(shuffleKey)) {
       return
     }
     val masterLocs = masterPartitionLocations.get(shuffleKey)
-    val removed = masterLocs.remove(location)
+    val removed = masterLocs.remove(id)
     if (removed != null) {
       memoryUsed -= partitionSize
     }
@@ -90,14 +90,13 @@ private[ess] class WorkerInfo(
     }
   }
 
-  def removeMasterPartition(shuffleKey: String,
-    locations: util.Collection[PartitionLocation]): Unit = {
+  def removeMasterPartition(shuffleKey: String, ids: util.Collection[String]): Unit = {
     if (!masterPartitionLocations.containsKey(shuffleKey)) {
       return
     }
     val masterLocs = masterPartitionLocations.get(shuffleKey)
-    locations.foreach(loc => {
-      val removed = masterLocs.remove(loc)
+    ids.foreach(id => {
+      val removed = masterLocs.remove(id)
       if (removed != null) {
         memoryUsed -= partitionSize
       }
@@ -107,12 +106,12 @@ private[ess] class WorkerInfo(
     }
   }
 
-  def removeSlavePartition(shuffleKey: String, location: PartitionLocation): Unit = {
+  def removeSlavePartition(shuffleKey: String, id: String): Unit = {
     if (!slavePartitionLocations.containsKey(shuffleKey)) {
       return
     }
     val slaveLocs = slavePartitionLocations.get(shuffleKey)
-    val removed = slaveLocs.remove(location)
+    val removed = slaveLocs.remove(id)
     if (removed != null) {
       memoryUsed -= partitionSize
     }
@@ -122,7 +121,7 @@ private[ess] class WorkerInfo(
   }
 
   def removeSlavePartition(shuffleKey: String,
-    locations: util.Collection[PartitionLocation]): Unit = {
+    locations: util.Collection[String]): Unit = {
     if (!slavePartitionLocations.containsKey(shuffleKey)) {
       return
     }
