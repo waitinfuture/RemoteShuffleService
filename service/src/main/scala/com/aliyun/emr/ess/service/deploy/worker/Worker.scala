@@ -98,7 +98,11 @@ private[deploy] class Worker(
     hadoopConf.set("dfs.replication", "2")
     val path = new Path(EssConf.essWorkerBaseDir(conf))
     logInfo(s"path ${path}")
-    path.getFileSystem(hadoopConf)
+    val _fs = path.getFileSystem(hadoopConf)
+    if (!_fs.exists(path)) {
+      _fs.mkdirs(path)
+    }
+    _fs
   }
 
   // shared ExecutoreService for flush
