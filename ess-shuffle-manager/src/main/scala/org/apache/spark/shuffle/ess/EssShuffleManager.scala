@@ -3,6 +3,8 @@ package org.apache.spark.shuffle.ess
 import com.aliyun.emr.ess.client.ShuffleClient
 import com.aliyun.emr.ess.common.EssConf
 import com.aliyun.emr.ess.protocol.PartitionLocation
+import com.aliyun.emr.ess.protocol.message.StatusCode
+
 import org.apache.spark._
 import org.apache.spark.internal.Logging
 import org.apache.spark.shuffle._
@@ -17,13 +19,27 @@ class EssShuffleManager(conf: SparkConf) extends ShuffleManager with Logging {
       shuffleId: Int,
       numMaps: Int,
       dependency: ShuffleDependency[K, V, C]): ShuffleHandle = {
-    val registered = essShuffleClient.registerShuffle(conf.getAppId,
+    var status = essShuffleClient.registerShuffle(conf.getAppId,
       shuffleId,
       numMaps,
       dependency.partitioner.numPartitions)
 
-    if (!registered) {
-      throw new Exception("register shuffle failed.")
+    var retry = 1
+    val maxRetry = EssConf.essRegisterShuffleMaxRetry(essConf)
+    while (status == StatusCode.SlotNotAvailable && retry <= maxRetry) {
+      logInfo(s"Slot not available, retry ${retry} times")
+      Thread.sleep(5000)
+      status = essShuffleClient.registerShuffle(conf.getAppId,
+        shuffleId,
+        numMaps,
+        dependency.partitioner.numPartitions)
+      retry += 1
+    }
+    if (retry > maxRetry)  {
+      throw new Exception("Slot Not Available")
+    }
+    if (status != StatusCode.Success) {
+      throw new Exception("Register shuffle failed! Status: " + status)
     }
 
     new EssShuffleHandle[K, V](

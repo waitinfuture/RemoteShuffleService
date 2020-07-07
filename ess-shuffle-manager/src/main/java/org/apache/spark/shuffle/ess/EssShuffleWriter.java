@@ -22,6 +22,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import scala.Option;
 import scala.Product2;
+import scala.Tuple2;
 import scala.concurrent.Future;
 import scala.concurrent.duration.FiniteDuration;
 import scala.reflect.ClassTag;
@@ -239,7 +240,7 @@ public class EssShuffleWriter<K, V, C> extends ShuffleWriter<K, V> {
     private void flushSendBuffer(int partitionId, byte[] buffer, int size) throws IOException {
         long flushStartTime = System.nanoTime();
         limitMaxInFlight();
-        Future<BoxedUnit> future = essShuffleClient.pushData(
+        Tuple2<Future<BoxedUnit>, Integer> res = essShuffleClient.pushData(
             sparkConf.getAppId(),
             shuffleId,
             mapId,
@@ -249,7 +250,8 @@ public class EssShuffleWriter<K, V, C> extends ShuffleWriter<K, V> {
             0,
             size
         );
-        futures.offer(future);
+        futures.offer(res._1);
+        writeMetrics.incBytesWritten(res._2);
         writeMetrics.incWriteTime(System.nanoTime() - flushStartTime);
     }
 
@@ -287,17 +289,14 @@ public class EssShuffleWriter<K, V, C> extends ShuffleWriter<K, V> {
     }
 
     private void updateMapStatus() {
-        long bytesWritten = 0;
         long recordsWritten = 0;
         for (int i = 0; i < partitioner.numPartitions(); i++) {
             mapStatusLengths[i] += tmpLengthMap[i];
-            bytesWritten += tmpLengthMap[i];
             tmpLengthMap[i] = 0;
             mapStatusRecords[i] += tmpRecordMap[i];
             recordsWritten += tmpRecordMap[i];
             tmpRecordMap[i] = 0;
         }
-        writeMetrics.incBytesWritten(bytesWritten);
         writeMetrics.incRecordsWritten(recordsWritten);
     }
 

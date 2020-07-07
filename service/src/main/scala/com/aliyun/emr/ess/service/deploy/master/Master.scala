@@ -65,7 +65,7 @@ private[deploy] class Master(
       override def run(): Unit = Utils.tryLogNonFatalError {
         self.send(CheckForApplicationTimeOut)
       }
-    }, 0, APPLICATION_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+    }, 0, APPLICATION_TIMEOUT_MS / 2, TimeUnit.MILLISECONDS)
   }
 
   override def onStop(): Unit = {
@@ -229,14 +229,25 @@ private[deploy] class Master(
   }
 
   private def timeoutDeadApplications(): Unit = {
+    logInfo("timeoutDeadApplications")
     val currentTime = System.currentTimeMillis()
     val keys = appHeartbeatTime.keySet()
     keys.foreach(key => {
       if (appHeartbeatTime.get(key) < currentTime - APPLICATION_TIMEOUT_MS) {
         logError(s"Application ${key} timeout! Trigger ApplicationLost event")
-        self.send(
+        var res = self.askSync[ApplicationLostResponse](
           ApplicationLost(key)
         )
+        var retry = 1
+        while (res.status != StatusCode.Success && retry <= 3) {
+          res = self.askSync[ApplicationLostResponse](
+            ApplicationLost(key)
+          )
+          retry += 1
+        }
+        if (retry > 3) {
+          logError("HandleApplicationLost failed more than 3 times!")
+        }
         appHeartbeatTime.remove(key)
       }
     })
@@ -394,7 +405,7 @@ private[deploy] class Master(
 
     // reply false if offer slots failed
     if (slots == null || slots.isEmpty()) {
-      logError("offerSlots failed!")
+      logError(s"offerSlots failed ${shuffleKey}!")
       context.reply(RegisterShuffleResponse(StatusCode.SlotNotAvailable, null))
       return
     }
@@ -763,6 +774,14 @@ private[deploy] class Master(
   def handleUnregisterShuffle(context: RpcCallContext,
     appId: String, shuffleId: Int): Unit = {
     val shuffleKey = Utils.makeShuffleKey(appId, shuffleId)
+
+    // check if StageEnd has been handled
+    if (!stageEndShuffleSet.contains(shuffleKey)) {
+      logInfo(s"Call StageEnd before Unregister Shuffle ${shuffleKey}")
+      self.askSync[StageEndResponse](StageEnd(appId, shuffleId))
+      stageEndShuffleSet.add(shuffleKey)
+    }
+
     // if PartitionLocations exists for the shuffle, return fail
     if (partitionExists(shuffleKey)) {
       logError(s"Partition exists for shuffle ${shuffleKey}!")
@@ -834,17 +853,14 @@ private[deploy] class Master(
     keys.filter(key => key.startsWith(appId)).foreach(key => reducerFileGroup.remove(key))
     // delete files for the application
     val appPath = EssPathUtil.GetAppDir(conf, appId)
-    if (fs.delete(appPath, true)) {
-      logInfo("Finished handling ApplicationLost")
-      context.reply(ApplicationLostResponse(true))
-    } else {
-      logError("Delete files failed!")
-      context.reply(ApplicationLostResponse(false))
-    }
+    fs.delete(appPath, true)
+    logInfo("Finished handling ApplicationLost")
+    context.reply(ApplicationLostResponse(StatusCode.Success))
   }
 
   private def handleHeartBeatFromApplication(appId: String): Unit = {
     appHeartbeatTime.synchronized {
+      logInfo("heartbeat from application " + appId)
       appHeartbeatTime.put(appId, System.currentTimeMillis())
     }
   }

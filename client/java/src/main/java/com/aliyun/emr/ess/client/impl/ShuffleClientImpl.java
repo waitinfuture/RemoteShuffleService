@@ -10,17 +10,17 @@ import com.aliyun.emr.ess.common.rpc.RpcEnv;
 import com.aliyun.emr.ess.common.util.EssPathUtil;
 import com.aliyun.emr.ess.common.util.Utils;
 import com.aliyun.emr.ess.protocol.PartitionLocation;
-import com.aliyun.emr.network.buffer.NettyManagedBuffer;
-import com.aliyun.emr.network.protocol.PushData;
 import com.aliyun.emr.ess.protocol.RpcNameConstants;
 import com.aliyun.emr.ess.protocol.message.ControlMessages.*;
 import com.aliyun.emr.ess.protocol.message.StatusCode;
 import com.aliyun.emr.ess.unsafe.Platform;
 import com.aliyun.emr.network.TransportContext;
+import com.aliyun.emr.network.buffer.NettyManagedBuffer;
 import com.aliyun.emr.network.client.RpcResponseCallback;
 import com.aliyun.emr.network.client.TransportClient;
 import com.aliyun.emr.network.client.TransportClientBootstrap;
 import com.aliyun.emr.network.client.TransportClientFactory;
+import com.aliyun.emr.network.protocol.PushData;
 import com.aliyun.emr.network.server.NoOpRpcHandler;
 import com.aliyun.emr.network.util.TransportConf;
 import com.google.common.collect.Lists;
@@ -30,7 +30,7 @@ import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.log4j.Logger;
-
+import scala.Tuple2;
 import scala.concurrent.Future;
 import scala.concurrent.Promise;
 import scala.concurrent.Promise$;
@@ -40,12 +40,7 @@ import scala.runtime.BoxedUnit;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.ByteBuffer;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
+import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
@@ -72,6 +67,9 @@ public class ShuffleClientImpl extends ShuffleClient {
     private final Map<String, RpcEndpointRef> workers = new HashMap<>();
 
     FileSystem fs;
+
+    private boolean heartBeatStarted = false;
+    private Object heartBeatLock = new Object();
 
     ThreadLocal<EssLz4Compressor> lz4CompressorThreadLocal = new ThreadLocal<EssLz4Compressor>() {
         @Override
@@ -121,7 +119,30 @@ public class ShuffleClientImpl extends ShuffleClient {
     }
 
     @Override
-    public boolean registerShuffle(String applicationId, int shuffleId, int numMappers, int numPartitions) {
+    public StatusCode registerShuffle(String applicationId, int shuffleId, int numMappers, int numPartitions) {
+        // start heartbeat if not started
+        synchronized (heartBeatLock) {
+            if (!heartBeatStarted) {
+                Thread heartBeatThread = new Thread() {
+                    @Override
+                    public void run() {
+                        while (true) {
+                            master.send(
+                                new HeartBeatFromApplication(applicationId)
+                            );
+                            try {
+                                Thread.sleep(30 * 1000);
+                            } catch (Exception e) {
+                                logger.error("Sleep caught exception!", e);
+                            }
+                        }
+                    }
+                };
+                heartBeatThread.start();
+                heartBeatStarted = true;
+            }
+        }
+
         // registerShuffle
         RegisterShuffleResponse response = master.askSync(
             new RegisterShuffle(applicationId, shuffleId, numMappers, numPartitions),
@@ -133,26 +154,16 @@ public class ShuffleClientImpl extends ShuffleClient {
                 PartitionLocation partitionLoc = response.partitionLocations().get(i);
                 String partitionKey =
                     Utils.makeReducerKey(applicationId, shuffleId, partitionLoc.getReduceId());
-                PartitionLocation prev = reducePartitionMap.putIfAbsent(
+                reducePartitionMap.put(
                     partitionKey,
                     partitionLoc
                 );
-
-                // if prev != null, means there are illegal partitionKey already exist
-                // consider register shuffle failed and clean up
-                if (prev != null) {
-                    removeAllShufflePartition(applicationId, shuffleId);
-                    logger.error(String.format("Illegal partitionKey %s already exists.", partitionKey));
-                    return false;
-                }
             }
-
-            // return true 的时候基本意味所有的master location已经加入到本地缓存
-            return true;
+            return StatusCode.Success;
         } else if (response.status().equals(StatusCode.NumMapperZero)) {
-            return true;
+            return StatusCode.Success;
         } else {
-            return false;
+            return response.status();
         }
     }
 
@@ -175,7 +186,7 @@ public class ShuffleClientImpl extends ShuffleClient {
     }
 
     @Override
-    public Future<BoxedUnit> pushData(
+    public Tuple2<Future<BoxedUnit>, Integer> pushData(
             String applicationId,
             int shuffleId,
             int mapId,
@@ -186,7 +197,7 @@ public class ShuffleClientImpl extends ShuffleClient {
     }
 
     @Override
-    public Future<BoxedUnit> pushData(
+    public Tuple2<Future<BoxedUnit>, Integer> pushData(
             String applicationId,
             int shuffleId,
             int mapId,
@@ -216,7 +227,7 @@ public class ShuffleClientImpl extends ShuffleClient {
         System.arraycopy(compressor.getCompressedBuffer(), 0, body, BATCH_HEADER_SIZE,
                 compressedTotalSize);
 
-        return pushData0(applicationId, shuffleId, mapId, attemptId, reduceId, body);
+        return new Tuple2<>(pushData0(applicationId, shuffleId, mapId, attemptId, reduceId, body), body.length);
     }
 
     public Future<BoxedUnit> pushData0(

@@ -1617,7 +1617,7 @@ class MessageHandlerSuite
     val resAppLost = master.askSync[ApplicationLostResponse](
       ApplicationLost(appId)
     )
-    assert(resAppLost.success)
+    assert(resAppLost.status == StatusCode.Success)
     val path = EssPathUtil.GetAppDir(conf, appId)
     assert(!fs.exists(path))
 
@@ -1637,7 +1637,7 @@ class MessageHandlerSuite
     val shuffleKey1 = Utils.makeShuffleKey(appId, shuffleId1)
     val client = new ShuffleClientImpl()
     val res = client.registerShuffle(appId, shuffleId1, 10, 11)
-    assert(res)
+    assert(res == StatusCode.Success)
 
     0 until 114 foreach (_ => {
       0 until 11 foreach (reduceId => {
@@ -1793,7 +1793,7 @@ class MessageHandlerSuite
     val client = new ShuffleClientImpl(conf)
     // register shuffle
     var res = client.registerShuffle(appId, shuffleId, 10, 10)
-    assert(res)
+    assert(res == StatusCode.Success)
 
     // push Data
     0 until 10 foreach(reduceId => {
@@ -1808,7 +1808,7 @@ class MessageHandlerSuite
 
     // mapper end
     0 until 10 foreach(mapId => {
-      res = client.mapperEnd(appId, shuffleId, mapId, 0)
+      val res = client.mapperEnd(appId, shuffleId, mapId, 0)
       assert(res)
     })
 

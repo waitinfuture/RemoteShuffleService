@@ -124,7 +124,7 @@ object ControlMessages {
   ) extends MasterMessage
 
   case class ApplicationLostResponse(
-    success: Boolean
+    status: StatusCode
   ) extends MasterMessage
 
   case class HeartBeatFromApplication(

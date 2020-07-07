@@ -4,6 +4,8 @@ import com.aliyun.emr.ess.client.impl.ShuffleClientImpl;
 import com.aliyun.emr.ess.common.EssConf;
 import com.aliyun.emr.ess.protocol.PartitionLocation;
 
+import com.aliyun.emr.ess.protocol.message.StatusCode;
+import scala.Tuple2;
 import scala.concurrent.Future;
 import scala.runtime.BoxedUnit;
 
@@ -43,14 +45,14 @@ public abstract class ShuffleClient implements Cloneable
      * @param numPartitions
      * @return
      */
-    public abstract boolean registerShuffle(
+    public abstract StatusCode registerShuffle(
         String applicationId,
         int shuffleId,
         int numMappers,
         int numPartitions
     );
 
-    public abstract Future<BoxedUnit> pushData(
+    public abstract Tuple2<Future<BoxedUnit>, Integer> pushData(
         String applicationId,
         int shuffleId,
         int mapId,
@@ -69,7 +71,7 @@ public abstract class ShuffleClient implements Cloneable
      * @param offset
      * @param length
      */
-    public abstract Future<BoxedUnit> pushData(
+    public abstract Tuple2<Future<BoxedUnit>, Integer> pushData(
         String applicationId,
         int shuffleId,
         int mapId,

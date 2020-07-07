@@ -363,7 +363,7 @@ class EssConf(loadDefaults: Boolean) extends Cloneable with Logging with Seriali
   }
 }
 
-private[ess] object EssConf extends Logging {
+object EssConf extends Logging {
 
   /**
     * Maps deprecated config keys to information about the deprecation.
@@ -518,6 +518,10 @@ private[ess] object EssConf extends Logging {
 
   def essRpcParallelism(conf: EssConf): Int = {
     conf.getInt("ess.rpc.parallelism", 8)
+  }
+
+  def essRegisterShuffleMaxRetry(conf: EssConf): Int = {
+    conf.getInt("ess.register.shuffle.max.retry", 3)
   }
 }
 
