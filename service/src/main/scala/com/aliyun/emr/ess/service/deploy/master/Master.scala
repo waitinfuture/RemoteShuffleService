@@ -37,7 +37,7 @@ private[deploy] class Master(
   val fs = basePath.getFileSystem(new Configuration())
 
   // Configs
-  private val CHUNK_SIZE = EssConf.essPartitionMemory(conf)
+  private val CHUNK_SIZE = EssConf.essPartitionMemory(conf) * 2 // double buffer
   private val WORKER_TIMEOUT_MS = EssConf.essWorkerTimeoutMs(conf)
   private val APPLICATION_TIMEOUT_MS = EssConf.essApplicationTimeoutMs(conf)
 
@@ -699,14 +699,14 @@ private[deploy] class Master(
     val emptyMap = new util.HashMap[String, PartitionLocation]()
     // ask all workers holding master/slave partition to release resource
     workers.foreach(worker => {
-      val res = worker.endpoint.askSync[DestroyResponse](
+      var res = worker.endpoint.askSync[DestroyResponse](
         Destroy(shuffleKey,
           worker.masterPartitionLocations.getOrDefault(shuffleKey, emptyMap).keySet().toList,
           worker.slavePartitionLocations.getOrDefault(shuffleKey, emptyMap).keySet().toList)
       )
       // retry once to destroy
       if (res.status != StatusCode.Success) {
-        worker.endpoint.askSync[DestroyResponse](
+        res = worker.endpoint.askSync[DestroyResponse](
           Destroy(shuffleKey,
             res.failedMasters,
             res.failedSlaves

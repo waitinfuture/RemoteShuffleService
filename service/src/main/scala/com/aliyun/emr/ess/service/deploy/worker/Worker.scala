@@ -75,11 +75,11 @@ private[deploy] class Worker(
 
   // Memory Pool
   private val MemoryPoolCapacity = EssConf.essMemoryPoolCapacity(conf)
-  private val ChunkSize = EssConf.essPartitionMemory(conf)
+  private val ChunkSize = EssConf.essPartitionMemory(conf) // double buffer
   private val memoryPool = new MemoryPool(MemoryPoolCapacity, ChunkSize)
 
   // worker info
-  private val workerInfo = new WorkerInfo(host, port, MemoryPoolCapacity, ChunkSize, self)
+  private val workerInfo = new WorkerInfo(host, port, MemoryPoolCapacity, ChunkSize * 2, self)
 
   // Threads
   private val forwordMessageScheduler =
@@ -200,18 +200,19 @@ private[deploy] class Worker(
       for (ind <- 0 until masterLocations.size()) {
         val ch1 = masterChunks(ind * 2)
         val ch2 = masterChunks(ind * 2 + 1)
+        val dc = new DoubleChunk(ch1, ch2, memoryPool,
+          EssPathUtil.GetPartitionPath(conf,
+            shuffleKey.split("-").dropRight(1).mkString("-"),
+            shuffleKey.split("-").last.toInt,
+            masterLocations.get(ind).getReduceId,
+            masterLocations.get(ind).getUUID),
+          fs,
+          flushExecutorService
+        )
         masterDoubleChunks.add(
           new PartitionLocationWithDoubleChunks(
             masterLocations.get(ind),
-            new DoubleChunk(ch1, ch2, memoryPool,
-              EssPathUtil.GetPartitionPath(conf,
-                shuffleKey.split("-").dropRight(1).mkString("-"),
-                shuffleKey.split("-").last.toInt,
-                masterLocations.get(ind).getReduceId,
-                masterLocations.get(ind).getUUID),
-              fs,
-              flushExecutorService
-            )
+            dc
           )
         )
       }
@@ -238,18 +239,19 @@ private[deploy] class Worker(
       for (ind <- 0 until slaveLocations.size()) {
         val ch1 = slaveChunks(ind * 2)
         val ch2 = slaveChunks(ind * 2 + 1)
+        val dc = new DoubleChunk(ch1, ch2, memoryPool,
+          EssPathUtil.GetPartitionPath(conf,
+            shuffleKey.split("-").dropRight(1).mkString("-"),
+            shuffleKey.split("-").last.toInt,
+            slaveLocations.get(ind).getReduceId,
+            slaveLocations.get(ind).getUUID),
+          fs,
+          flushExecutorService
+        )
         slaveDoubleChunks.add(
           new PartitionLocationWithDoubleChunks(
             slaveLocations.get(ind),
-            new DoubleChunk(ch1, ch2, memoryPool,
-              EssPathUtil.GetPartitionPath(conf,
-                shuffleKey.split("-").dropRight(1).mkString("-"),
-                shuffleKey.split("-").last.toInt,
-                slaveLocations.get(ind).getReduceId,
-                slaveLocations.get(ind).getUUID),
-              fs,
-              flushExecutorService
-            )
+            dc
           )
         )
       }

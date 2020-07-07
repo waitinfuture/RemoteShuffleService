@@ -4,6 +4,8 @@ import com.aliyun.emr.ess.unsafe.Platform;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.ArrayList;
+
 public class MemoryPool {
     private static final Logger logger = LoggerFactory.getLogger(DoubleChunk.class);
 
@@ -52,8 +54,8 @@ public class MemoryPool {
         chunk.reset();
     }
 
-    public Chunk[] allocateChunks(int size) {
-        Chunk[] ret = new Chunk[size];
+    public ArrayList<Chunk> allocateChunks(int size) {
+        ArrayList<Chunk> ret = new ArrayList<>();
         int retIndx = 0;
         for (int i = 0; i < numSlots; i++) {
             if (retIndx == size) {
@@ -61,8 +63,8 @@ public class MemoryPool {
             }
             if (empty[i]) {
                 empty[i] = false;
-                ret[retIndx] = chunks[i];
-                if (ret[retIndx] == null) {
+                ret.add(chunks[i]);
+                if (ret.get(retIndx) == null) {
                     logger.error("Chunk is NULL!, i " + i + " numSlots " + numSlots);
                 }
                 retIndx++;
@@ -76,6 +78,13 @@ public class MemoryPool {
         for (int i = 0; i < chunks.length; i++) {
             empty[chunks[i].getId()] = true;
             chunks[i].reset();
+        }
+    }
+
+    public void returnChunks(ArrayList<Chunk> chunks) {
+        for (int i = 0; i < chunks.size(); i++) {
+            empty[chunks.get(i).getId()] = true;
+            chunks.get(i).reset();
         }
     }
 }
