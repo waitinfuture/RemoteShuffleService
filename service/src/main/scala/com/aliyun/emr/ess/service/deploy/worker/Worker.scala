@@ -570,25 +570,28 @@ private[deploy] class Worker(
     }
     val doubleChunk = location.asInstanceOf[PartitionLocationWithDoubleChunks].getDoubleChunk
 
+    val isMaster = mode == PartitionLocation.Mode.Master
+
     // append data
-    val appended = doubleChunk.append(body, mode == PartitionLocation.Mode.Master)
-    if (!appended) {
-      val msg = "append data failed!"
-      logError(msg)
-      callback.onFailure(new IOException(msg))
-      return
+    val epoch = try {
+      if (isMaster) doubleChunk.append(body) else doubleChunk.append(body, pushData.epoch)
+    } catch {
+      case e: Exception =>
+        val msg = "append data failed!"
+        logError(s"msg ${e.getMessage}")
+        callback.onFailure(new IOException(msg, e))
+        return
     }
 
     // for master, send data to slave
-    if (EssConf.essReplicate(conf) && mode == PartitionLocation.Mode.Master) {
+    if (EssConf.essReplicate(conf) && isMaster) {
       val peer = location.getPeer
       val client = dataClientFactory.createClient(peer.getHost, peer.getPort)
-      val newPushData = new PushData(
-        PartitionLocation.Mode.Slave.mode(), shuffleKey, partitionId, pushData.body)
+      val newPushData = new PushData(epoch, PartitionLocation.Mode.Slave.mode(),
+        shuffleKey, partitionId, pushData.body)
       pushData.body().retain()
       client.pushData(newPushData, callback)
     } else {
-      // for slave
       callback.onSuccess(ByteBuffer.wrap(new Array[Byte](0)))
     }
   }

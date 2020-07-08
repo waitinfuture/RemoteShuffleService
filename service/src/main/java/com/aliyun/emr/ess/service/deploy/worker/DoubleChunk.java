@@ -11,6 +11,8 @@ import org.slf4j.LoggerFactory;
 import java.io.IOException;
 import java.util.concurrent.ExecutorService;
 
+import scala.Predef;
+
 public class DoubleChunk {
     private static final Logger logger = LoggerFactory.getLogger(DoubleChunk.class);
     private ExecutorService flushExecutorService;
@@ -27,8 +29,11 @@ public class DoubleChunk {
     public ChunkState masterState = ChunkState.Ready;
     // exposed for test
     public boolean flushed = false;
-    FileSystem fs;
-    FSDataOutputStream ostream = null;
+
+    private final FileSystem fs;
+    private FSDataOutputStream ostream = null;
+
+    private long epoch;
 
     public enum ChunkState {
         Ready, Flushing;
@@ -64,115 +69,88 @@ public class DoubleChunk {
         chunks[(working + 1) % 2].append(slaveData);
     }
 
-    public boolean append(byte[] data) {
-        return append(data, true);
-    }
-
-    public boolean append(byte[] data, boolean flush) {
+    /**
+     * assume data size is less than chunk capacity
+     *
+     * @param data
+     * @return current epoch
+     */
+    public long append(ByteBuf data) throws Exception {
         if (flushed) {
-            logger.error("already flushed!");
-            return false;
+            String msg = "already flushed!";
+            logger.error(msg);
+            throw new Exception(msg);
         }
         synchronized (this) {
-            if (chunks[working].remaining() >= data.length) {
+            if (chunks[working].remaining() >= data.readableBytes()) {
                 chunks[working].append(data);
-                return true;
+                return epoch;
             }
-            // if slave is flusing, wait for slave finish flushing
+            // if slave is flushing, wait for slave finish flushing
             while (slaveState == ChunkState.Flushing) {
                 logger.info("slave chunk is flushing, wait for slave to finish...");
-                try {
-                    Thread.sleep(50);
-                } catch (Exception e) {
-                    logger.error("sleep throws Exception", e);
-                    return false;
-                }
+                Thread.sleep(50);
             }
             // now slave is empty, switch to slave and append data
+            epoch++;
             working = (working + 1) % 2;
-            int slaveIndex = (working + 1) % 2;
-            chunks[working].append(data);
-            if (flush) {
-                // create new thread to flush the full chunk
-                slaveState = ChunkState.Flushing;
-                Thread flushThread = new Thread() {
-                    @Override
-                    public void run() {
-                        try {
-                            if (ostream == null) {
-                                ostream = fs.create(fileName);
-                            }
-                            chunks[slaveIndex].flushData(ostream, flush);
-                            slaveState = ChunkState.Ready;
-                        } catch (Exception e) {
-                            logger.error("create OutputStream failed!", e);
-                        }
-                    }
-                };
-                flushThread.start();
-            } else {
-                chunks[slaveIndex].reset();
-            }
-            return true;
-        }
-    }
+            final int slaveIndex = (working + 1) % 2;
 
-    public boolean append(ByteBuf data) {
-        return append(data, true);
+            chunks[working].append(data);
+
+            // async flush the full chunk
+            slaveState = ChunkState.Flushing;
+            flushExecutorService.submit(() -> {
+                try {
+                    if (ostream == null) {
+                        ostream = fs.create(fileName);
+                    }
+                    chunks[slaveIndex].flushData(ostream, true);
+                    slaveState = ChunkState.Ready;
+                } catch (Exception e) {
+                    logger.error("create OutputStream failed!", e);
+                }
+            });
+
+            return epoch;
+        }
     }
 
     /**
      * assume data size is less than chunk capacity
      *
      * @param data
-     * @param flush whether to flush or just abandon
-     * @return
+     * @return current epoch
      */
-    public boolean append(ByteBuf data, boolean flush) {
+    public long append(ByteBuf data, long dataEpoch) throws Exception {
         if (flushed) {
-            logger.error("already flushed!");
-            return false;
+            String msg = "already flushed!";
+            logger.error(msg);
+            throw new Exception(msg);
         }
         synchronized (this) {
-            if (chunks[working].remaining() >= data.readableBytes()) {
-                chunks[working].append(data);
-                return true;
+            if (dataEpoch < epoch) {
+                logger.info(String.format("drop data of epoch %s, current epoch %s", dataEpoch, epoch));
+                return epoch;
             }
-            // if slave is flusing, wait for slave finish flushing
-            while (slaveState == ChunkState.Flushing) {
-                logger.info("slave chunk is flushing, wait for slave to finish...");
-                try {
-                    Thread.sleep(50);
-                } catch (Exception e) {
-                    logger.error("sleep throws Exception", e);
-                    return false;
-                }
-            }
-            // now slave is empty, switch to slave and append data
-            working = (working + 1) % 2;
-            int slaveIndex = (working + 1) % 2;
-            chunks[working].append(data);
-            if (flush) {
-                // async flush the full chunk
-                slaveState = ChunkState.Flushing;
-                flushExecutorService.submit(new Runnable() {
-                    @Override
-                    public void run() {
-                        try {
-                            if (ostream == null) {
-                                ostream = fs.create(fileName);
-                            }
-                            chunks[slaveIndex].flushData(ostream, flush);
-                            slaveState = ChunkState.Ready;
-                        } catch (Exception e) {
-                            logger.error("create OutputStream failed!", e);
-                        }
-                    }
-                });
-            } else {
+
+            if (dataEpoch > epoch) {
+                logger.info(String.format("new epoch %s, current epoch %s", dataEpoch, epoch));
+                epoch = dataEpoch;
+                working = (working + 1) % 2;
+                final int slaveIndex = (working + 1) % 2;
                 chunks[slaveIndex].reset();
             }
-            return true;
+
+            if (chunks[working].remaining() < data.readableBytes()) {
+                String msg = "no space!";
+                logger.error(msg);
+                throw new Exception(msg);
+            }
+
+            chunks[working].append(data);
+
+            return epoch;
         }
     }
 
