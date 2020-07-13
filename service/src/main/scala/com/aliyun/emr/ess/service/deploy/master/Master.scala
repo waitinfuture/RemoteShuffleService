@@ -130,7 +130,9 @@ private[deploy] class Master(
     } else null
 
     // add into blacklist
-    failed.foreach(w => blacklist.add(w.hostPort))
+    if (failed != null) {
+      failed.foreach(w => blacklist.add(w.hostPort))
+    }
 
     failed
   }
