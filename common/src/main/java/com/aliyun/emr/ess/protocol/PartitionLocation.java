@@ -17,8 +17,6 @@ public class PartitionLocation implements Serializable
         public byte mode() { return mode; }
     };
 
-    private int reduceId;
-
     public static PartitionLocation.Mode getMode(byte mode) {
         if (mode == 0) {
             return Mode.Master;
@@ -27,7 +25,8 @@ public class PartitionLocation implements Serializable
         }
     }
 
-    private String UUID;
+    private int reduceId;
+    private int epoch;
     private String host;
     private int port;
     private Mode mode;
@@ -35,20 +34,20 @@ public class PartitionLocation implements Serializable
 
     public PartitionLocation(PartitionLocation loc) {
         this.reduceId = loc.reduceId;
-        this.UUID = loc.UUID;
+        this.epoch = loc.epoch;
         this.host = loc.host;
         this.port = loc.port;
         this.mode = loc.mode;
         this.peer = loc.peer;
     }
 
-    public PartitionLocation(int reduceId, String UUID, String host, int port, Mode mode) {
-        this(reduceId, UUID, host, port, mode, null);
+    public PartitionLocation(int reduceId, int epoch, String host, int port, Mode mode) {
+        this(reduceId, epoch, host, port, mode, null);
     }
 
-    public PartitionLocation(int reduceId, String UUID, String host, int port, Mode mode, PartitionLocation peer) {
+    public PartitionLocation(int reduceId, int epoch, String host, int port, Mode mode, PartitionLocation peer) {
         this.reduceId = reduceId;
-        this.UUID = UUID;
+        this.epoch = epoch;
         this.host = host;
         this.port = port;
         this.mode = mode;
@@ -65,12 +64,12 @@ public class PartitionLocation implements Serializable
         this.reduceId = reduceId;
     }
 
-    public String getUUID() {
-        return UUID;
+    public int getEpoch() {
+        return epoch;
     }
 
-    public void setUUID(String uuid) {
-        UUID = uuid;
+    public void setEpoch(int epoch) {
+        this.epoch = epoch;
     }
 
     public String getHost() {
@@ -109,23 +108,27 @@ public class PartitionLocation implements Serializable
         this.peer = peer;
     }
 
+    public String getUniqueId() {
+        return reduceId + "-" + epoch;
+    }
+
     @Override
     public boolean equals(Object other) {
         if (!(other instanceof PartitionLocation)) {
             return false;
         }
         PartitionLocation o = (PartitionLocation) other;
-        return reduceId == o.reduceId && host.equals(o.host) && port == o.port && UUID.equals(o.UUID);
+        return reduceId == o.reduceId && host.equals(o.host) && port == o.port && epoch == o.epoch;
     }
 
     @Override
     public int hashCode() {
-        return (reduceId + host + port + UUID).hashCode();
+        return (reduceId + host + port + epoch).hashCode();
     }
 
     @Override
     public String toString() {
-        return reduceId + " " + UUID + " " + host + ":" + port + " " + "Mode: " + mode + (peer ==
+        return reduceId + " " + epoch + " " + host + ":" + port + " " + "Mode: " + mode + (peer ==
             null);
     }
 }

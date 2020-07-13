@@ -9,8 +9,8 @@ public class PartitionLocationWithDoubleChunksSuiteJ {
     @Test
     public void testEquals() {
         List<PartitionLocationWithDoubleChunks> list = new ArrayList<>();
-        PartitionLocation p1 = new PartitionLocation(0, "p1", "host1", 10, PartitionLocation.Mode.Slave);
-        PartitionLocation p2 = new PartitionLocation(1, "p2", "host1", 11, PartitionLocation.Mode.Slave);
+        PartitionLocation p1 = new PartitionLocation(0, 0, "host1", 10, PartitionLocation.Mode.Slave);
+        PartitionLocation p2 = new PartitionLocation(1, 1, "host1", 11, PartitionLocation.Mode.Slave);
         PartitionLocationWithDoubleChunks pd1 = new PartitionLocationWithDoubleChunks(p1, null);
         PartitionLocationWithDoubleChunks pd2 = new PartitionLocationWithDoubleChunks(p2, null);
         list.add(pd1);
@@ -26,7 +26,7 @@ public class PartitionLocationWithDoubleChunksSuiteJ {
         map.put(pd2, pd2);
 
         PartitionLocation p =
-            new PartitionLocation(0, "p1", "host1", 10, PartitionLocation.Mode.Slave);
+            new PartitionLocation(0, 0, "host1", 10, PartitionLocation.Mode.Slave);
         assert map.containsKey(p);
 
         map.remove(p1);
@@ -38,7 +38,7 @@ public class PartitionLocationWithDoubleChunksSuiteJ {
         PartitionLocation p3 = new PartitionLocationWithDoubleChunks(
             new PartitionLocation(
                 2,
-                "3fe66fbc-a588-40e8-8755-fd5255dfca15",
+                1,
                 "30.225.12.48",
                 9097,
                 PartitionLocation.Mode.Master
@@ -48,7 +48,7 @@ public class PartitionLocationWithDoubleChunksSuiteJ {
         map2.put(p3, p3);
         PartitionLocation p4 = new PartitionLocation(
             2,
-            "3fe66fbc-a588-40e8-8755-fd5255dfca15",
+            1,
             "30.225.12.48",
             9097,
             PartitionLocation.Mode.Slave

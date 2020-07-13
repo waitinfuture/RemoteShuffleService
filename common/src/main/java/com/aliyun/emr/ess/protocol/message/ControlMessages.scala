@@ -51,7 +51,7 @@ object ControlMessages {
   case class Revive(
     applicationId: String,
     shuffleId: Int,
-    reduceId: Int
+    oldPartition: PartitionLocation
   ) extends MasterMessage
 
   case class ReviveResponse(

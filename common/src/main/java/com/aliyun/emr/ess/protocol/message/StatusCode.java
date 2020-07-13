@@ -14,7 +14,6 @@ public enum StatusCode
     SlotNotAvailable,
     WorkerNotFound,
     PartitionNotFound,
-    MasterPartitionNotFound,
     SlavePartitionNotFound,
     DeleteFilesFailed,
     PartitionExists,

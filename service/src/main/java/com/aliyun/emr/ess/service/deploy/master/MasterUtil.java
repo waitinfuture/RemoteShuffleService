@@ -1,7 +1,6 @@
 package com.aliyun.emr.ess.service.deploy.master;
 
 import com.aliyun.emr.ess.protocol.PartitionLocation;
-import com.aliyun.emr.ess.service.deploy.worker.Chunk;
 import com.aliyun.emr.ess.service.deploy.worker.WorkerInfo;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -21,12 +20,12 @@ public class MasterUtil {
                 slots.get(worker);
             HashSet<String> ids = new HashSet<>();
             for (int i = 0; i < allocatedSlots._1.size(); i++) {
-                ids.add(allocatedSlots._1.get(i).getUUID());
+                ids.add(allocatedSlots._1.get(i).getUniqueId());
             }
             worker.removeMasterPartition(shuffleKey, ids);
             ids.clear();
             for (int i = 0; i < allocatedSlots._2.size(); i++) {
-                ids.add(allocatedSlots._2.get(i).getUUID());
+                ids.add(allocatedSlots._2.get(i).getUniqueId());
             }
             worker.removeSlavePartition(shuffleKey, ids);
         }
@@ -34,16 +33,29 @@ public class MasterUtil {
 
     public static Map<WorkerInfo,
         Tuple2<List<PartitionLocation>, List<PartitionLocation>>> offerSlots(
+        String shuffleKey,
+        List<WorkerInfo> workers,
+        List<Integer> reduceIds) {
+        int[] oldEpochs = new int[reduceIds.size()];
+        for (int i = 0; i < oldEpochs.length; i++) {
+            oldEpochs[i] = -1;
+        }
+        return offerSlots(shuffleKey, workers, reduceIds, oldEpochs);
+    }
+
+    public static Map<WorkerInfo,
+        Tuple2<List<PartitionLocation>, List<PartitionLocation>>> offerSlots(
             String shuffleKey,
             List<WorkerInfo> workers,
-            List<Integer> reduceIds) {
+            List<Integer> reduceIds,
+            int[] oldEpochs) {
         // master partition index
         logger.info("inside offerSlots, reduceId num " + reduceIds.size());
         int masterInd = 0;
         Map<WorkerInfo, Tuple2<List<PartitionLocation>, List<PartitionLocation>>> slots =
                 new HashMap<>();
         // foreach iteration, allocate both master and slave partitions
-        for(int p = 0; p < reduceIds.size(); p++) {
+        for(int idx = 0; idx < reduceIds.size(); idx++) {
             int nextMasterInd = masterInd;
             // try to find slot for master partition
             while (!workers.get(nextMasterInd).slotAvailable()) {
@@ -74,24 +86,23 @@ public class MasterUtil {
             }
             // now nextMasterInd/nextSlaveInd point to
             // available master/slave partition respectively
-            String partitionId = UUID.randomUUID().toString();
-//            String partitionId = "aaa";
 
+            int newEpoch = oldEpochs[idx] + 1;
             // new slave and master locations
             slots.putIfAbsent(workers.get(nextMasterInd),
                     new Tuple2<>(new ArrayList<>(), new ArrayList<>()));
             Tuple2<List<PartitionLocation>, List<PartitionLocation>> locations =
                     slots.get(workers.get(nextMasterInd));
             PartitionLocation slaveLocation = new PartitionLocation(
-                reduceIds.get(p),
-                partitionId,
+                reduceIds.get(idx),
+                newEpoch,
                 workers.get(nextSlaveInd).host(),
                 workers.get(nextSlaveInd).port(),
                 PartitionLocation.Mode.Slave
             );
             PartitionLocation masterLocation = new PartitionLocation(
-                reduceIds.get(p),
-                partitionId,
+                reduceIds.get(idx),
+                newEpoch,
                 workers.get(nextMasterInd).host(),
                 workers.get(nextMasterInd).port(),
                 PartitionLocation.Mode.Master,
@@ -130,7 +141,7 @@ public class MasterUtil {
             if (workers.get(curInd).slotAvailable()) {
                 PartitionLocation location = new PartitionLocation(
                     masterLocation.getReduceId(),
-                    masterLocation.getUUID(),
+                    masterLocation.getEpoch(),
                     workers.get(curInd).host(),
                     workers.get(curInd).port(),
                     PartitionLocation.Mode.Slave,

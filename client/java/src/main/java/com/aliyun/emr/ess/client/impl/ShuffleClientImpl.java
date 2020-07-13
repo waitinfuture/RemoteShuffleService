@@ -167,16 +167,17 @@ public class ShuffleClientImpl extends ShuffleClient {
         }
     }
 
-    private boolean revive(String applicationId, int shuffleId, int reduceId) {
+    private boolean revive(String applicationId, int shuffleId, PartitionLocation location) {
+        logger.info("Revive " + Utils.makeReducerKey(applicationId, shuffleId, location.getReduceId()));
         ReviveResponse response = master.askSync(
-            new Revive(applicationId, shuffleId, reduceId),
+            new Revive(applicationId, shuffleId, location),
             ClassTag$.MODULE$.apply(ReviveResponse.class)
         );
 
         // per partitionKey only serve single PartitionLocation in Client Cache.
         if (response.status().equals(StatusCode.Success)) {
             reducePartitionMap.put(
-                Utils.makeReducerKey(applicationId, shuffleId, reduceId),
+                Utils.makeReducerKey(applicationId, shuffleId, location.getReduceId()),
                 response.partitionLocation()
             );
             return true;
@@ -262,8 +263,7 @@ public class ShuffleClientImpl extends ShuffleClient {
             }
         };
 
-        NettyManagedBuffer buffer = new NettyManagedBuffer(Unpooled.wrappedBuffer(data));
-        pushData0(applicationId, shuffleId, reduceId, buffer, loc, true, callback);
+        pushData0(applicationId, shuffleId, data, loc, true, callback);
 
         return result.future();
     }
@@ -273,13 +273,13 @@ public class ShuffleClientImpl extends ShuffleClient {
     private void pushData0(
             String applicationId,
             int shuffleId,
-            int reduceId,
-            NettyManagedBuffer buffer,
+            byte[] data,
             PartitionLocation location,
             boolean firstTry,
             RpcResponseCallback callback) {
         String shuffleKey = Utils.makeShuffleKey(applicationId, shuffleId);
-        PushData pushData =new PushData(MASTER_MODE, shuffleKey, location.getUUID(), buffer);
+        NettyManagedBuffer buffer = new NettyManagedBuffer(Unpooled.wrappedBuffer(data));
+        PushData pushData =new PushData(MASTER_MODE, shuffleKey, location.getUniqueId(), buffer);
 
         RpcResponseCallback wrappedCallback;
         if (firstTry) {
@@ -291,8 +291,9 @@ public class ShuffleClientImpl extends ShuffleClient {
 
                 @Override
                 public void onFailure(Throwable e) {
-                    if (revive(applicationId, shuffleId, reduceId)) {
-                        pushData0(applicationId, shuffleId, reduceId, buffer, location,
+                    logger.warn("pushdata first try failed", e);
+                    if (revive(applicationId, shuffleId, location)) {
+                        pushData0(applicationId, shuffleId, data, location,
                                 false, callback);
                     } else {
                         logger.error("Revive failed!");

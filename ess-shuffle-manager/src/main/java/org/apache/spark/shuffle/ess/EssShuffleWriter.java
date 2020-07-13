@@ -229,7 +229,7 @@ public class EssShuffleWriter<K, V, C> extends ShuffleWriter<K, V> {
         while (futures.size() > MAX_INFLIGHT) {
             try {
                 Thread.sleep(50);
-                logger.info("reach max inflight, wait...");
+                logger.debug("reach max inflight, wait...");
             } catch (Exception e) {
                 logger.error("sleep caught exception");
             }
@@ -275,6 +275,8 @@ public class EssShuffleWriter<K, V, C> extends ShuffleWriter<K, V> {
                 ThreadUtils.awaitReady(future, new FiniteDuration(30, TimeUnit.SECONDS));
             } catch (SparkException e) {
                 throw new IOException("Failed to get future result.", e);
+            } catch (Exception e) {
+                logger.error("close timeout for shuffle " + sparkConf.getAppId() + "-" + shuffleId);
             }
         }
         futures.clear();

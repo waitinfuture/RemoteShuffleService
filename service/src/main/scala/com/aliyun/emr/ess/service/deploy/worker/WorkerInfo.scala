@@ -13,19 +13,20 @@ private[ess] class WorkerInfo(
   val port: Int,
   val memory: Long,
   val partitionSize: Long,
-  val endpoint: RpcEndpointRef) extends Serializable {
+  val endpoint: RpcEndpointRef)
+  extends Serializable {
 
   Utils.checkHost(host)
   assert(port > 0)
 
   var memoryUsed: Long = _
   var lastHeartbeat: Long = _
-  // key: shuffleKey  value: master locations
+  // key: shuffleKey  value: (reduceId, master locations)
+  type PartitionInfo = util.HashMap[String, util.Map[Int, util.List[PartitionLocation]]]
   val masterPartitionLocations =
-    new util.HashMap[String, util.Map[String, PartitionLocation]]()
-  // key: shuffleKey  value: slave locations
+    new PartitionInfo()
   val slavePartitionLocations =
-    new util.HashMap[String, util.Map[String, PartitionLocation]]()
+    new PartitionInfo()
 
   init()
 
@@ -40,101 +41,236 @@ private[ess] class WorkerInfo(
   }
 
   def hostPort: String = {
-    assert (port > 0)
+    assert(port > 0)
     host + ":" + port
   }
 
-  def addMasterPartition(shuffleKey: String, location: PartitionLocation): Unit = {
-    masterPartitionLocations.putIfAbsent(shuffleKey,
-      new util.HashMap[String, PartitionLocation]())
-    val masterLocs = masterPartitionLocations.get(shuffleKey)
-    masterLocs.put(location.getUUID, location)
+  def addPartition(shuffleKey: String,
+    location: PartitionLocation,
+    partitionInfo: PartitionInfo): Unit = {
+    partitionInfo.putIfAbsent(shuffleKey,
+      new util.HashMap[Int, util.List[PartitionLocation]]())
+    val reduceLocMap = partitionInfo.get(shuffleKey)
+    reduceLocMap.putIfAbsent(location.getReduceId, new util.ArrayList[PartitionLocation]())
+    val locs = reduceLocMap.get(location.getReduceId)
+    locs.add(location)
     memoryUsed += partitionSize
+  }
+
+  def addPartition(shuffleKey: String,
+    locations: util.List[PartitionLocation],
+    partitionInfo: PartitionInfo): Unit = {
+    partitionInfo.putIfAbsent(shuffleKey,
+      new util.HashMap[Int, util.List[PartitionLocation]]())
+    val reduceLocMap = partitionInfo.get(shuffleKey)
+    locations.foreach(loc => {
+      reduceLocMap.putIfAbsent(loc.getReduceId, new util.ArrayList[PartitionLocation]())
+      val locs = reduceLocMap.get(loc.getReduceId)
+      locs.add(loc)
+    })
+    memoryUsed += partitionSize * locations.size()
+  }
+
+  def addMasterPartition(shuffleKey: String, location: PartitionLocation): Unit = {
+    addPartition(shuffleKey, location, masterPartitionLocations)
   }
 
   def addMasterPartition(shuffleKey: String, locations: util.List[PartitionLocation]): Unit = {
-    masterPartitionLocations.putIfAbsent(shuffleKey,
-      new util.HashMap[String, PartitionLocation]())
-    val masterLocs = masterPartitionLocations.get(shuffleKey)
-    locations.foreach(loc => masterLocs.put(loc.getUUID, loc))
-    memoryUsed += partitionSize * locations.size()
+    addPartition(shuffleKey, locations, masterPartitionLocations)
   }
 
   def addSlavePartition(shuffleKey: String, location: PartitionLocation): Unit = {
-    slavePartitionLocations.putIfAbsent(shuffleKey,
-      new util.HashMap[String, PartitionLocation]())
-    val slaveLocs = slavePartitionLocations.get(shuffleKey)
-    slaveLocs.put(location.getUUID, location)
-    memoryUsed += partitionSize
+    addPartition(shuffleKey, location, slavePartitionLocations)
   }
 
   def addSlavePartition(shuffleKey: String, locations: util.List[PartitionLocation]): Unit = {
-    slavePartitionLocations.putIfAbsent(shuffleKey,
-      new util.HashMap[String, PartitionLocation]())
-    val slaveLocs = slavePartitionLocations.get(shuffleKey)
-    locations.foreach(loc => slaveLocs.put(loc.getUUID, loc))
-    memoryUsed += partitionSize * locations.size()
+    addPartition(shuffleKey, locations, slavePartitionLocations)
   }
 
-  def removeMasterPartition(shuffleKey: String, id: String): Unit = {
-    if (!masterPartitionLocations.containsKey(shuffleKey)) {
+  def removePartition(shuffleKey: String,
+    uniqueId: String,
+    partitionInfo: PartitionInfo
+  ): Unit = {
+    if (!partitionInfo.containsKey(shuffleKey)) {
       return
     }
-    val masterLocs = masterPartitionLocations.get(shuffleKey)
-    val removed = masterLocs.remove(id)
-    if (removed != null) {
-      memoryUsed -= partitionSize
-    }
-    if (masterLocs.size() == 0) {
-      masterPartitionLocations.remove(shuffleKey)
-    }
-  }
-
-  def removeMasterPartition(shuffleKey: String, ids: util.Collection[String]): Unit = {
-    if (!masterPartitionLocations.containsKey(shuffleKey)) {
-      return
-    }
-    val masterLocs = masterPartitionLocations.get(shuffleKey)
-    ids.foreach(id => {
-      val removed = masterLocs.remove(id)
-      if (removed != null) {
+    val tokens = uniqueId.split("-")
+    val reduceId = tokens(0).toInt
+    val epoch = tokens(1).toInt
+    val reduceLocMap = partitionInfo.get(shuffleKey)
+    val locs = reduceLocMap.get(reduceId)
+    if (locs != null) {
+      val res = locs.find(_.getEpoch == epoch).orNull
+      if (res != null) {
+        locs.remove(res)
         memoryUsed -= partitionSize
       }
-    })
-    if (masterLocs.size() == 0) {
-      masterPartitionLocations.remove(shuffleKey)
+      if (locs.size() == 0) {
+        reduceLocMap.remove(reduceId)
+      }
+    }
+
+    if (reduceLocMap.size() == 0) {
+      partitionInfo.remove(shuffleKey)
     }
   }
 
-  def removeSlavePartition(shuffleKey: String, id: String): Unit = {
-    if (!slavePartitionLocations.containsKey(shuffleKey)) {
+  def removePartition(shuffleKey: String,
+    uniqueIds: util.Collection[String],
+    partitionInfo: PartitionInfo): Unit = {
+    if (!partitionInfo.containsKey(shuffleKey)) {
       return
     }
-    val slaveLocs = slavePartitionLocations.get(shuffleKey)
-    val removed = slaveLocs.remove(id)
-    if (removed != null) {
-      memoryUsed -= partitionSize
+    val reduceLocMap = partitionInfo.get(shuffleKey)
+    uniqueIds.foreach(id => {
+      val tokens = id.split("-")
+      val reduceId = tokens(0).toInt
+      val epoch = tokens(1).toInt
+      val locs = reduceLocMap.get(reduceId)
+      if (locs != null) {
+        val res = locs.find(_.getEpoch == epoch).orNull
+        if (res != null) {
+          locs.remove(res)
+          memoryUsed -= partitionSize
+        }
+        if (locs.size() == 0) {
+          reduceLocMap.remove(reduceId)
+        }
+      }
+    })
+
+    if (reduceLocMap.size() == 0) {
+      partitionInfo.remove(shuffleKey)
     }
-    if (slaveLocs.size() == 0) {
-      slavePartitionLocations.remove(shuffleKey)
-    }
+  }
+
+  def removeMasterPartition(shuffleKey: String, uniqueId: String): Unit = {
+    removePartition(shuffleKey, uniqueId, masterPartitionLocations)
+  }
+
+  def removeMasterPartition(shuffleKey: String, uniqueIds: util.Collection[String]): Unit = {
+    removePartition(shuffleKey, uniqueIds, masterPartitionLocations)
+  }
+
+  def removeMasterPartition(shuffleKey: String): Unit = {
+    val uniqueIds = getAllMasterIds(shuffleKey)
+    removeMasterPartition(shuffleKey, uniqueIds)
+    masterPartitionLocations.remove(shuffleKey)
+  }
+
+  def removeSlavePartition(shuffleKey: String, uniqueId: String): Unit = {
+    removePartition(shuffleKey, uniqueId, slavePartitionLocations)
   }
 
   def removeSlavePartition(shuffleKey: String,
-    locations: util.Collection[String]): Unit = {
-    if (!slavePartitionLocations.containsKey(shuffleKey)) {
-      return
+    uniqueIds: util.Collection[String]): Unit = {
+    removePartition(shuffleKey, uniqueIds, slavePartitionLocations)
+  }
+
+  def removeSlavePartition(shuffleKey: String): Unit = {
+    val uniqueIds = getAllSlaveIds(shuffleKey)
+    removeSlavePartition(shuffleKey, uniqueIds)
+    slavePartitionLocations.remove(shuffleKey)
+  }
+
+  def getAllIds(shuffleKey: String, partitionInfo: PartitionInfo): util.List[String] = {
+    if (!partitionInfo.containsKey(shuffleKey)) {
+      return null
     }
-    val slaveLocs = slavePartitionLocations.get(shuffleKey)
-    locations.foreach(loc => {
-      val removed = slaveLocs.remove(loc)
-      if (removed != null) {
-        memoryUsed -= partitionSize
+    new util.ArrayList(
+      partitionInfo.get(shuffleKey)
+        .values()
+        .flatMap(l => l)
+        .map(_.getUniqueId)
+    )
+  }
+
+  def getAllMasterIds(shuffleKey: String): util.List[String] = {
+    getAllIds(shuffleKey, masterPartitionLocations)
+  }
+
+  def getAllSlaveIds(shuffleKey: String): util.List[String] = {
+    getAllIds(shuffleKey, slavePartitionLocations)
+  }
+
+  def getAllMasterLocations(shuffleKey: String): util.List[PartitionLocation] = {
+    new util.ArrayList[PartitionLocation](
+      masterPartitionLocations.get(shuffleKey)
+        .values()
+        .flatMap(l => l)
+    )
+  }
+
+  def getAllSlaveLocations(shuffleKey: String): util.List[PartitionLocation] = {
+    new util.ArrayList[PartitionLocation](
+      slavePartitionLocations.get(shuffleKey)
+        .values()
+        .flatMap(l => l)
+    )
+  }
+
+  def setMasterPeer(shuffleKey: String, loc: PartitionLocation, peer: PartitionLocation): Unit = {
+    masterPartitionLocations.get(shuffleKey).get(loc.getReduceId)
+      .find(l => l.getEpoch == loc.getEpoch).get
+      .setPeer(peer)
+  }
+
+  def getLocation(shuffleKey: String, uniqueId: String,
+    mode: PartitionLocation.Mode): PartitionLocation = {
+    val tokens = uniqueId.split("-")
+    val reduceId = tokens(0).toInt
+    val epoch = tokens(1).toInt
+    val partitionInfo = if (mode == PartitionLocation.Mode.Master) {
+      masterPartitionLocations
+    } else slavePartitionLocations
+
+    partitionInfo.get(shuffleKey)
+      .get(reduceId)
+      .find(loc => loc.getEpoch == epoch).orNull
+  }
+
+  def getMasterLocation(shuffleKey: String, uniqueId: String): PartitionLocation = {
+    getLocation(shuffleKey, uniqueId, PartitionLocation.Mode.Master)
+  }
+
+  def getSlaveLocation(shuffleKey: String, uniqueId: String): PartitionLocation = {
+    getLocation(shuffleKey, uniqueId, PartitionLocation.Mode.Slave)
+  }
+
+  def getLocationWithMaxEpoch(shuffleKey: String, reduceId: Int): Option[PartitionLocation] = {
+    if (!masterPartitionLocations.containsKey(shuffleKey) ||
+      !masterPartitionLocations.get(shuffleKey).containsKey(reduceId)) {
+      return None
+    }
+    val locs = masterPartitionLocations.get(shuffleKey).get(reduceId)
+    if (locs == null || locs.size() == 0) {
+      return None
+    }
+    var curentEpoch = -1
+    var currentPartition: PartitionLocation = null
+    locs.foreach(loc => {
+      if (loc.getEpoch > curentEpoch) {
+        curentEpoch = loc.getEpoch
+        currentPartition = loc
       }
     })
-    if (slaveLocs.size() == 0) {
-      slavePartitionLocations.remove(shuffleKey)
-    }
+    Some(currentPartition)
+  }
+
+  def containsShuffleMaster(shuffleKey: String): Boolean = {
+    masterPartitionLocations.containsKey(shuffleKey)
+  }
+
+  def containsShuffleSlave(shuffleKey: String): Boolean = {
+    slavePartitionLocations.containsKey(shuffleKey)
+  }
+
+  def getMasterShuffleKeys(): util.Set[String] = {
+    masterPartitionLocations.keySet()
+  }
+
+  def getSlaveShuffleKeys(): util.Set[String] = {
+    slavePartitionLocations.keySet()
   }
 
   def clearAll(): Unit = {
@@ -145,29 +281,29 @@ private[ess] class WorkerInfo(
 
   def hasSameInfoWith(other: WorkerInfo): Boolean = {
     memory == other.memory &&
-    memoryUsed == other.memoryUsed &&
-    hostPort == other.hostPort &&
-    partitionSize == other.partitionSize &&
-    masterPartitionLocations.size() == other.masterPartitionLocations.size() &&
-    masterPartitionLocations.keySet().forall(key => {
-      other.masterPartitionLocations.keySet().contains(key)
-    }) &&
-    masterPartitionLocations.forall(entry => {
-      val shuffleKey = entry._1
-      val masters = entry._2
-      val otherMasters = other.masterPartitionLocations.get(shuffleKey)
-      masters.forall(loc => otherMasters.contains(loc._1))
-    }) &&
-    slavePartitionLocations.size() == other.slavePartitionLocations.size() &&
-    slavePartitionLocations.keySet().forall((key => {
-      other.slavePartitionLocations.keySet().contains(key)
-    })) &&
-    slavePartitionLocations.forall(entry => {
-      val shuffleKey = entry._1
-      val slaves = entry._2
-      val otherSlaves = other.slavePartitionLocations.get(shuffleKey)
-      slaves.forall(loc => otherSlaves.contains(loc._1))
-    })
+      memoryUsed == other.memoryUsed &&
+      hostPort == other.hostPort &&
+      partitionSize == other.partitionSize &&
+      masterPartitionLocations.size() == other.masterPartitionLocations.size() &&
+      masterPartitionLocations.keySet().forall(key => {
+        other.masterPartitionLocations.keySet().contains(key)
+      }) &&
+      masterPartitionLocations.forall(entry => {
+        val shuffleKey = entry._1
+        val masters = entry._2
+        val otherMasters = other.masterPartitionLocations.get(shuffleKey)
+        masters.forall(loc => otherMasters.contains(loc._1))
+      }) &&
+      slavePartitionLocations.size() == other.slavePartitionLocations.size() &&
+      slavePartitionLocations.keySet().forall((key => {
+        other.slavePartitionLocations.keySet().contains(key)
+      })) &&
+      slavePartitionLocations.forall(entry => {
+        val shuffleKey = entry._1
+        val slaves = entry._2
+        val otherSlaves = other.slavePartitionLocations.get(shuffleKey)
+        slaves.forall(loc => otherSlaves.contains(loc._1))
+      })
 
   }
 

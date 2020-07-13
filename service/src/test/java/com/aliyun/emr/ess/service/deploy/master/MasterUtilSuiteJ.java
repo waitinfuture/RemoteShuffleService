@@ -34,22 +34,22 @@ public class MasterUtilSuiteJ {
         assert slots.get(workers.get(0))._1.get(0).getHost().equals("host1");
         assert slots.get(workers.get(0))._1.get(0).getPort() == 10;
         assert slots.get(workers.get(0))._1.get(0).getPeer() != null;
-        assert slots.get(workers.get(0))._1.get(0).getPeer().getUUID() ==
-                slots.get(workers.get(1))._2.get(0).getUUID();
+        assert slots.get(workers.get(0))._1.get(0).getPeer().getEpoch() ==
+                slots.get(workers.get(1))._2.get(0).getEpoch();
 
         assert slots.get(workers.get(1))._1.get(0).getMode() == PartitionLocation.Mode.Master;
         assert slots.get(workers.get(1))._1.get(0).getHost().equals("host2");
         assert slots.get(workers.get(1))._1.get(0).getPort() == 11;
         assert slots.get(workers.get(1))._1.get(0).getPeer() != null;
-        assert slots.get(workers.get(1))._1.get(0).getPeer().getUUID() ==
-                slots.get(workers.get(2))._2.get(0).getUUID();
+        assert slots.get(workers.get(1))._1.get(0).getPeer().getEpoch() ==
+                slots.get(workers.get(2))._2.get(0).getEpoch();
 
         assert slots.get(workers.get(2))._1.get(0).getMode() == PartitionLocation.Mode.Master;
         assert slots.get(workers.get(2))._1.get(0).getHost().equals("host3");
         assert slots.get(workers.get(2))._1.get(0).getPort() == 12;
         assert slots.get(workers.get(2))._1.get(0).getPeer() != null;
-        assert slots.get(workers.get(2))._1.get(0).getPeer().getUUID() ==
-                slots.get(workers.get(0))._2.get(0).getUUID();
+        assert slots.get(workers.get(2))._1.get(0).getPeer().getEpoch() ==
+                slots.get(workers.get(0))._2.get(0).getEpoch();
 
         assert workers.get(0).freeMemory() == 1000;
         assert workers.get(1).freeMemory() == 1000;

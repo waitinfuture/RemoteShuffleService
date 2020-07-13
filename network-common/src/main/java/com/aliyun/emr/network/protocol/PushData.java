@@ -14,7 +14,7 @@ public final class PushData extends AbstractMessage implements RequestMessage {
     public final byte mode;
 
     public final String shuffleKey;
-    public final String partitionId;
+    public final String partitionUniqueId;
 
     public PushData(byte mode, String shuffleKey, String partitionId, ManagedBuffer body) {
         this(0L, 0L, mode, shuffleKey, partitionId, body);
@@ -24,14 +24,14 @@ public final class PushData extends AbstractMessage implements RequestMessage {
         this(0L, epoch, mode, shuffleKey, partitionId, body);
     }
 
-    private PushData(long requestId, long epoch, byte mode, String shuffleKey, String partitionId,
+    private PushData(long requestId, long epoch, byte mode, String shuffleKey, String partitionUniqueId,
                      ManagedBuffer body) {
         super(body, true);
         this.requestId = requestId;
         this.epoch = epoch;
         this.mode = mode;
         this.shuffleKey = shuffleKey;
-        this.partitionId = partitionId;
+        this.partitionUniqueId = partitionUniqueId;
     }
 
     @Override
@@ -42,7 +42,7 @@ public final class PushData extends AbstractMessage implements RequestMessage {
     @Override
     public int encodedLength() {
         return 8 + 8 + 1 + Encoders.Strings.encodedLength(shuffleKey) +
-                Encoders.Strings.encodedLength(partitionId);
+                Encoders.Strings.encodedLength(partitionUniqueId);
     }
 
     @Override
@@ -51,7 +51,7 @@ public final class PushData extends AbstractMessage implements RequestMessage {
         buf.writeLong(epoch);
         buf.writeByte(mode);
         Encoders.Strings.encode(buf, shuffleKey);
-        Encoders.Strings.encode(buf, partitionId);
+        Encoders.Strings.encode(buf, partitionUniqueId);
     }
 
     public static PushData decode(ByteBuf buf) {
@@ -66,7 +66,7 @@ public final class PushData extends AbstractMessage implements RequestMessage {
 
     @Override
     public int hashCode() {
-        return Objects.hashCode(requestId, epoch, mode, shuffleKey, partitionId, body());
+        return Objects.hashCode(requestId, epoch, mode, shuffleKey, partitionUniqueId, body());
     }
 
     @Override
@@ -74,7 +74,7 @@ public final class PushData extends AbstractMessage implements RequestMessage {
         if (other instanceof PushData) {
             PushData o = (PushData) other;
             return requestId == o.requestId && epoch == o.epoch && mode == o.mode
-                    && shuffleKey.equals(o.shuffleKey) && partitionId.equals((o.partitionId))
+                    && shuffleKey.equals(o.shuffleKey) && partitionUniqueId.equals((o.partitionUniqueId))
                     && super.equals(o);
         }
         return false;
@@ -86,7 +86,7 @@ public final class PushData extends AbstractMessage implements RequestMessage {
                 .add("requestId", requestId)
                 .add("mode", mode)
                 .add("shuffleKey", shuffleKey)
-                .add("partitionId", partitionId)
+                .add("partitionId", partitionUniqueId)
                 .add("body size", body().size())
                 .toString();
     }

@@ -11,9 +11,9 @@ public class PartitionLocationSuiteJ {
     @Test
     public void testEquals() {
         PartitionLocation l1 = new PartitionLocation(
-            0, "p1", "localhost", 1, PartitionLocation.Mode.Master);
+            0, 0, "localhost", 1, PartitionLocation.Mode.Master);
         PartitionLocation l2 = new PartitionLocation(
-            0, "p1", "localhost", 1, PartitionLocation.Mode.Slave);
+            0, 1, "localhost", 1, PartitionLocation.Mode.Slave);
         assert(l1.equals(l2));
 
         Map<PartitionLocation, String> map = new HashMap<>();
