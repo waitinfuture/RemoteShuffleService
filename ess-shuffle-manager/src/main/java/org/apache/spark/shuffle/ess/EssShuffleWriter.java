@@ -2,7 +2,11 @@ package org.apache.spark.shuffle.ess;
 
 import com.aliyun.emr.ess.client.ShuffleClient;
 import com.aliyun.emr.ess.common.EssConf;
-import org.apache.spark.*;
+import io.netty.util.internal.ConcurrentSet;
+import org.apache.spark.Partitioner;
+import org.apache.spark.ShuffleDependency;
+import org.apache.spark.SparkConf;
+import org.apache.spark.TaskContext;
 import org.apache.spark.annotation.Private;
 import org.apache.spark.executor.ShuffleWriteMetrics;
 import org.apache.spark.memory.TaskMemoryManager;
@@ -17,14 +21,12 @@ import org.apache.spark.sql.execution.UnsafeRowSerializer;
 import org.apache.spark.storage.BlockManagerId;
 import org.apache.spark.storage.BlockManagerId$;
 import org.apache.spark.unsafe.Platform;
-import org.apache.spark.util.ThreadUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import scala.Option;
 import scala.Product2;
-import scala.Tuple2;
+import scala.Tuple3;
 import scala.concurrent.Future;
-import scala.concurrent.duration.FiniteDuration;
 import scala.reflect.ClassTag;
 import scala.reflect.ClassTag$;
 import scala.runtime.BoxedUnit;
@@ -32,8 +34,6 @@ import scala.runtime.BoxedUnit;
 import javax.annotation.Nullable;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.util.concurrent.ConcurrentLinkedQueue;
-import java.util.concurrent.TimeUnit;
 
 @Private
 public class EssShuffleWriter<K, V, C> extends ShuffleWriter<K, V> {
@@ -61,7 +61,7 @@ public class EssShuffleWriter<K, V, C> extends ShuffleWriter<K, V> {
     private MapStatus mapStatus;
     private long peakMemoryUsedBytes = 0;
 
-    private final ConcurrentLinkedQueue<Future<BoxedUnit>> futures = new ConcurrentLinkedQueue<>();
+    private final ConcurrentSet<String> inflightRequests = new ConcurrentSet<>();
 
     /**
      * Subclass of ByteArrayOutputStream that exposes `buf` directly.
@@ -223,24 +223,20 @@ public class EssShuffleWriter<K, V, C> extends ShuffleWriter<K, V> {
     }
 
     private void limitMaxInFlight() {
-        if (futures.size() > MAX_INFLIGHT) {
-            futures.removeIf(Future::isCompleted);
-        }
-        while (futures.size() > MAX_INFLIGHT) {
+        if (inflightRequests.size() > MAX_INFLIGHT) {
             try {
                 Thread.sleep(50);
-                logger.debug("reach max inflight, wait...");
+                logger.debug("reach max inlfight, wait...");
             } catch (Exception e) {
-                logger.error("sleep caught exception");
+                logger.error("sleep caught excception");
             }
-            futures.removeIf(Future::isCompleted);
         }
     }
 
     private void flushSendBuffer(int partitionId, byte[] buffer, int size) throws IOException {
         long flushStartTime = System.nanoTime();
         limitMaxInFlight();
-        Tuple2<Future<BoxedUnit>, Integer> res = essShuffleClient.pushData(
+        int bytesWritten = essShuffleClient.pushData(
             sparkConf.getAppId(),
             shuffleId,
             mapId,
@@ -248,10 +244,10 @@ public class EssShuffleWriter<K, V, C> extends ShuffleWriter<K, V> {
             partitionId,
             buffer,
             0,
-            size
+            size,
+            inflightRequests
         );
-        futures.offer(res._1);
-        writeMetrics.incBytesWritten(res._2);
+        writeMetrics.incBytesWritten(bytesWritten);
         writeMetrics.incWriteTime(System.nanoTime() - flushStartTime);
     }
 
@@ -269,17 +265,28 @@ public class EssShuffleWriter<K, V, C> extends ShuffleWriter<K, V> {
         sendBuffers = null;
         sendOffsets = null;
 
+
         long waitStartTime = System.nanoTime();
-        for (Future<BoxedUnit> future : futures) {
-            try {
-                ThreadUtils.awaitReady(future, new FiniteDuration(30, TimeUnit.SECONDS));
-            } catch (SparkException e) {
-                throw new IOException("Failed to get future result.", e);
-            } catch (Exception e) {
-                logger.error("close timeout for shuffle " + sparkConf.getAppId() + "-" + shuffleId);
+        int delta = 50;
+        int times = 60 * 1000 / 50;
+        try {
+            while (times > 0) {
+                if (inflightRequests.size() == 0) {
+                    break;
+                }
+                Thread.sleep(delta);
+                times--;
             }
+        } catch (Exception e) {
+            logger.error("sleep caught exception");
         }
-        futures.clear();
+        if (inflightRequests.size() != 0) {
+            for (String req : inflightRequests) {
+                logger.info(req);
+            }
+            throw new IOException("close timeout for shuffle " + shuffleId);
+        }
+        inflightRequests.clear();
         writeMetrics.incWriteTime(System.nanoTime() - waitStartTime);
 
         essShuffleClient.mapperEnd(sparkConf.getAppId(), shuffleId, mapId, taskContext
@@ -321,7 +328,7 @@ public class EssShuffleWriter<K, V, C> extends ShuffleWriter<K, V> {
                 }
             }
         } finally {
-            futures.clear();
+            inflightRequests.clear();
         }
     }
 }

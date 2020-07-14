@@ -74,14 +74,14 @@ public class MasterUtil {
                 if (nextSlaveInd == nextMasterInd) {
                     // no available slot, release allocated resource
                     releaseSlots(shuffleKey, slots);
-                    logger.error("No available slot for slave");
+                    logger.error("No available slot for slave #0");
                     return null;
                 }
             }
             if (nextSlaveInd == nextMasterInd) {
                 // no available slot, release allocated resource
                 releaseSlots(shuffleKey, slots);
-                logger.error("No available slot for slave");
+                logger.error("No available slot for slave #1");
                 return null;
             }
             // now nextMasterInd/nextSlaveInd point to

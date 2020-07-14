@@ -1,6 +1,7 @@
 package com.aliyun.emr.ess.common.util;
 
 import com.aliyun.emr.ess.common.EssConf;
+import com.aliyun.emr.ess.protocol.PartitionLocation;
 import org.apache.hadoop.fs.Path;
 
 public class EssPathUtil
@@ -21,7 +22,14 @@ public class EssPathUtil
         return new Path(String.format("%s/%s/%s/", workerBaseDir(conf), appId, shuffleId));
     }
 
-    public static Path GetPartitionPath(EssConf conf, String appId, int shuffleId, int reduceId, int epoch) {
-        return new Path(String.format("%s/%s/%s/%s/%s", workerBaseDir(conf), appId, shuffleId, reduceId, epoch));
+    public static Path GetPartitionPath(EssConf conf, String appId, int shuffleId, int reduceId, int epoch,
+                                        PartitionLocation.Mode mode) {
+        String suffix;
+        if (mode == PartitionLocation.Mode.Master) {
+            suffix = "m";
+        } else {
+            suffix = "s";
+        }
+        return new Path(String.format("%s/%s/%s/%s/%s-%s", workerBaseDir(conf), appId, shuffleId, reduceId, epoch, suffix));
     }
 }

@@ -35,6 +35,16 @@ public final class PushDataRpcHandler extends RpcHandler {
     }
 
     @Override
+    public void channelInactive(TransportClient client) {
+        logger.debug("channel Inactive " + client.getSocketAddress());
+    }
+
+    @Override
+    public void exceptionCaught(Throwable cause, TransportClient client) {
+        logger.debug("exception caught " + cause + " " + client.getSocketAddress());
+    }
+
+    @Override
     public StreamManager getStreamManager() {
         return null;
     }

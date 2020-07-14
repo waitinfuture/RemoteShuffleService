@@ -190,12 +190,6 @@ object ControlMessages {
    *              common
    *  ==========================================
    */
-  case class SlaveLost(
-    shuffleKey: String,
-    masterLocation: PartitionLocation,
-    slaveLocation: PartitionLocation
-  ) extends Message
-
   case class SlaveLostResponse(
     status: StatusCode,
     slaveLocation: PartitionLocation

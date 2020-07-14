@@ -3,11 +3,8 @@ package com.aliyun.emr.ess.client;
 import com.aliyun.emr.ess.client.impl.ShuffleClientImpl;
 import com.aliyun.emr.ess.common.EssConf;
 import com.aliyun.emr.ess.protocol.PartitionLocation;
-
 import com.aliyun.emr.ess.protocol.message.StatusCode;
-import scala.Tuple2;
-import scala.concurrent.Future;
-import scala.runtime.BoxedUnit;
+import io.netty.util.internal.ConcurrentSet;
 
 import java.io.InputStream;
 import java.util.List;
@@ -52,14 +49,6 @@ public abstract class ShuffleClient implements Cloneable
         int numPartitions
     );
 
-    public abstract Tuple2<Future<BoxedUnit>, Integer> pushData(
-        String applicationId,
-        int shuffleId,
-        int mapId,
-        int attemptId,
-        int reduceId,
-        byte[] data);
-
     /**
      * 往具体的一个reduce partition里写数据
      * @param applicationId
@@ -71,7 +60,7 @@ public abstract class ShuffleClient implements Cloneable
      * @param offset
      * @param length
      */
-    public abstract Tuple2<Future<BoxedUnit>, Integer> pushData(
+    public abstract int pushData(
         String applicationId,
         int shuffleId,
         int mapId,
@@ -79,7 +68,8 @@ public abstract class ShuffleClient implements Cloneable
         int reduceId,
         byte[] data,
         int offset,
-        int length);
+        int length,
+        ConcurrentSet<String> inflightRequests);
 
     /**
      * report partitionlocations written by the completed map task

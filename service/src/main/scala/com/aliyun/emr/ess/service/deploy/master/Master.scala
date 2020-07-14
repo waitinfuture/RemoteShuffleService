@@ -8,6 +8,7 @@ import scala.collection.JavaConversions._
 import com.aliyun.emr.ess.common.EssConf
 import com.aliyun.emr.ess.common.internal.Logging
 import com.aliyun.emr.ess.common.rpc._
+import com.aliyun.emr.ess.common.rpc.netty.NettyRpcEndpointRef
 import com.aliyun.emr.ess.common.util.{EssPathUtil, ThreadUtils, Utils}
 import com.aliyun.emr.ess.protocol.{PartitionLocation, RpcNameConstants}
 import com.aliyun.emr.ess.protocol.message.ControlMessages._
@@ -47,16 +48,19 @@ private[deploy] class Master(
   // key: "appId_shuffleId"
   private val registeredShuffle = new util.HashSet[String]()
   private val shuffleMapperAttempts = new util.HashMap[String, Array[Int]]()
-  private val shuffleCommittedPartitions = new util.HashMap[String, util.Set[PartitionLocation]]()
+  private val shuffleCommittedPartitions = new ConcurrentHashMap[String, util.Set[PartitionLocation]]()
   private val reducerFileGroup = new ConcurrentHashMap[String, util.HashMap[String, util.HashSet[String]]]()
   private val appHeartbeatTime = new util.HashMap[String, Long]()
   private val stageEndShuffleSet = new util.HashSet[String]()
 
   // revive request waiting for response
-  private val reviving = new util.HashMap[PartitionLocation, util.Set[RpcCallContext]]()
+  private val reviving = new util.HashMap[String, util.HashMap[PartitionLocation, util.Set[RpcCallContext]]]()
 
   // blacklist
   private val blacklist = new ConcurrentSet[String]()
+
+  // workerLost events
+  private val workerLostEvents = new ConcurrentSet[String]()
 
   // start threads to check timeout for workers and applications
   override def onStart(): Unit = {
@@ -93,7 +97,7 @@ private[deploy] class Master(
     case HeartbeatFromWorker(host, port) =>
       handleHeartBeatFromWorker(host, port)
     case WorkerLost(host, port) =>
-      logInfo(s"received WorkerLost, ${host}:port")
+      logInfo(s"received WorkerLost, ${host}:${port}")
       handleWorkerLost(null, host, port)
     case HeartBeatFromApplication(appId) =>
       handleHeartBeatFromApplication(appId)
@@ -161,7 +165,7 @@ private[deploy] class Master(
       handleRegisterShuffle(context, applicationId, shuffleId, numMappers, numPartitions)
 
     case Revive(applicationId, shuffleId, oldPartition) =>
-      logInfo(s"received Revive request, $applicationId, $shuffleId, $oldPartition")
+      logDebug(s"received Revive request, $applicationId, $shuffleId, $oldPartition")
       handleRevive(context, applicationId, shuffleId, oldPartition)
 
     case MapperEnd(applicationId, shuffleId, mapId, attemptId) =>
@@ -171,10 +175,6 @@ private[deploy] class Master(
     case GetReducerFileGroup(applicationId: String, shuffleId: Int) =>
       logDebug(s"received GetShuffleFileGroup request, $applicationId, $shuffleId")
       handleGetReducerFileGroup(context, applicationId, shuffleId)
-
-    case SlaveLost(shuffleKey, masterLocation, slaveLocation: PartitionLocation) =>
-      logInfo(s"received SlaveLost request, $slaveLocation")
-      handleSlaveLost(context, shuffleKey, masterLocation, slaveLocation)
 
     case GetWorkerInfos =>
       logInfo("received GetWorkerInfos request")
@@ -208,6 +208,7 @@ private[deploy] class Master(
       if (workers.get(ind).lastHeartbeat < currentTime - WORKER_TIMEOUT_MS) {
         logInfo(s"Worker ${workers.get(ind)} timeout! Trigger WorkerLost event")
         // trigger WorkerLost event
+        workerLostEvents.add(workers.get(ind).hostPort)
         self.send(
           WorkerLost(workers.get(ind).host, workers.get(ind).port)
         )
@@ -267,65 +268,68 @@ private[deploy] class Master(
     }
     // delete from blacklist
     blacklist.remove(worker.hostPort)
-    // for all master partitions on the lost worker, send CommitFiles to their slave patitions
-    // then destroy the slave partitions
-    val masterShuffleKeys = worker.getMasterShuffleKeys()
-    masterShuffleKeys.foreach(shuffleKey => {
-      val slaveLocations = worker.getAllMasterLocations(shuffleKey).map(_.getPeer)
-      val groupedByWorker = slaveLocations.groupBy(loc => loc.hostPort())
-      groupedByWorker.foreach(elem => {
-        val worker = workers.find(w => w.hostPort == elem._1).orNull
-        // commit files
-        val res = worker.endpoint.askSync[CommitFilesResponse](
-          CommitFiles(shuffleKey, elem._2.map(_.getUniqueId()).toList, PartitionLocation.Mode.Slave)
-        )
-        // record commited Files
-        val committedPartitions = shuffleCommittedPartitions.get(shuffleKey)
-        if (res.failedLocations == null || res.failedLocations.isEmpty) {
-          committedPartitions.synchronized {
-            committedPartitions.addAll(elem._2)
+
+    // for all master/slave partitions on the lost worker, send CommitFiles to their peer patitions
+    // then destroy the partitions
+    def commitAndDestroy(mode: PartitionLocation.Mode): Unit = {
+      val shuffleKeys = worker.getMasterShuffleKeys()
+      shuffleKeys.foreach(shuffleKey => {
+        // all peer locations for the shuffle key
+        val (locations, flippedMode) =
+          if (mode == PartitionLocation.Mode.Master) {
+            (worker.getAllMasterLocations(shuffleKey).map(_.getPeer),
+              PartitionLocation.Mode.Slave)
+          } else {
+            (worker.getAllSlaveLocations(shuffleKey).map(_.getPeer),
+              PartitionLocation.Mode.Master)
           }
-        } else {
+        val groupedByWorker = locations.groupBy(loc => loc.hostPort())
+
+        groupedByWorker.foreach(elem => {
+          val worker = workers.find(w => w.hostPort == elem._1).orNull
+          // commit files
+          logDebug(s"send commitfile request to ${worker.hostPort}, ${elem._2.map(_.getUniqueId).mkString(",")}")
+          val res = worker.endpoint.askSync[CommitFilesResponse](
+            CommitFiles(shuffleKey, elem._2.map(_.getUniqueId()).toList, flippedMode)
+          )
+          // record commited Files
+          val committedPartitions = shuffleCommittedPartitions.get(shuffleKey)
           committedPartitions.synchronized {
             committedPartitions.addAll(
               elem._2.filter(p => res.committedLocations.contains(p.getUniqueId))
             )
           }
-        }
-        logInfo("recorded committed files")
-        // destroy slave partitions
-        val resDestroy = worker.endpoint.askSync[DestroyResponse](
-          Destroy(shuffleKey, null, elem._2.map(_.getUniqueId).toList)
-        )
-        // retry once to destroy
-        if (resDestroy.status != StatusCode.Success) {
-          worker.endpoint.askSync[DestroyResponse](
-            Destroy(shuffleKey, null, resDestroy.failedSlaves)
+          // destroy peer partitions
+          val destroyMsg =
+            if (mode == PartitionLocation.Mode.Master) {
+              Destroy(shuffleKey, null, elem._2.map(_.getUniqueId).toList)
+            } else {
+              Destroy(shuffleKey, elem._2.map(_.getUniqueId).toList, null)
+            }
+          val resDestroy = worker.endpoint.askSync[DestroyResponse](
+            destroyMsg
           )
-        }
-        // remove slave partitions
-        worker.synchronized {
-          worker.removeSlavePartition(shuffleKey, elem._2.map(_.getUniqueId))
-        }
-      })
-    })
-
-    logInfo("send SlaveLost to all master locations")
-    // for all slave partitions on the lost worker, send SlaveLost to their master locations
-    val slaveShuffleKeys = worker.getSlaveShuffleKeys()
-    slaveShuffleKeys.foreach(shuffleKey => {
-      val masterLocations = worker.getAllSlaveLocations(shuffleKey).map(_.getPeer)
-      val groupedByWorker = masterLocations.groupBy(loc => loc.hostPort())
-      groupedByWorker.foreach(entry => {
-        val worker: WorkerInfo = workers.find(w => w.hostPort == entry._1).orNull
-        // send SlaveLost to all master locations
-        entry._2.foreach(loc => {
-          worker.endpoint.send(SlaveLost(shuffleKey, loc, loc.getPeer))
+          // retry once to destroy
+          if (resDestroy.status != StatusCode.Success) {
+            logError("destroy failed when handling WorkerLost!")
+          }
+          // remove partitions
+          worker.synchronized {
+            if (mode == PartitionLocation.Mode.Master) {
+              worker.removeSlavePartition(shuffleKey, elem._2.map(_.getUniqueId))
+            } else {
+              worker.removeMasterPartition(shuffleKey, elem._2.map(_.getUniqueId))
+            }
+          }
         })
       })
-    })
+    }
+
+    commitAndDestroy(PartitionLocation.Mode.Master)
+    commitAndDestroy(PartitionLocation.Mode.Slave)
 
     logInfo("Finished to process WorkerLost!")
+    workerLostEvents.remove(worker.hostPort)
     if (context != null) {
       context.reply(WorkerLostResponse(true))
     }
@@ -354,6 +358,7 @@ private[deploy] class Master(
       logError(s"Worker already registered! ${host}:${port}")
       context.reply(RegisterWorkerResponse(false, "Worker already registered!"))
     } else {
+      logInfo(s"workerinfo memory ${memory}, chunk size ${CHUNK_SIZE}")
       val worker = new WorkerInfo(host, port, memory, CHUNK_SIZE, workerRef)
       workers.synchronized {
         workers.add(worker)
@@ -427,7 +432,7 @@ private[deploy] class Master(
       shuffleMapperAttempts.put(shuffleKey, attempts)
     }
     shuffleCommittedPartitions.synchronized {
-      val commitedPartitions = new util.HashSet[PartitionLocation]()
+      val commitedPartitions = new ConcurrentSet[PartitionLocation]()
       shuffleCommittedPartitions.put(shuffleKey, commitedPartitions)
     }
 
@@ -447,13 +452,25 @@ private[deploy] class Master(
       return
     }
 
-    // add into blacklist
-    blacklist.add(oldPartition.hostPort())
+    def checkAndBlacklist(loc: PartitionLocation): Unit = {
+      val worker = workers.find(w => w.hostPort == loc.hostPort()).orNull
+      if (worker == null || !worker.endpoint.asInstanceOf[NettyRpcEndpointRef].client.isActive) {
+        blacklist.add(loc.hostPort())
+      }
+    }
+
+    // check to see if partition can be reached. if not, add into blacklist
+    checkAndBlacklist(oldPartition)
+    checkAndBlacklist(oldPartition.getPeer)
 
     // check if there exists request for the partition, if do just register
     reviving.synchronized {
-      if (reviving.containsKey(oldPartition)) {
-        reviving.get(oldPartition).add(context)
+      reviving.putIfAbsent(shuffleKey, new util.HashMap[PartitionLocation, util.Set[RpcCallContext]]())
+    }
+    val shuffleReviving = reviving.get(shuffleKey)
+    shuffleReviving.synchronized {
+      if (shuffleReviving.containsKey(oldPartition)) {
+        shuffleReviving.get(oldPartition).add(context)
         logInfo("same partition is reviving, register context")
         return
       } else {
@@ -472,18 +489,19 @@ private[deploy] class Master(
         // exists newer partition, just return it
         if (currentEpoch > oldPartition.getEpoch) {
           context.reply(ReviveResponse(StatusCode.Success, currentLocation))
-          logInfo("new partition found, return it")
+          logDebug(s"new partition found, return it ${shuffleKey} " + currentLocation)
           return
         }
         // no newer partition, register and allocate
         val set = new util.HashSet[RpcCallContext]()
         set.add(context)
-        reviving.put(oldPartition, set)
+        shuffleReviving.put(oldPartition, set)
       }
     }
 
     // offer new slot
     val slots = workers.synchronized {
+      val availableWorkers = workersNotBlacklisted()
       MasterUtil.offerSlots(shuffleKey,
         // avoid offer slots on the same host of oldPartition
         workersNotBlacklisted(),
@@ -494,8 +512,8 @@ private[deploy] class Master(
     // reply false if offer slots failed
     if (slots == null || slots.isEmpty()) {
       logError("offerSlot failed!")
-      reviving.synchronized {
-        val set = reviving.get(oldPartition)
+      shuffleReviving.synchronized {
+        val set = shuffleReviving.get(oldPartition)
         set.foreach(_.reply(ReviveResponse(StatusCode.SlotNotAvailable, null)))
       }
       return
@@ -515,13 +533,12 @@ private[deploy] class Master(
         }
       })
       logError("fail to reserve buffers")
-      reviving.synchronized {
-        val set = reviving.get(oldPartition)
+      shuffleReviving.synchronized {
+        val set = shuffleReviving.get(oldPartition)
         set.foreach(_.reply(ReviveResponse(StatusCode.ReserveBufferFailed, null)))
       }
       return
     }
-    logInfo("reserve buffer success")
 
     // reply success
     val (masters, slaves) = slots.head._2
@@ -530,11 +547,11 @@ private[deploy] class Master(
     } else {
       slaves.head.getPeer
     }
-    logInfo("Revive success!")
-    reviving.synchronized {
-      val set = reviving.get(oldPartition)
+    logDebug(s"reserve buffer success ${shuffleKey} " + location)
+    shuffleReviving.synchronized {
+      val set = shuffleReviving.get(oldPartition)
       set.foreach(_.reply(ReviveResponse(StatusCode.Success, location)))
-      reviving.remove(oldPartition)
+      shuffleReviving.remove(oldPartition)
       logInfo("reply and remove oldPartition success")
     }
   }
@@ -683,7 +700,7 @@ private[deploy] class Master(
     val shuffleKey = Utils.makeShuffleKey(applicationId, shuffleId)
     // check whether shuffle has registered
     if (!registeredShuffle.contains(shuffleKey)) {
-      logInfo(s"shuffle ${shuffleKey} not reigstered!")
+      logError(s"shuffle ${shuffleKey} not reigstered!")
       if (context != null) {
         context.reply(StageEndResponse(StatusCode.ShuffleNotRegistered, null))
       }
@@ -693,6 +710,21 @@ private[deploy] class Master(
     // ask allLocations workers holding master partitions to commit files
     val failedMasters: util.List[PartitionLocation] = new util.ArrayList[PartitionLocation]()
     val failedSlaves: util.List[PartitionLocation] = new util.ArrayList[PartitionLocation]()
+
+    // check connection before commit files
+    workers.foreach(w => {
+      if (!w.endpoint.asInstanceOf[NettyRpcEndpointRef].client.isActive
+        && !workerLostEvents.contains(w.hostPort)) {
+        self.send(WorkerLost(w.host, w.port))
+        workerLostEvents.add(w.hostPort)
+      }
+    })
+
+    // wait until all workerLost events are handled
+    while (!workerLostEvents.isEmpty) {
+      Thread.sleep(50)
+      logWarning("wait for WorkerLost events all handled")
+    }
 
     ThreadUtils.parmap(
       workers.to, "CommitFiles Master", EssConf.essRpcParallelism(conf)
@@ -719,8 +751,10 @@ private[deploy] class Master(
               committedPartitions.add(masterLocs.find(loc => loc.getUniqueId == id).get)
             })
           }
-          logDebug(s"Finished CommitFiles Master Mode for worker ${worker.endpoint.address
-            .toEssURL} in ${System.currentTimeMillis() - start}ms")
+          logDebug(s"Finished CommitFiles Master Mode for worker ${
+            worker.endpoint.address
+              .toEssURL
+          } in ${System.currentTimeMillis() - start}ms")
         }
     }
 
@@ -743,20 +777,21 @@ private[deploy] class Master(
           // record failed locations
           if (res.failedLocations != null) {
             failedSlaves.addAll(
-              slavePartitions.filter(loc => res.failedLocations.contains(loc.getEpoch)))
+              slavePartitions.filter(loc => res.failedLocations.contains(loc.getUniqueId)))
           }
           // record commited partitionids
           val committedPartitions = shuffleCommittedPartitions.get(shuffleKey)
           committedPartitions.synchronized {
             committedPartitions.addAll(
-              slavePartitions.filter(loc => res.committedLocations.contains(loc.getEpoch)))
+              slavePartitions.filter(loc => res.committedLocations.contains(loc.getUniqueId)))
           }
-          logDebug(s"Finished CommitFiles Slave Mode for worker ${worker.endpoint.address
-            .toEssURL} in ${System.currentTimeMillis() - start}ms")
+          logDebug(s"Finished CommitFiles Slave Mode for worker ${
+            worker.endpoint.address
+              .toEssURL
+          } in ${System.currentTimeMillis() - start}ms")
       }
     }
 
-    val emptyMap = new util.HashMap[Int, util.List[PartitionLocation]]()
     // ask all workers holding master/slave partition to release resource
     workers.foreach(worker => {
       var res = worker.endpoint.askSync[DestroyResponse](
@@ -789,7 +824,7 @@ private[deploy] class Master(
     committedPartitions.foreach(partition => {
       val key = Utils.makeReducerKey(applicationId, shuffleId, partition.getReduceId)
       val value = EssPathUtil.GetPartitionPath(conf,
-        applicationId, shuffleId, partition.getReduceId, partition.getEpoch)
+        applicationId, shuffleId, partition.getReduceId, partition.getEpoch, partition.getMode)
       map.putIfAbsent(key, new util.HashSet[String]())
       map.get(key).add(value.toString)
     })
@@ -822,11 +857,10 @@ private[deploy] class Master(
     appId: String, shuffleId: Int): Unit = {
     val shuffleKey = Utils.makeShuffleKey(appId, shuffleId)
 
-    // check if StageEnd has been handled
+    // if StageEnd has not been handled, trigger StageEnd
     if (!stageEndShuffleSet.contains(shuffleKey)) {
       logInfo(s"Call StageEnd before Unregister Shuffle ${shuffleKey}")
-      self.askSync[StageEndResponse](StageEnd(appId, shuffleId))
-      stageEndShuffleSet.add(shuffleKey)
+      self.send(StageEnd(appId, shuffleId))
     }
 
     // if PartitionLocations exists for the shuffle, return fail
@@ -922,7 +956,6 @@ private[deploy] class Master(
   private def workersNotBlacklisted(): util.List[WorkerInfo] = {
     workers.filter(w => !blacklist.contains(w.hostPort))
   }
-
 }
 
 private[deploy] object Master

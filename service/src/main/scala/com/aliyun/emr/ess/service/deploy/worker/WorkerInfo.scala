@@ -5,8 +5,9 @@ import java.util
 import com.aliyun.emr.ess.common.rpc.RpcEndpointRef
 import com.aliyun.emr.ess.common.util.Utils
 import com.aliyun.emr.ess.protocol.PartitionLocation
-
 import scala.collection.JavaConversions._
+
+import com.aliyun.emr.ess.common.internal.Logging
 
 private[ess] class WorkerInfo(
   val host: String,
@@ -14,7 +15,7 @@ private[ess] class WorkerInfo(
   val memory: Long,
   val partitionSize: Long,
   val endpoint: RpcEndpointRef)
-  extends Serializable {
+  extends Serializable with Logging {
 
   Utils.checkHost(host)
   assert(port > 0)
@@ -57,7 +58,7 @@ private[ess] class WorkerInfo(
     memoryUsed += partitionSize
   }
 
-  def addPartition(shuffleKey: String,
+  private def addPartition(shuffleKey: String,
     locations: util.List[PartitionLocation],
     partitionInfo: PartitionInfo): Unit = {
     partitionInfo.putIfAbsent(shuffleKey,
@@ -94,7 +95,7 @@ private[ess] class WorkerInfo(
     if (!partitionInfo.containsKey(shuffleKey)) {
       return
     }
-    val tokens = uniqueId.split("-")
+    val tokens = uniqueId.split("-", 2)
     val reduceId = tokens(0).toInt
     val epoch = tokens(1).toInt
     val reduceLocMap = partitionInfo.get(shuffleKey)
@@ -123,7 +124,7 @@ private[ess] class WorkerInfo(
     }
     val reduceLocMap = partitionInfo.get(shuffleKey)
     uniqueIds.foreach(id => {
-      val tokens = id.split("-")
+      val tokens = id.split("-", 2)
       val reduceId = tokens(0).toInt
       val epoch = tokens(1).toInt
       val locs = reduceLocMap.get(reduceId)
@@ -194,19 +195,23 @@ private[ess] class WorkerInfo(
   }
 
   def getAllMasterLocations(shuffleKey: String): util.List[PartitionLocation] = {
-    new util.ArrayList[PartitionLocation](
-      masterPartitionLocations.get(shuffleKey)
-        .values()
-        .flatMap(l => l)
-    )
+    if (masterPartitionLocations.containsKey(shuffleKey)) {
+      new util.ArrayList[PartitionLocation](
+        masterPartitionLocations.get(shuffleKey)
+          .values()
+          .flatMap(l => l)
+      )
+    } else new util.ArrayList[PartitionLocation]()
   }
 
   def getAllSlaveLocations(shuffleKey: String): util.List[PartitionLocation] = {
-    new util.ArrayList[PartitionLocation](
-      slavePartitionLocations.get(shuffleKey)
-        .values()
-        .flatMap(l => l)
-    )
+    if (slavePartitionLocations.containsKey(shuffleKey)) {
+      new util.ArrayList[PartitionLocation](
+        slavePartitionLocations.get(shuffleKey)
+          .values()
+          .flatMap(l => l)
+      )
+    } else new util.ArrayList[PartitionLocation]()
   }
 
   def setMasterPeer(shuffleKey: String, loc: PartitionLocation, peer: PartitionLocation): Unit = {
@@ -217,13 +222,17 @@ private[ess] class WorkerInfo(
 
   def getLocation(shuffleKey: String, uniqueId: String,
     mode: PartitionLocation.Mode): PartitionLocation = {
-    val tokens = uniqueId.split("-")
+    val tokens = uniqueId.split("-", 2)
     val reduceId = tokens(0).toInt
     val epoch = tokens(1).toInt
     val partitionInfo = if (mode == PartitionLocation.Mode.Master) {
       masterPartitionLocations
     } else slavePartitionLocations
 
+    if (!partitionInfo.containsKey(shuffleKey)
+      || !partitionInfo.get(shuffleKey).containsKey(reduceId)) {
+      return null
+    }
     partitionInfo.get(shuffleKey)
       .get(reduceId)
       .find(loc => loc.getEpoch == epoch).orNull

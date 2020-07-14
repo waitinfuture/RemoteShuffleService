@@ -1,7 +1,6 @@
 package com.aliyun.emr.ess.service.deploy.worker;
 
 import io.netty.buffer.ByteBuf;
-import io.netty.buffer.Unpooled;
 import org.apache.hadoop.fs.FSDataOutputStream;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
@@ -10,8 +9,6 @@ import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.util.concurrent.ExecutorService;
-
-import scala.Predef;
 
 public class DoubleChunk {
     private static final Logger logger = LoggerFactory.getLogger(DoubleChunk.class);
