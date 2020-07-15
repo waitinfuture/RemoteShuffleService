@@ -60,9 +60,6 @@ public final class Chunk extends MinimalByteBuf {
                 Platform.copyMemory(null, startAddress, data, Platform.BYTE_ARRAY_OFFSET, data.length);
                 ostream.write(data);
                 ostream.hflush();
-//                for (long addr = startAddress; addr < currentAddress; addr++) {
-//                    ostream.write(Platform.getByte(null, addr));
-//                }
             }
             currentAddress = startAddress;
             return true;

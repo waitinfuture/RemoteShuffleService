@@ -56,6 +56,8 @@ public class EssShuffleWriter<K, V, C> extends ShuffleWriter<K, V> {
     private final TaskContext taskContext;
     private final SparkConf sparkConf;
     private final ShuffleClient essShuffleClient;
+    private final int numMappers;
+    private final int numPartitions;
 
     @Nullable
     private MapStatus mapStatus;
@@ -99,7 +101,9 @@ public class EssShuffleWriter<K, V, C> extends ShuffleWriter<K, V> {
         BaseShuffleHandle<K, V, C> handle,
         int mapId,
         TaskContext taskContext,
-        SparkConf sparkConf) {
+        SparkConf sparkConf,
+        int numMappers,
+        int numPartitions) {
         this.memoryManager = memoryManager;
         this.mapId = mapId;
         this.dep = handle.dependency();
@@ -109,16 +113,13 @@ public class EssShuffleWriter<K, V, C> extends ShuffleWriter<K, V> {
         this.writeMetrics = taskContext.taskMetrics().shuffleWriteMetrics();
         this.taskContext = taskContext;
         this.sparkConf = sparkConf;
+        this.numMappers = numMappers;
+        this.numPartitions = numPartitions;
         EssConf conf = EssShuffleManager.fromSparkConf(this.sparkConf);
         this.essShuffleClient = ShuffleClient.get(conf);
-        this.essShuffleClient.applyShuffleInfo(
-            sparkConf.getAppId(),
-            shuffleId,
-            ((EssShuffleHandle) handle).initPartitionLocations());
 
         serBuffer = new MyByteArrayOutputStream(DEFAULT_INITIAL_SER_BUFFER_SIZE);
         serOutputStream = serializer.serializeStream(serBuffer);
-
 
         mapStatusLengths = new long[partitioner.numPartitions()];
         mapStatusRecords = new long[partitioner.numPartitions()];
@@ -245,7 +246,9 @@ public class EssShuffleWriter<K, V, C> extends ShuffleWriter<K, V> {
             buffer,
             0,
             size,
-            inflightRequests
+            inflightRequests,
+            numMappers,
+            numPartitions
         );
         writeMetrics.incBytesWritten(bytesWritten);
         writeMetrics.incWriteTime(System.nanoTime() - flushStartTime);
@@ -290,7 +293,7 @@ public class EssShuffleWriter<K, V, C> extends ShuffleWriter<K, V> {
         writeMetrics.incWriteTime(System.nanoTime() - waitStartTime);
 
         essShuffleClient.mapperEnd(sparkConf.getAppId(), shuffleId, mapId, taskContext
-            .attemptNumber());
+            .attemptNumber(), numMappers);
 
         BlockManagerId dummyId = BlockManagerId$.MODULE$.apply(
             "amor", "127.0.0.1", 1111, Option.apply(null));

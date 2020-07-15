@@ -197,11 +197,26 @@ private[ess] class WorkerInfo(
 
   def getAllMasterLocations(shuffleKey: String): util.List[PartitionLocation] = {
     if (masterPartitionLocations.containsKey(shuffleKey)) {
-      new util.ArrayList[PartitionLocation](
-        masterPartitionLocations.get(shuffleKey)
-          .values()
-          .flatMap(l => l)
-      )
+      masterPartitionLocations.get(shuffleKey)
+        .values()
+        .flatten
+        .toList
+    } else new util.ArrayList[PartitionLocation]()
+  }
+
+  def getAllMasterLocationsWithMaxEpoch(shuffleKey: String): util.List[PartitionLocation] = {
+    if (masterPartitionLocations.containsKey(shuffleKey)) {
+      masterPartitionLocations.get(shuffleKey)
+        .values()
+        .map(list => {
+          var loc = list(0)
+          1 until list.size() foreach (ind => {
+            if (list(ind).getEpoch > loc.getEpoch) {
+              loc = list(ind)
+            }
+          })
+          loc
+        }).toList
     } else new util.ArrayList[PartitionLocation]()
   }
 
@@ -317,15 +332,26 @@ private[ess] class WorkerInfo(
   }
 
   override def toString(): String = {
+    val sbMaster = new StringBuilder
+    masterPartitionLocations.foreach(entry => {
+      sbMaster.append("\t").append(entry._1).append("\t").append(entry._2.size()).append("\n")
+    })
+    val sbSlave = new StringBuilder
+    masterPartitionLocations.foreach(entry => {
+      sbSlave.append("\t").append(entry._1).append("\t").append(entry._2.size()).append("\n")
+    })
     s"""
        |Address: ${hostPort}
        |Capacity: ${memory}
        |MemoryUsed: ${memoryUsed}
        |PartitionBufferSize: ${partitionSize}
+       |TotalSlots: ${memory / partitionSize}
        |SlotsUsed: ${memoryUsed / partitionSize}
        |SlotsAvailable: ${freeMemory / partitionSize}
-       |MasterLocations: ${masterPartitionLocations.size()}
-       |SlaveLocations: ${slavePartitionLocations.size()}
+       |MasterShuffles: ${masterPartitionLocations.size()}
+       |${sbMaster.toString}
+       |SlaveShuffles: ${slavePartitionLocations.size()}
+       |${sbSlave.toString}
        |""".stripMargin
   }
 

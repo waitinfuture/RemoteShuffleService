@@ -6,6 +6,7 @@ import com.aliyun.emr.ess.protocol.PartitionLocation;
 import com.aliyun.emr.ess.protocol.message.StatusCode;
 import io.netty.util.internal.ConcurrentSet;
 
+import java.io.IOException;
 import java.io.InputStream;
 import java.util.List;
 
@@ -69,7 +70,9 @@ public abstract class ShuffleClient implements Cloneable
         byte[] data,
         int offset,
         int length,
-        ConcurrentSet<String> inflightRequests);
+        ConcurrentSet<String> inflightRequests,
+        int numMappers,
+        int numPartitions) throws IOException;
 
     /**
      * report partitionlocations written by the completed map task
@@ -83,7 +86,8 @@ public abstract class ShuffleClient implements Cloneable
         String applicationId,
         int shuffleId,
         int mapId,
-        int attemptId
+        int attemptId,
+        int numMappers
     );
 
     /**
@@ -117,23 +121,7 @@ public abstract class ShuffleClient implements Cloneable
      */
     public abstract boolean unregisterShuffle(String applicationId, int shuffleId);
 
-    /**
-     * 从Client缓存中提取Shuffle相关的PartitionLocation
-     * @param applicationId
-     * @param shuffleId
-     * @return
-     */
-    public abstract List<PartitionLocation> fetchShuffleInfo(
-        String applicationId, int shuffleId);
-
-    /**
-     * 将指定PartitionLocation覆盖Client缓存
-     * @param applicationId
-     * @param shuffleId
-     * @param partitionLocations
-     */
-    public abstract void applyShuffleInfo(
-        String applicationId, int shuffleId, List<PartitionLocation> partitionLocations);
+    public abstract void startHeartbeat(String applicationId);
 
     public abstract void shutDown();
 }

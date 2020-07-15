@@ -373,7 +373,9 @@ private[deploy] class Worker(
         }
       })
       // remove master locations from workerinfo
-      workerInfo.removeMasterPartition(shuffleKey, masterLocations)
+      workerInfo.synchronized {
+        workerInfo.removeMasterPartition(shuffleKey, masterLocations)
+      }
     }
     // destroy slave locations
     if (slaveLocations != null && !slaveLocations.isEmpty) {
@@ -387,7 +389,9 @@ private[deploy] class Worker(
         }
       })
       // remove slave locations from worker info
-      workerInfo.removeSlavePartition(shuffleKey, slaveLocations)
+      workerInfo.synchronized {
+        workerInfo.removeSlavePartition(shuffleKey, slaveLocations)
+      }
     }
     // reply
     if (failedMasters.isEmpty && failedSlaves.isEmpty) {

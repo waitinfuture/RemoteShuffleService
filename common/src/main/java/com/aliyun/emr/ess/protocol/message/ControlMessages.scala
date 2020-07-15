@@ -63,7 +63,8 @@ object ControlMessages {
     applicationId: String,
     shuffleId: Int,
     mapId: Int,
-    attemptId: Int
+    attemptId: Int,
+    numMappers: Int
   ) extends MasterMessage
 
   case class MapperEndResponse(

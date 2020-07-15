@@ -102,7 +102,7 @@ TARDIR_NAME="ess-$VERSION-bin-$NAME"
 TARDIR="$ESS_HOME/$TARDIR_NAME"
 rm -rf "$TARDIR"
 cp -r "$DISTDIR" "$TARDIR"
-tar czf "ess-$VERSION-bin-$NAME.tgz" -C "$ESS_HOME" "$TARDIR_NAME"
+#tar czf "ess-$VERSION-bin-$NAME.tgz" -C "$ESS_HOME" "$TARDIR_NAME"
 rm -rf "$TARDIR"
 
 

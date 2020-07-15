@@ -57,6 +57,9 @@ private[deploy] class Master(
   // revive request waiting for response
   private val reviving = new util.HashMap[String, util.HashMap[PartitionLocation, util.Set[RpcCallContext]]]()
 
+  // registershuffle request waiting for response
+  private val registerShuffleRequest = new util.HashMap[String, util.Set[RpcCallContext]]()
+
   // blacklist
   private val blacklist = new ConcurrentSet[String]()
 
@@ -167,16 +170,16 @@ private[deploy] class Master(
       handleRegisterWorker(context, host, port, memory, worker)
 
     case RegisterShuffle(applicationId, shuffleId, numMappers, numPartitions) =>
-      logInfo(s"received RegisterShuffle request, $applicationId, $shuffleId, $numMappers, $numPartitions")
+      logDebug(s"received RegisterShuffle request, $applicationId, $shuffleId, $numMappers, $numPartitions")
       handleRegisterShuffle(context, applicationId, shuffleId, numMappers, numPartitions)
 
     case Revive(applicationId, shuffleId, oldPartition) =>
       logDebug(s"received Revive request, $applicationId, $shuffleId, $oldPartition")
       handleRevive(context, applicationId, shuffleId, oldPartition)
 
-    case MapperEnd(applicationId, shuffleId, mapId, attemptId) =>
+    case MapperEnd(applicationId, shuffleId, mapId, attemptId, numMappers) =>
       logDebug(s"received MapperEnd request, $applicationId, $shuffleId, $mapId, $attemptId")
-      handleMapperEnd(context, applicationId, shuffleId, mapId, attemptId)
+      handleMapperEnd(context, applicationId, shuffleId, mapId, attemptId, numMappers)
 
     case GetReducerFileGroup(applicationId: String, shuffleId: Int) =>
       logDebug(s"received GetShuffleFileGroup request, $applicationId, $shuffleId")
@@ -377,21 +380,42 @@ private[deploy] class Master(
   def handleRegisterShuffle(context: RpcCallContext, applicationId: String,
     shuffleId: Int, numMappers: Int, numPartitions: Int): Unit = {
     val shuffleKey = Utils.makeShuffleKey(applicationId, shuffleId)
-    if (registeredShuffle.contains(shuffleKey)) {
-      logError(s"shuffle $shuffleKey already registered!")
-      context.reply(RegisterShuffleResponse(StatusCode.ShuffleAlreadyRegistered, null))
-      return
-    }
 
-    if (numMappers == 0) {
-      logWarning("numMappers is 0!")
-      stageEndShuffleSet.synchronized {
-        stageEndShuffleSet.add(shuffleKey)
+    // check if same request already exists for the same shuffle.
+    // If do, just register and return
+    registerShuffleRequest.synchronized {
+      if (registerShuffleRequest.containsKey(shuffleKey)) {
+        logDebug("[handleRegisterShuffle] request for same shuffleKey exists, just register")
+        registerShuffleRequest.get(shuffleKey).add(context)
+        return
+      } else {
+        // if numMappers equals zero, just return
+        if (numMappers == 0) {
+          logWarning("numMappers is 0!")
+          stageEndShuffleSet.synchronized {
+            stageEndShuffleSet.add(shuffleKey)
+          }
+          context.reply(RegisterShuffleResponse(StatusCode.NumMapperZero, null))
+          return
+        }
+        // check if shuffle is registered
+        if (registeredShuffle.contains(shuffleKey)) {
+          val locs = workers.flatMap(w => w.getAllMasterLocationsWithMaxEpoch(shuffleKey))
+          logDebug(s"shuffle $shuffleKey already registered, just return")
+          if (locs.size != numPartitions) {
+            logError(s"location size not equal to numPartions: ${numPartitions}!")
+          }
+          context.reply(RegisterShuffleResponse(StatusCode.Success, locs))
+          return
+        }
+        logInfo(s"new shuffle request, shuffleKey ${shuffleKey}")
+        val set = new util.HashSet[RpcCallContext]()
+        set.add(context)
+        registerShuffleRequest.put(shuffleKey, set)
       }
-      context.reply(RegisterShuffleResponse(StatusCode.NumMapperZero, null))
-      return
     }
 
+    // offer slots
     val slots = workers.synchronized {
       MasterUtil.offerSlots(
         shuffleKey,
@@ -432,10 +456,14 @@ private[deploy] class Master(
       registeredShuffle.add(shuffleKey)
     }
     val locations: List[PartitionLocation] = slots.flatMap(_._2._1).toList
-    val attempts = new Array[Int](numMappers)
-    0 until numMappers foreach (idx => attempts(idx) = -1)
     shuffleMapperAttempts.synchronized {
-      shuffleMapperAttempts.put(shuffleKey, attempts)
+      if (!shuffleMapperAttempts.containsKey(shuffleKey)) {
+        val attempts = new Array[Int](numMappers)
+        0 until numMappers foreach (idx => attempts(idx) = -1)
+        shuffleMapperAttempts.synchronized {
+          shuffleMapperAttempts.put(shuffleKey, attempts)
+        }
+      }
     }
     shuffleCommittedPartitions.synchronized {
       val commitedPartitions = new ConcurrentSet[PartitionLocation]()
@@ -443,7 +471,13 @@ private[deploy] class Master(
     }
 
     logInfo(s"Handle RegisterShuffle Success, ${shuffleKey}")
-    context.reply(RegisterShuffleResponse(StatusCode.Success, locations))
+    registerShuffleRequest.synchronized {
+      val set = registerShuffleRequest.get(shuffleKey)
+      set.foreach(context => {
+        context.reply(RegisterShuffleResponse(StatusCode.Success, locations))
+      })
+      registerShuffleRequest.remove(shuffleKey)
+    }
   }
 
   private def handleRevive(context: RpcCallContext,
@@ -566,16 +600,18 @@ private[deploy] class Master(
     applicationId: String,
     shuffleId: Int,
     mapId: Int,
-    attemptId: Int): Unit = {
+    attemptId: Int,
+    numMappers: Int): Unit = {
     var askStageEnd: Boolean = false
     val shuffleKey = Utils.makeShuffleKey(applicationId, shuffleId)
     // update max attemptId
     shuffleMapperAttempts.synchronized {
-      val attempts = shuffleMapperAttempts.get(shuffleKey)
+      var attempts = shuffleMapperAttempts.get(shuffleKey)
       if (attempts == null) {
-        logError(s"shuffle $shuffleKey not registered!")
-        context.reply(MapperEndResponse(StatusCode.ShuffleNotRegistered))
-        return
+        logInfo(s"[handleMapperEnd] shuffle $shuffleKey not registered, create one")
+        attempts = new Array[Int](numMappers)
+        0 until numMappers foreach(ind => attempts(ind) = -1)
+        shuffleMapperAttempts.put(shuffleKey, attempts)
       }
 
       if (attempts(mapId) < 0) {
