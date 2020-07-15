@@ -111,14 +111,16 @@ public class MasterUtil {
             slaveLocation.setPeer(masterLocation);
 
             // add master location to WorkerInfo
-            workers.get(nextMasterInd).addMasterPartition(shuffleKey, masterLocation);
+            WorkerInfo worker = workers.get(nextMasterInd);
+            worker.addMasterPartition(shuffleKey, masterLocation);
             locations._1.add(masterLocation);
 
             // add slave location to WorkerInfo
             slots.putIfAbsent(workers.get(nextSlaveInd),
                     new Tuple2<>(new ArrayList<>(), new ArrayList<>()));
             locations = slots.get(workers.get(nextSlaveInd));
-            workers.get(nextSlaveInd).addSlavePartition(shuffleKey, slaveLocation);
+            worker = workers.get(nextSlaveInd);
+            worker.addSlavePartition(shuffleKey, slaveLocation);
             locations._2.add(slaveLocation);
 
             // update index

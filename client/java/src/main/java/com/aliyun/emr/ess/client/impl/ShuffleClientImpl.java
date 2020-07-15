@@ -242,6 +242,7 @@ public class ShuffleClientImpl extends ShuffleClient {
             @Override
             public void onFailure(Throwable e) {
                 // revive and push again on failure
+                logger.error("PushData failed!", e);
                 if (revive(applicationId, shuffleId, loc)) {
                     PartitionLocation newLoc = reducePartitionMap.get(shuffleId).get(reduceId);
                     try {

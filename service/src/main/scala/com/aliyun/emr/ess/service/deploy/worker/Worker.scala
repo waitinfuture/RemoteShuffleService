@@ -171,10 +171,6 @@ private[deploy] class Worker(
       logInfo("received GetDoubleChunkInfo request")
       handleGetDoubleChunkInfo(context, shuffleKey, mode, partitionLocation)
 
-    case GetShuffleStatus(shuffleKey) =>
-      logInfo(s"received GetShuffleStatus request, $shuffleKey")
-      handleGetShuffleStatus(context, shuffleKey)
-
     case ThreadDump =>
       logInfo("receive ThreadDump request")
       handleThreadDump(context)
@@ -266,20 +262,18 @@ private[deploy] class Worker(
       return
     }
     // reserve success, update status
-    workerInfo.synchronized {
-      workerInfo.addMasterPartition(shuffleKey, masterDoubleChunks)
-      workerInfo.addSlavePartition(shuffleKey, slaveDoubleChunks)
+    workerInfo.addMasterPartition(shuffleKey, masterDoubleChunks)
+    workerInfo.addSlavePartition(shuffleKey, slaveDoubleChunks)
 
-      logDebug(s"reserve buffer succeed!, ${shuffleKey}")
-      logDebug("masters========")
-      masterLocations.foreach(loc => {
-        logDebug(loc + ", peer " + loc.getPeer)
-      })
-      logDebug("slaves========")
-      slaveLocations.foreach(loc => {
-        logDebug(loc + ", peer " + loc.getPeer)
-      })
-    }
+    logDebug(s"reserve buffer succeed!, ${shuffleKey}")
+    logDebug("masters========")
+    masterLocations.foreach(loc => {
+      logDebug(loc + ", peer " + loc.getPeer)
+    })
+    logDebug("slaves========")
+    slaveLocations.foreach(loc => {
+      logDebug(loc + ", peer " + loc.getPeer)
+    })
 
     context.reply(ReserveBuffersResponse(StatusCode.Success))
   }
@@ -309,9 +303,12 @@ private[deploy] class Worker(
     val futures = new util.ArrayList[Future[_]]()
     if (commitLocationIds != null) {
       commitLocationIds.foreach(id => {
-        val target = workerInfo.synchronized {
-          workerInfo.getLocation(shuffleKey, id, mode)
+        val target = if (mode == PartitionLocation.Mode.Master) {
+          workerInfo.getMasterLocation(shuffleKey, id)
+        } else {
+          workerInfo.getSlaveLocation(shuffleKey, id)
         }
+
         if (target != null) {
           val future = commitThreadPool.submit(new Runnable {
             override def run(): Unit = {
@@ -362,9 +359,7 @@ private[deploy] class Worker(
     // destroy master locations
     if (masterLocations != null && !masterLocations.isEmpty) {
       masterLocations.foreach(loc => {
-        val allocatedLoc = workerInfo.synchronized {
-          workerInfo.getMasterLocation(shuffleKey, loc)
-        }
+        val allocatedLoc = workerInfo.getMasterLocation(shuffleKey, loc)
         if (allocatedLoc == null) {
           failedMasters.add(loc)
         } else {
@@ -373,9 +368,7 @@ private[deploy] class Worker(
         }
       })
       // remove master locations from workerinfo
-      workerInfo.synchronized {
-        workerInfo.removeMasterPartition(shuffleKey, masterLocations)
-      }
+      workerInfo.removeMasterPartition(shuffleKey, masterLocations)
     }
     // destroy slave locations
     if (slaveLocations != null && !slaveLocations.isEmpty) {
@@ -389,9 +382,7 @@ private[deploy] class Worker(
         }
       })
       // remove slave locations from worker info
-      workerInfo.synchronized {
-        workerInfo.removeSlavePartition(shuffleKey, slaveLocations)
-      }
+      workerInfo.removeSlavePartition(shuffleKey, slaveLocations)
     }
     // reply
     if (failedMasters.isEmpty && failedSlaves.isEmpty) {
@@ -406,14 +397,18 @@ private[deploy] class Worker(
     shuffleKey: String, partitionLocation: PartitionLocation,
     working: Int, masterData: Array[Byte], slaveData: Array[Byte]): Unit = {
     if (!workerInfo.containsShuffleSlave(shuffleKey)) {
-      val msg = s"shuffleKey ${shuffleKey} Not Found!"
+      val msg = s"shuffleKey ${
+        shuffleKey
+      } Not Found!"
       logError(msg)
       context.reply(ReplicateDataResponse(StatusCode.ShuffleNotRegistered, msg))
       return
     }
     val partition = workerInfo.getSlaveLocation(shuffleKey, partitionLocation.getUniqueId)
     if (partition == null) {
-      val msg = s"partition ${partitionLocation} not found!"
+      val msg = s"partition ${
+        partitionLocation
+      } not found!"
       logError(msg)
       context.reply(ReplicateDataResponse(StatusCode.PartitionNotFound, msg))
       return
@@ -435,9 +430,7 @@ private[deploy] class Worker(
     shuffleKey: String, mode: PartitionLocation.Mode,
     loc: PartitionLocation): Unit = {
     val location = if (mode == PartitionLocation.Mode.Master) {
-      workerInfo.synchronized {
-        workerInfo.getMasterLocation(shuffleKey, loc.getUniqueId)
-      }
+      workerInfo.getMasterLocation(shuffleKey, loc.getUniqueId)
     } else {
       workerInfo.getSlaveLocation(shuffleKey, loc.getUniqueId)
     }
@@ -456,40 +449,25 @@ private[deploy] class Worker(
     ))
   }
 
-  private def handleGetShuffleStatus(context: RpcCallContext, shuffleKey: String): Unit = {
-    val masterIdle = if (!workerInfo.containsShuffleMaster(shuffleKey)) {
-      true
-    } else {
-      workerInfo.getAllMasterLocations(shuffleKey).forall(loc => {
-        val locDb = loc.asInstanceOf[PartitionLocationWithDoubleChunks]
-        locDb.getDoubleChunk.slaveState == DoubleChunk.ChunkState.Ready &&
-          locDb.getDoubleChunk.masterState == DoubleChunk.ChunkState.Ready
-      })
-    }
-    val slaveIdle = if (!workerInfo.containsShuffleSlave(shuffleKey)) {
-      true
-    } else {
-      workerInfo.getAllSlaveLocations(shuffleKey).forall(loc => {
-        val locDb = loc.asInstanceOf[PartitionLocationWithDoubleChunks]
-        locDb.getDoubleChunk.slaveState == DoubleChunk.ChunkState.Ready &&
-          locDb.getDoubleChunk.masterState == DoubleChunk.ChunkState.Ready
-      })
-    }
-
-    context.reply(GetShuffleStatusResponse(!masterIdle || !slaveIdle))
-  }
-
   override def handlePushData(pushData: PushData, callback: RpcResponseCallback): Unit = {
     val shuffleKey = pushData.shuffleKey
     val mode = PartitionLocation.getMode(pushData.mode)
     val body = pushData.body.asInstanceOf[NettyManagedBuffer].getBuf
 
     // find DoubleChunk responsible for the data
-    val location = workerInfo.synchronized {
-      workerInfo.getLocation(shuffleKey, pushData.partitionUniqueId, mode)
+    val location = if (mode == PartitionLocation.Mode.Master) {
+      workerInfo.getMasterLocation(shuffleKey, pushData.partitionUniqueId)
+    } else {
+      workerInfo.getSlaveLocation(shuffleKey, pushData.partitionUniqueId)
     }
     if (location == null) {
-      val msg = s"Partition Location not found!, ${pushData.partitionUniqueId}, ${mode} ${shuffleKey}"
+      val msg = s"Partition Location not found!, ${
+        pushData.partitionUniqueId
+      }, ${
+        mode
+      } ${
+        shuffleKey
+      }"
       logError(msg)
       callback.onFailure(new IOException(msg))
       return
@@ -504,7 +482,9 @@ private[deploy] class Worker(
     } catch {
       case e: Exception =>
         val msg = "append data failed!"
-        logError(s"msg ${e.getMessage}")
+        logError(s"msg ${
+          e.getMessage
+        }")
         callback.onFailure(new IOException(msg, e))
         return
     }

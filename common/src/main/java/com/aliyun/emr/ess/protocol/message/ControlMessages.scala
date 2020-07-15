@@ -179,14 +179,6 @@ object ControlMessages {
     failedSlaves: util.List[String]
   ) extends WorkerMessage
 
-  case class GetShuffleStatus(
-    shuffleKey: String
-  ) extends WorkerMessage
-
-  case class GetShuffleStatusResponse(
-    dataWriting: Boolean
-  ) extends WorkerMessage
-
   /** ==========================================
    *              common
    *  ==========================================

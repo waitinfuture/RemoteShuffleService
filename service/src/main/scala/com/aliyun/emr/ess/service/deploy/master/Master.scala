@@ -323,12 +323,10 @@ private[deploy] class Master(
             logError("destroy failed when handling WorkerLost!")
           }
           // remove partitions
-          worker.synchronized {
-            if (mode == PartitionLocation.Mode.Master) {
-              worker.removeSlavePartition(shuffleKey, elem._2.map(_.getUniqueId))
-            } else {
-              worker.removeMasterPartition(shuffleKey, elem._2.map(_.getUniqueId))
-            }
+          if (mode == PartitionLocation.Mode.Master) {
+            worker.removeSlavePartition(shuffleKey, elem._2.map(_.getUniqueId))
+          } else {
+            worker.removeMasterPartition(shuffleKey, elem._2.map(_.getUniqueId))
           }
         })
       })
@@ -353,9 +351,7 @@ private[deploy] class Master(
       return
     }
 
-    worker.synchronized {
-      worker.removeMasterPartition(shuffleKey, location.getUniqueId)
-    }
+    worker.removeMasterPartition(shuffleKey, location.getUniqueId)
     context.reply(MasterPartitionSuicideResponse(StatusCode.Success))
   }
 
@@ -441,10 +437,8 @@ private[deploy] class Master(
         destroyBuffersWithRetry(shuffleKey, entry._1,
           entry._2._1.map(_.getUniqueId),
           entry._2._2.map(_.getUniqueId))
-        entry._1.synchronized {
-          entry._1.removeMasterPartition(shuffleKey, entry._2._1.map(_.getUniqueId))
-          entry._1.removeSlavePartition(shuffleKey, entry._2._2.map(_.getUniqueId))
-        }
+        entry._1.removeMasterPartition(shuffleKey, entry._2._1.map(_.getUniqueId))
+        entry._1.removeSlavePartition(shuffleKey, entry._2._2.map(_.getUniqueId))
       })
       logInfo("fail to reserve buffers")
       context.reply(RegisterShuffleResponse(StatusCode.ReserveBufferFailed, null))
@@ -567,10 +561,8 @@ private[deploy] class Master(
         destroyBuffersWithRetry(shuffleKey,
           entry._1, entry._2._1.map(_.getUniqueId),
           entry._2._2.map(_.getUniqueId))
-        entry._1.synchronized {
-          entry._1.removeMasterPartition(shuffleKey, entry._2._1.map(_.getUniqueId))
-          entry._1.removeSlavePartition(shuffleKey, entry._2._2.map(_.getUniqueId))
-        }
+        entry._1.removeMasterPartition(shuffleKey, entry._2._1.map(_.getUniqueId))
+        entry._1.removeSlavePartition(shuffleKey, entry._2._2.map(_.getUniqueId))
       })
       logError("fail to reserve buffers")
       shuffleReviving.synchronized {
@@ -610,7 +602,7 @@ private[deploy] class Master(
       if (attempts == null) {
         logInfo(s"[handleMapperEnd] shuffle $shuffleKey not registered, create one")
         attempts = new Array[Int](numMappers)
-        0 until numMappers foreach(ind => attempts(ind) = -1)
+        0 until numMappers foreach (ind => attempts(ind) = -1)
         shuffleMapperAttempts.put(shuffleKey, attempts)
       }
 
@@ -682,17 +674,12 @@ private[deploy] class Master(
       if (failedSlave == null || failedSlave.isEmpty) {
         // remove slave partition
         if (slaveWorker != null) {
-          slaveWorker.synchronized {
-            slaveWorker.removeSlavePartition(shuffleKey, slaveLocation.getUniqueId)
-          }
+          slaveWorker.removeSlavePartition(shuffleKey, slaveLocation.getUniqueId)
         }
       }
     }
     // update master locations's peer
-    masterWorker.synchronized {
-      val loc = masterWorker.getMasterLocation(shuffleKey, masterLocation.getUniqueId)
-      loc.setPeer(null)
-    }
+    masterWorker.setMasterPeer(shuffleKey, masterLocation, null)
     // offer new slot
     val location = workers.synchronized {
       MasterUtil.offerSlaveSlot(slaveLocation.getPeer, workersNotBlacklisted())
@@ -713,22 +700,15 @@ private[deploy] class Master(
       logError("reserve buffer failed!")
       // update status
       if (slaveWorker != null) {
-        slaveWorker.synchronized {
-          slaveWorker.removeSlavePartition(shuffleKey, location._2.getUniqueId)
-        }
+        slaveWorker.removeSlavePartition(shuffleKey, location._2.getUniqueId)
       }
       context.reply(SlaveLostResponse(StatusCode.ReserveBufferFailed, null))
       return
     }
     // add slave partition
-    location._1.synchronized {
-      location._1.addSlavePartition(shuffleKey, location._2)
-    }
+    location._1.addSlavePartition(shuffleKey, location._2)
     // update peer
-    masterWorker.synchronized {
-      val loc = masterWorker.getMasterLocation(shuffleKey, masterLocation.getUniqueId)
-      loc.setPeer(location._2)
-    }
+    masterWorker.setMasterPeer(shuffleKey, masterLocation, location._2)
     // handle SlaveLost success, reply
     context.reply(SlaveLostResponse(StatusCode.Success, location._2))
   }
@@ -836,10 +816,12 @@ private[deploy] class Master(
 
     // ask all workers holding master/slave partition to release resource
     workers.foreach(worker => {
+      val allMasterIds = worker.getAllMasterIds(shuffleKey)
+      val allSlaveIds = worker.getAllSlaveIds(shuffleKey)
       var res = worker.endpoint.askSync[DestroyResponse](
         Destroy(shuffleKey,
-          worker.getAllMasterIds(shuffleKey),
-          worker.getAllSlaveIds(shuffleKey)
+          allMasterIds,
+          allSlaveIds
         )
       )
       // retry once to destroy
@@ -942,8 +924,9 @@ private[deploy] class Master(
         return null
       }
 
-      (nextShuffleKey, worker.getAllMasterIds(nextShuffleKey),
-        worker.getAllSlaveIds(nextShuffleKey))
+      val allMasterIds = worker.getAllMasterIds(nextShuffleKey)
+      val allSlaveIds = worker.getAllSlaveIds(nextShuffleKey)
+      (nextShuffleKey, allMasterIds, allSlaveIds)
     }
 
     // destroy partition buffers in workers, then update info in master
@@ -963,10 +946,8 @@ private[deploy] class Master(
             )
           }
           // remove partitions from workerinfo
-          worker.synchronized {
-            worker.removeMasterPartition(shuffleKey, masterLocs)
-            worker.removeSlavePartition(shuffleKey, slaveLocs)
-          }
+          worker.removeMasterPartition(shuffleKey, masterLocs)
+          worker.removeSlavePartition(shuffleKey, slaveLocs)
         }
         nextShufflePartitions = getNextShufflePartitions(worker)
       }

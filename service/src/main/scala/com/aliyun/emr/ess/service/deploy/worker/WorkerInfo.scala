@@ -33,9 +33,13 @@ private[ess] class WorkerInfo(
   init()
 
   // only exposed for test
-  def freeMemory: Long = memory - memoryUsed
+  def freeMemory(): Long = this.synchronized {
+    memory - memoryUsed
+  }
 
-  def slotAvailable(): Boolean = freeMemory >= partitionSize
+  def slotAvailable(): Boolean = this.synchronized {
+    freeMemory >= partitionSize
+  }
 
   private def init() {
     memoryUsed = 0
@@ -47,9 +51,9 @@ private[ess] class WorkerInfo(
     host + ":" + port
   }
 
-  def addPartition(shuffleKey: String,
+  private def addPartition(shuffleKey: String,
     location: PartitionLocation,
-    partitionInfo: PartitionInfo): Unit = {
+    partitionInfo: PartitionInfo): Unit = this.synchronized {
     partitionInfo.putIfAbsent(shuffleKey,
       new util.HashMap[Int, util.List[PartitionLocation]]())
     val reduceLocMap = partitionInfo.get(shuffleKey)
@@ -61,7 +65,7 @@ private[ess] class WorkerInfo(
 
   private def addPartition(shuffleKey: String,
     locations: util.List[PartitionLocation],
-    partitionInfo: PartitionInfo): Unit = {
+    partitionInfo: PartitionInfo): Unit = this.synchronized {
     partitionInfo.putIfAbsent(shuffleKey,
       new util.HashMap[Int, util.List[PartitionLocation]]())
     val reduceLocMap = partitionInfo.get(shuffleKey)
@@ -73,26 +77,10 @@ private[ess] class WorkerInfo(
     memoryUsed += partitionSize * locations.size()
   }
 
-  def addMasterPartition(shuffleKey: String, location: PartitionLocation): Unit = {
-    addPartition(shuffleKey, location, masterPartitionLocations)
-  }
-
-  def addMasterPartition(shuffleKey: String, locations: util.List[PartitionLocation]): Unit = {
-    addPartition(shuffleKey, locations, masterPartitionLocations)
-  }
-
-  def addSlavePartition(shuffleKey: String, location: PartitionLocation): Unit = {
-    addPartition(shuffleKey, location, slavePartitionLocations)
-  }
-
-  def addSlavePartition(shuffleKey: String, locations: util.List[PartitionLocation]): Unit = {
-    addPartition(shuffleKey, locations, slavePartitionLocations)
-  }
-
-  def removePartition(shuffleKey: String,
+  private def removePartition(shuffleKey: String,
     uniqueId: String,
     partitionInfo: PartitionInfo
-  ): Unit = {
+  ): Unit = this.synchronized {
     if (!partitionInfo.containsKey(shuffleKey)) {
       return
     }
@@ -117,9 +105,9 @@ private[ess] class WorkerInfo(
     }
   }
 
-  def removePartition(shuffleKey: String,
+  private def removePartition(shuffleKey: String,
     uniqueIds: util.Collection[String],
-    partitionInfo: PartitionInfo): Unit = {
+    partitionInfo: PartitionInfo): Unit = this.synchronized {
     if (!partitionInfo.containsKey(shuffleKey)) {
       return
     }
@@ -146,36 +134,8 @@ private[ess] class WorkerInfo(
     }
   }
 
-  def removeMasterPartition(shuffleKey: String, uniqueId: String): Unit = {
-    removePartition(shuffleKey, uniqueId, masterPartitionLocations)
-  }
-
-  def removeMasterPartition(shuffleKey: String, uniqueIds: util.Collection[String]): Unit = {
-    removePartition(shuffleKey, uniqueIds, masterPartitionLocations)
-  }
-
-  def removeMasterPartition(shuffleKey: String): Unit = {
-    val uniqueIds = getAllMasterIds(shuffleKey)
-    removeMasterPartition(shuffleKey, uniqueIds)
-    masterPartitionLocations.remove(shuffleKey)
-  }
-
-  def removeSlavePartition(shuffleKey: String, uniqueId: String): Unit = {
-    removePartition(shuffleKey, uniqueId, slavePartitionLocations)
-  }
-
-  def removeSlavePartition(shuffleKey: String,
-    uniqueIds: util.Collection[String]): Unit = {
-    removePartition(shuffleKey, uniqueIds, slavePartitionLocations)
-  }
-
-  def removeSlavePartition(shuffleKey: String): Unit = {
-    val uniqueIds = getAllSlaveIds(shuffleKey)
-    removeSlavePartition(shuffleKey, uniqueIds)
-    slavePartitionLocations.remove(shuffleKey)
-  }
-
-  def getAllIds(shuffleKey: String, partitionInfo: PartitionInfo): util.List[String] = {
+  private def getAllIds(shuffleKey: String,
+    partitionInfo: PartitionInfo): util.List[String] = this.synchronized {
     if (!partitionInfo.containsKey(shuffleKey)) {
       return null
     }
@@ -187,6 +147,48 @@ private[ess] class WorkerInfo(
     )
   }
 
+  def addMasterPartition(shuffleKey: String, location: PartitionLocation): Unit = {
+    addPartition(shuffleKey, location, masterPartitionLocations)
+  }
+
+  def addMasterPartition(shuffleKey: String, locations: util.List[PartitionLocation]): Unit = {
+    addPartition(shuffleKey, locations, masterPartitionLocations)
+  }
+
+  def addSlavePartition(shuffleKey: String, location: PartitionLocation): Unit = {
+    addPartition(shuffleKey, location, slavePartitionLocations)
+  }
+
+  def addSlavePartition(shuffleKey: String, locations: util.List[PartitionLocation]): Unit = {
+    addPartition(shuffleKey, locations, slavePartitionLocations)
+  }
+
+  def removeMasterPartition(shuffleKey: String, uniqueId: String): Unit = {
+    removePartition(shuffleKey, uniqueId, masterPartitionLocations)
+  }
+
+  def removeMasterPartition(shuffleKey: String, uniqueIds: util.Collection[String]): Unit = {
+    removePartition(shuffleKey, uniqueIds, masterPartitionLocations)
+  }
+
+  def removeMasterPartition(shuffleKey: String): Unit = {
+    val uniqueIds = getAllMasterIds(shuffleKey)
+    removeMasterPartition(shuffleKey, uniqueIds)
+  }
+
+  def removeSlavePartition(shuffleKey: String, uniqueId: String): Unit = {
+    removePartition(shuffleKey, uniqueId, slavePartitionLocations)
+  }
+
+  def removeSlavePartition(shuffleKey: String, uniqueIds: util.Collection[String]): Unit = {
+    removePartition(shuffleKey, uniqueIds, slavePartitionLocations)
+  }
+
+  def removeSlavePartition(shuffleKey: String): Unit = {
+    val uniqueIds = getAllSlaveIds(shuffleKey)
+    removeSlavePartition(shuffleKey, uniqueIds)
+  }
+
   def getAllMasterIds(shuffleKey: String): util.List[String] = {
     getAllIds(shuffleKey, masterPartitionLocations)
   }
@@ -195,7 +197,8 @@ private[ess] class WorkerInfo(
     getAllIds(shuffleKey, slavePartitionLocations)
   }
 
-  def getAllMasterLocations(shuffleKey: String): util.List[PartitionLocation] = {
+  def getAllMasterLocations(shuffleKey: String): util.List[PartitionLocation] =
+  this.synchronized {
     if (masterPartitionLocations.containsKey(shuffleKey)) {
       masterPartitionLocations.get(shuffleKey)
         .values()
@@ -204,7 +207,8 @@ private[ess] class WorkerInfo(
     } else new util.ArrayList[PartitionLocation]()
   }
 
-  def getAllMasterLocationsWithMaxEpoch(shuffleKey: String): util.List[PartitionLocation] = {
+  def getAllMasterLocationsWithMaxEpoch(shuffleKey: String): util.List[PartitionLocation] =
+  this.synchronized {
     if (masterPartitionLocations.containsKey(shuffleKey)) {
       masterPartitionLocations.get(shuffleKey)
         .values()
@@ -220,7 +224,7 @@ private[ess] class WorkerInfo(
     } else new util.ArrayList[PartitionLocation]()
   }
 
-  def getAllSlaveLocations(shuffleKey: String): util.List[PartitionLocation] = {
+  def getAllSlaveLocations(shuffleKey: String): util.List[PartitionLocation] = this.synchronized {
     if (slavePartitionLocations.containsKey(shuffleKey)) {
       new util.ArrayList[PartitionLocation](
         slavePartitionLocations.get(shuffleKey)
@@ -230,14 +234,15 @@ private[ess] class WorkerInfo(
     } else new util.ArrayList[PartitionLocation]()
   }
 
-  def setMasterPeer(shuffleKey: String, loc: PartitionLocation, peer: PartitionLocation): Unit = {
+  def setMasterPeer(shuffleKey: String, loc: PartitionLocation, peer: PartitionLocation): Unit =
+  this.synchronized {
     masterPartitionLocations.get(shuffleKey).get(loc.getReduceId)
       .find(l => l.getEpoch == loc.getEpoch).get
       .setPeer(peer)
   }
 
-  def getLocation(shuffleKey: String, uniqueId: String,
-    mode: PartitionLocation.Mode): PartitionLocation = {
+  private def getLocation(shuffleKey: String, uniqueId: String,
+    mode: PartitionLocation.Mode): PartitionLocation = this.synchronized {
     val tokens = uniqueId.split("-", 2)
     val reduceId = tokens(0).toInt
     val epoch = tokens(1).toInt
@@ -262,7 +267,8 @@ private[ess] class WorkerInfo(
     getLocation(shuffleKey, uniqueId, PartitionLocation.Mode.Slave)
   }
 
-  def getLocationWithMaxEpoch(shuffleKey: String, reduceId: Int): Option[PartitionLocation] = {
+  def getLocationWithMaxEpoch(shuffleKey: String,
+    reduceId: Int): Option[PartitionLocation] = this.synchronized {
     if (!masterPartitionLocations.containsKey(shuffleKey) ||
       !masterPartitionLocations.get(shuffleKey).containsKey(reduceId)) {
       return None
@@ -282,19 +288,19 @@ private[ess] class WorkerInfo(
     Some(currentPartition)
   }
 
-  def containsShuffleMaster(shuffleKey: String): Boolean = {
+  def containsShuffleMaster(shuffleKey: String): Boolean = this.synchronized {
     masterPartitionLocations.containsKey(shuffleKey)
   }
 
-  def containsShuffleSlave(shuffleKey: String): Boolean = {
+  def containsShuffleSlave(shuffleKey: String): Boolean = this.synchronized {
     slavePartitionLocations.containsKey(shuffleKey)
   }
 
-  def getMasterShuffleKeys(): util.Set[String] = {
+  def getMasterShuffleKeys(): util.Set[String] = this.synchronized {
     masterPartitionLocations.keySet()
   }
 
-  def getSlaveShuffleKeys(): util.Set[String] = {
+  def getSlaveShuffleKeys(): util.Set[String] = this.synchronized {
     slavePartitionLocations.keySet()
   }
 
@@ -362,23 +368,5 @@ private[ess] class WorkerInfo(
 
   override def hashCode(): Int = {
     hostPort.hashCode
-  }
-}
-
-object WorkerInfo {
-  def main(args: Array[String]): Unit = {
-    val runtimeMXBean = ManagementFactory.getRuntimeMXBean
-    println(runtimeMXBean.getName)
-    val pid = runtimeMXBean.getName.split("@")(0)
-    println(pid)
-
-    val stream = Runtime.getRuntime.exec(s"jstack -l ${pid}").getInputStream
-    val sb = new StringBuilder
-    var res = stream.read()
-    while (res != -1) {
-      sb.append(res.toChar)
-      res = stream.read()
-    }
-    println(sb)
   }
 }
