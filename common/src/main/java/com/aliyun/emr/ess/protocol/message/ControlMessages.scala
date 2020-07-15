@@ -195,12 +195,14 @@ object ControlMessages {
     slaveLocation: PartitionLocation
   ) extends Message
 
-  // for test
   case object GetWorkerInfos extends Message
   case class GetWorkerInfosResponse(
     status: StatusCode,
     workerInfos: Any
   ) extends Message
+
+  case object ThreadDump extends Message
+  case class ThreadDumpResponse(threadDump: String)
 }
 
 object DataMessages {

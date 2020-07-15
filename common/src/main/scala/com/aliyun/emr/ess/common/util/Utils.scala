@@ -18,6 +18,7 @@
 package com.aliyun.emr.ess.common.util
 
 import java.io.{File, FileInputStream, InputStreamReader, IOException}
+import java.lang.management.ManagementFactory
 import java.math.{MathContext, RoundingMode}
 import java.net._
 import java.nio.charset.StandardCharsets
@@ -29,7 +30,6 @@ import com.aliyun.emr.ess.common.internal.Logging
 import com.google.common.net.InetAddresses
 import io.netty.channel.unix.Errors.NativeIoException
 import org.apache.commons.lang3.SystemUtils
-
 import scala.collection.JavaConverters._
 import scala.collection.Map
 import scala.util.Try
@@ -37,7 +37,8 @@ import scala.util.control.{ControlThrowable, NonFatal}
 
 import com.aliyun.emr.network.util.{ConfigProvider, JavaUtils, TransportConf}
 
-object Utils extends Logging {
+object Utils
+  extends Logging {
 
   def createDateFormat = new SimpleDateFormat("yyyyMMddHHmmss", Locale.US)
 
@@ -177,7 +178,7 @@ object Utils extends Logging {
   }
 
   def tryWithSafeFinallyAndFailureCallbacks[T](block: => T)
-                                              (catchBlock: => Unit = (), finallyBlock: => Unit = ()): T = {
+    (catchBlock: => Unit = (), finallyBlock: => Unit = ()): T = {
     var originalThrowable: Throwable = null
     try {
       block
@@ -211,10 +212,10 @@ object Utils extends Logging {
   }
 
   def startServiceOnPort[T](
-                             startPort: Int,
-                             startService: Int => (T, Int),
-                             conf: EssConf,
-                             serviceName: String = ""): (T, Int) = {
+    startPort: Int,
+    startService: Int => (T, Int),
+    conf: EssConf,
+    serviceName: String = ""): (T, Int) = {
 
     require(startPort == 0 || (1024 <= startPort && startPort < 65536),
       "startPort should be between 1024 and 65535 (inclusive), or 0 for a random free port.")
@@ -436,7 +437,7 @@ object Utils extends Logging {
   def getDefaultPropertiesFile(env: Map[String, String] = sys.env): String = {
     env.get("ESS_CONF_DIR")
       .orElse(env.get("ESS_HOME").map { t => s"$t${File.separator}conf" })
-      .map { t => new File(s"$t${File.separator}ess-defaults.conf")}
+      .map { t => new File(s"$t${File.separator}ess-defaults.conf") }
       .filter(_.isFile)
       .map(_.getAbsolutePath)
       .orNull
@@ -485,7 +486,7 @@ object Utils extends Logging {
     s"$applicationId-$shuffleId-$reduceId"
   }
 
-  def makeMapKey(applicationId: String, shuffleId: Int, mapId: Int, attempId: Int): String =  {
+  def makeMapKey(applicationId: String, shuffleId: Int, mapId: Int, attempId: Int): String = {
     s"$applicationId-$shuffleId-$mapId-$attempId"
   }
 
@@ -495,7 +496,7 @@ object Utils extends Logging {
 
   def bytesToInt(bytes: Array[Byte], bigEndian: Boolean = true): Int = {
     if (bigEndian) {
-      bytes(0) << 24 | bytes(1) << 16 | bytes(2) << 8 |bytes(3)
+      bytes(0) << 24 | bytes(1) << 16 | bytes(2) << 8 | bytes(3)
     } else {
       bytes(3) << 24 | bytes(2) << 16 | bytes(1) << 8 | bytes(0)
     }
@@ -505,5 +506,19 @@ object Utils extends Logging {
     val start = System.currentTimeMillis
     f
     System.currentTimeMillis - start
+  }
+
+  def getThreadDump(): String = {
+    val runtimeMXBean = ManagementFactory.getRuntimeMXBean
+    val pid = runtimeMXBean.getName.split("@")(0)
+
+    val stream = Runtime.getRuntime.exec(s"jstack -l ${pid}").getInputStream
+    val sb = new StringBuilder
+    var res = stream.read()
+    while (res != -1) {
+      sb.append(res.toChar)
+      res = stream.read()
+    }
+    sb.toString()
   }
 }

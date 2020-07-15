@@ -127,12 +127,12 @@ public class DoubleChunk {
         }
         synchronized (this) {
             if (dataEpoch < epoch) {
-                logger.info(String.format("drop data of epoch %s, current epoch %s", dataEpoch, epoch));
+                logger.debug(String.format("drop data of epoch %s, current epoch %s", dataEpoch, epoch));
                 return epoch;
             }
 
             if (dataEpoch > epoch) {
-                logger.info(String.format("new epoch %s, current epoch %s", dataEpoch, epoch));
+                logger.debug(String.format("new epoch %s, current epoch %s", dataEpoch, epoch));
                 epoch = dataEpoch;
                 working = (working + 1) % 2;
                 final int slaveIndex = (working + 1) % 2;

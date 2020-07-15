@@ -174,6 +174,10 @@ private[deploy] class Worker(
     case GetShuffleStatus(shuffleKey) =>
       logInfo(s"received GetShuffleStatus request, $shuffleKey")
       handleGetShuffleStatus(context, shuffleKey)
+
+    case ThreadDump =>
+      logInfo("receive ThreadDump request")
+      handleThreadDump(context)
   }
 
   private def handleReserveBuffers(context: RpcCallContext, shuffleKey: String,
@@ -346,7 +350,7 @@ private[deploy] class Worker(
     // check whether shuffleKey has registered
     if (!workerInfo.containsShuffleMaster(shuffleKey) &&
       !workerInfo.containsShuffleSlave(shuffleKey)) {
-      logError(s"[handleDestroy] shuffle $shuffleKey not registered!")
+      logWarning(s"[handleDestroy] shuffle $shuffleKey not registered!")
       context.reply(DestroyResponse(
         StatusCode.ShuffleNotRegistered, masterLocations, slaveLocations))
       return
@@ -518,6 +522,11 @@ private[deploy] class Worker(
     } else {
       callback.onSuccess(ByteBuffer.wrap(new Array[Byte](0)))
     }
+  }
+
+  private def handleThreadDump(context: RpcCallContext): Unit = {
+    val threadDump = Utils.getThreadDump()
+    context.reply(ThreadDumpResponse(threadDump))
   }
 
   private def registerWithMaster() {

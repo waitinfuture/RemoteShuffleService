@@ -13,6 +13,7 @@ import com.aliyun.emr.ess.common.util.{EssPathUtil, ThreadUtils, Utils}
 import com.aliyun.emr.ess.protocol.{PartitionLocation, RpcNameConstants}
 import com.aliyun.emr.ess.protocol.message.ControlMessages._
 import com.aliyun.emr.ess.protocol.message.StatusCode
+import com.aliyun.emr.ess.service.deploy.master.http.HttpServer
 import com.aliyun.emr.ess.service.deploy.worker.WorkerInfo
 import io.netty.util.internal.ConcurrentSet
 import org.apache.hadoop.conf.Configuration
@@ -61,6 +62,11 @@ private[deploy] class Master(
 
   // workerLost events
   private val workerLostEvents = new ConcurrentSet[String]()
+
+  // http server
+  val httpServer = new HttpServer(9098, this)
+  httpServer.start()
+  logInfo("[Master] httpServer started")
 
   // start threads to check timeout for workers and applications
   override def onStart(): Unit = {
@@ -882,7 +888,7 @@ private[deploy] class Master(
     if (success) {
       context.reply(UnregisterShuffleResponse(StatusCode.Success))
     } else {
-      logError("delete files failed!")
+      logError(s"delete files failed! ${shuffleDir}")
       context.reply(UnregisterShuffleResponse(StatusCode.DeleteFilesFailed))
     }
     logInfo("unregister success")
@@ -955,6 +961,45 @@ private[deploy] class Master(
 
   private def workersNotBlacklisted(): util.List[WorkerInfo] = {
     workers.filter(w => !blacklist.contains(w.hostPort))
+  }
+
+  def getWorkerInfos(): String = {
+    val sb = new StringBuilder
+    workers.foreach(w => {
+      sb.append("==========WorkerInfos in Master==========\n")
+      sb.append(w).append("\n")
+
+      val workerInfo = w.endpoint.askSync[GetWorkerInfosResponse](GetWorkerInfos)
+        .workerInfos.asInstanceOf[util.List[WorkerInfo]](0)
+
+      sb.append("==========WorkerInfos in Workers==========\n")
+      sb.append(workerInfo).append("\n")
+
+      if (w.hasSameInfoWith(workerInfo)) {
+        sb.append("Consist!").append("\n")
+      } else {
+        sb.append("[ERROR] Inconsist!").append("\n")
+      }
+    })
+
+    workers.foreach(w => {
+    })
+
+    sb.toString()
+  }
+
+  def getThreadDump(): String = {
+    val sb = new StringBuilder
+    val threadDump = Utils.getThreadDump()
+    sb.append("==========Master ThreadDump==========\n")
+    sb.append(threadDump).append("\n")
+    workers.foreach(w => {
+      sb.append(s"==========Worker ${w.hostPort} ThreadDump==========\n")
+      val res = w.endpoint.askSync[ThreadDumpResponse](ThreadDump)
+      sb.append(res.threadDump).append("\n")
+    })
+
+    sb.toString()
   }
 }
 

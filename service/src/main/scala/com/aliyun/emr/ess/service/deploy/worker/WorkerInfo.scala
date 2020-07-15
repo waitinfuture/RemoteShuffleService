@@ -1,5 +1,6 @@
 package com.aliyun.emr.ess.service.deploy.worker
 
+import java.lang.management.ManagementFactory
 import java.util
 
 import com.aliyun.emr.ess.common.rpc.RpcEndpointRef
@@ -313,7 +314,19 @@ private[ess] class WorkerInfo(
         val otherSlaves = other.slavePartitionLocations.get(shuffleKey)
         slaves.forall(loc => otherSlaves.contains(loc._1))
       })
+  }
 
+  override def toString(): String = {
+    s"""
+       |Address: ${hostPort}
+       |Capacity: ${memory}
+       |MemoryUsed: ${memoryUsed}
+       |PartitionBufferSize: ${partitionSize}
+       |SlotsUsed: ${memoryUsed / partitionSize}
+       |SlotsAvailable: ${freeMemory / partitionSize}
+       |MasterLocations: ${masterPartitionLocations.size()}
+       |SlaveLocations: ${slavePartitionLocations.size()}
+       |""".stripMargin
   }
 
   override def equals(obj: Any): Boolean = {
@@ -324,8 +337,22 @@ private[ess] class WorkerInfo(
   override def hashCode(): Int = {
     hostPort.hashCode
   }
+}
 
-  override def toString: String = {
-    s"${host}:${port}  ${freeMemory}/${memory}"
+object WorkerInfo {
+  def main(args: Array[String]): Unit = {
+    val runtimeMXBean = ManagementFactory.getRuntimeMXBean
+    println(runtimeMXBean.getName)
+    val pid = runtimeMXBean.getName.split("@")(0)
+    println(pid)
+
+    val stream = Runtime.getRuntime.exec(s"jstack -l ${pid}").getInputStream
+    val sb = new StringBuilder
+    var res = stream.read()
+    while (res != -1) {
+      sb.append(res.toChar)
+      res = stream.read()
+    }
+    println(sb)
   }
 }
