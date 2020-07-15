@@ -722,7 +722,11 @@ private[deploy] class Master(
     val shuffleKey = Utils.makeShuffleKey(applicationId, shuffleId)
     // check whether shuffle has registered
     if (!registeredShuffle.contains(shuffleKey)) {
-      logError(s"shuffle ${shuffleKey} not reigstered!")
+      logInfo(s"[handleStageEnd] shuffle ${shuffleKey} not reigstered, maybe because no shuffle data")
+      // record in stageEndShuffleSet
+      stageEndShuffleSet.synchronized {
+        stageEndShuffleSet.add(shuffleKey)
+      }
       if (context != null) {
         context.reply(StageEndResponse(StatusCode.ShuffleNotRegistered, null))
       }
