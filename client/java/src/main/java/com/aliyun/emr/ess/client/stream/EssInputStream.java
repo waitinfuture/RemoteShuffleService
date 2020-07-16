@@ -39,6 +39,20 @@ public class EssInputStream extends InputStream {
 
     private MetricsCallback callback;
 
+    // EmptyInpuStream
+    public static EssInputStream EmptyInputStream =
+        new EssInputStream(new EssConf(), new HashSet<>(), null) {
+        @Override
+        public int read() throws IOException {
+            return -1;
+        }
+
+        @Override
+        public int read(byte b[], int off, int len) throws IOException {
+            return -1;
+        }
+    };
+
     // mapId, attempId, batchId, size
     private final byte[] sizeBuf = new byte[16];
 
