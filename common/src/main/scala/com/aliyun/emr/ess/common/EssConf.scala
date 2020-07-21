@@ -489,19 +489,19 @@ object EssConf extends Logging {
   }
 
   def essWorkerTimeoutS(conf: EssConf): Long = {
-    conf.getTimeAsSeconds("ess.worker.timeout", "60s")
+    conf.getTimeAsSeconds("ess.worker.timeout", "120s")
   }
 
   def essWorkerTimeoutMs(conf: EssConf): Long = {
-    conf.getTimeAsMs("ess.worker.timeout", "60s")
+    conf.getTimeAsMs("ess.worker.timeout", "120s")
   }
 
   def essApplicationTimeoutS(conf: EssConf): Long = {
-    conf.getTimeAsSeconds("ess.application.timeout", "180s")
+    conf.getTimeAsSeconds("ess.application.timeout", "120s")
   }
 
   def essApplicationTimeoutMs(conf: EssConf): Long = {
-    conf.getTimeAsMs("ess.application.timeout", "180s")
+    conf.getTimeAsMs("ess.application.timeout", "120s")
   }
 
   def essMasterHost(conf: EssConf): String = {
@@ -522,6 +522,10 @@ object EssConf extends Logging {
 
   def essRegisterShuffleMaxRetry(conf: EssConf): Int = {
     conf.getInt("ess.register.shuffle.max.retry", 3)
+  }
+
+  def essFlushTimeout(conf: EssConf): Long = {
+    conf.getTimeAsSeconds("ess.flush.timeout", "240s")
   }
 }
 

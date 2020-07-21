@@ -327,7 +327,7 @@ private[deploy] class Worker(
           futures.add(future)
         }
       })
-      futures.foreach(f => f.get(30, TimeUnit.SECONDS))
+      futures.foreach(f => f.get(EssConf.essFlushTimeout(conf), TimeUnit.SECONDS))
     }
 
     // reply

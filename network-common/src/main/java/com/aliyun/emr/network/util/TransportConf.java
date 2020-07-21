@@ -94,7 +94,7 @@ public class TransportConf {
   /** Connect timeout in milliseconds. Default 120 secs. */
   public int connectionTimeoutMs() {
     long defaultNetworkTimeoutS = JavaUtils.timeStringAsSec(
-      conf.get("ess.network.timeout", "120s"));
+      conf.get("ess.network.timeout", "240s"));
     long defaultTimeoutMs = JavaUtils.timeStringAsSec(
       conf.get(ESS_NETWORK_IO_CONNECTIONTIMEOUT_KEY, defaultNetworkTimeoutS + "s")) * 1000;
     return (int) defaultTimeoutMs;
