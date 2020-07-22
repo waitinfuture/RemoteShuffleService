@@ -488,6 +488,10 @@ object EssConf extends Logging {
     conf.getBoolean("ess.push.data.replicate", false)
   }
 
+  def essDfsReplication(conf: EssConf): String = {
+    conf.get("ess.dfs.replication", "2")
+  }
+
   def essWorkerTimeoutS(conf: EssConf): Long = {
     conf.getTimeAsSeconds("ess.worker.timeout", "120s")
   }

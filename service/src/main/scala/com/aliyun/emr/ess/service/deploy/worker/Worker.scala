@@ -94,7 +94,7 @@ private[deploy] class Worker(
   private val fs = {
     val hadoopConf = new Configuration
     hadoopConf.set("dfs.checksum.type", "NULL")
-    hadoopConf.set("dfs.replication", "2")
+    hadoopConf.set("dfs.replication", EssConf.essDfsReplication(conf))
     val path = new Path(EssConf.essWorkerBaseDir(conf))
     logInfo(s"path ${path}")
     val _fs = path.getFileSystem(hadoopConf)
@@ -149,7 +149,7 @@ private[deploy] class Worker(
       handleReserveBuffers(context, shuffleKey, masterLocations, slaveLocations)
 
     case CommitFiles(shuffleKey, commitLocations, mode) =>
-      logInfo(s"receive CommitFiles request, $shuffleKey, $mode")
+      logInfo(s"receive CommitFiles request, $shuffleKey, $mode, files ${commitLocations.mkString(",")}")
       val commitFilesTimeMs = Utils.timeIt({
         handleCommitFiles(context, shuffleKey, commitLocations, mode)
       })

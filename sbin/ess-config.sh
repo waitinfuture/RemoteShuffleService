@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+unset HADOOP_CONF_DIR
 
 # included in all the ess scripts with source command
 # should not be executable directly
