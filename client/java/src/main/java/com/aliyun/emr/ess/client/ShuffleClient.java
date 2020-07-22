@@ -47,8 +47,7 @@ public abstract class ShuffleClient implements Cloneable
         String applicationId,
         int shuffleId,
         int numMappers,
-        int numPartitions
-    );
+        int numPartitions);
 
     /**
      * 往具体的一个reduce partition里写数据
@@ -70,7 +69,6 @@ public abstract class ShuffleClient implements Cloneable
         byte[] data,
         int offset,
         int length,
-        ConcurrentSet<String> inflightRequests,
         int numMappers,
         int numPartitions) throws IOException;
 
@@ -80,15 +78,13 @@ public abstract class ShuffleClient implements Cloneable
      * @param shuffleId
      * @param mapId
      * @param attemptId
-     * @return
      */
-    public abstract boolean mapperEnd(
+    public abstract void mapperEnd(
         String applicationId,
         int shuffleId,
         int mapId,
         int attemptId,
-        int numMappers
-    );
+        int numMappers) throws IOException;
 
     /**
      * commit files, update status
@@ -110,8 +106,7 @@ public abstract class ShuffleClient implements Cloneable
     public abstract InputStream readPartition(
         String applicationId,
         int shuffleId,
-        int reduceId
-    );
+        int reduceId) throws IOException;
 
     /**
      * 注销

@@ -13,6 +13,8 @@ import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.log4j.Logger;
 
+import java.io.EOFException;
+import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.HashMap;
@@ -146,6 +148,21 @@ public class EssInputStream extends InputStream {
         }
     }
 
+    private boolean openNextFile() throws IOException {
+        while (fileIndex < filePaths.length) {
+            Path path = new Path(filePaths[fileIndex]);
+            try {
+                fileInputStream = fs.open(path);
+                return true;
+            } catch (FileNotFoundException e) {
+                logger.warn("file not found! " + e);
+                fileIndex++;
+            }
+        }
+
+        return false;
+    }
+
     private boolean fillBuffer() throws IOException {
         if (fileInputStream == null && fileIndex >= filePaths.length) {
             return false;
@@ -154,31 +171,34 @@ public class EssInputStream extends InputStream {
         long startTime = System.currentTimeMillis();
 
         if (fileInputStream == null) {
-            Path path = new Path(filePaths[fileIndex]);
-            fileInputStream = fs.open(path);
-        }
-
-        try {
-            fileInputStream.readFully(sizeBuf);
-        } catch (Exception ex) {
-            // exception means file reach eof
-            fileInputStream.close();
-            fileInputStream = null;
-            fileIndex++;
-            if (fileIndex < filePaths.length) {
-                fileInputStream = fs.open(new Path(filePaths[fileIndex]));
-                fileInputStream.readFully(sizeBuf);
-            } else {
+            if (!openNextFile()) {
                 return false;
             }
+        }
+
+        int size;
+        while (true) {
+            try {
+                fileInputStream.readFully(sizeBuf);
+                size = Platform.getInt(sizeBuf, Platform.BYTE_ARRAY_OFFSET + 12);
+                fileInputStream.readFully(compressedBuf, 0, size);
+            } catch (EOFException eof) {
+                // exception means file reach eof
+                fileInputStream.close();
+                fileInputStream = null;
+                fileIndex++;
+                if (!openNextFile()) {
+                    return false;
+                }
+                continue;
+            }
+            break;
         }
 
         int mapId = Platform.getInt(sizeBuf, Platform.BYTE_ARRAY_OFFSET);
         int attemptId = Platform.getInt(sizeBuf, Platform.BYTE_ARRAY_OFFSET + 4);
         int batchId = Platform.getInt(sizeBuf, Platform.BYTE_ARRAY_OFFSET + 8);
-        int size = Platform.getInt(sizeBuf, Platform.BYTE_ARRAY_OFFSET + 12);
 
-        fileInputStream.readFully(compressedBuf, 0, size);
         // de-duplicate
         if (attemptId == attempts[mapId]) {
             if (!batchesRead.containsKey(mapId)) {

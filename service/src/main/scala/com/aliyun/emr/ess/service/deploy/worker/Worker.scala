@@ -81,7 +81,7 @@ private[deploy] class Worker(
   private val workerInfo = new WorkerInfo(host, port, MemoryPoolCapacity, ChunkSize * 2, self)
 
   // Threads
-  private val forwordMessageScheduler =
+  private val forwardMessageScheduler =
     ThreadUtils.newDaemonSingleThreadScheduledExecutor("worker-forward-message-scheduler")
 
   // Configs
@@ -119,7 +119,7 @@ private[deploy] class Worker(
     registerWithMaster()
 
     // start heartbeat
-    forwordMessageScheduler.scheduleAtFixedRate(new Runnable {
+    forwardMessageScheduler.scheduleAtFixedRate(new Runnable {
       override def run(): Unit = Utils.tryLogNonFatalError {
         self.send(SendHeartbeat)
       }
@@ -127,7 +127,7 @@ private[deploy] class Worker(
   }
 
   override def onStop(): Unit = {
-    forwordMessageScheduler.shutdownNow()
+    forwardMessageScheduler.shutdownNow()
     dataServer.close()
   }
 
@@ -312,7 +312,8 @@ private[deploy] class Worker(
         if (target != null) {
           val future = commitThreadPool.submit(new Runnable {
             override def run(): Unit = {
-              val res = target.asInstanceOf[PartitionLocationWithDoubleChunks].getDoubleChunk.flush()
+              val res = target.asInstanceOf[PartitionLocationWithDoubleChunks]
+                .getDoubleChunk.close(mode == PartitionLocation.Mode.Master)
               if (res == -1) {
                 failedLocations.synchronized {
                   failedLocations.add(id)
@@ -441,11 +442,11 @@ private[deploy] class Worker(
     val doubleChunk = location.asInstanceOf[PartitionLocationWithDoubleChunks].getDoubleChunk
     context.reply(GetDoubleChunkInfoResponse(
       true,
-      doubleChunk.working,
-      doubleChunk.chunks(doubleChunk.working).remaining(),
-      doubleChunk.getMasterData,
-      doubleChunk.chunks((doubleChunk.working + 1) % 2).remaining(),
-      doubleChunk.getSlaveData
+      doubleChunk.activeIndex,
+      doubleChunk.chunks(doubleChunk.activeIndex).remaining(),
+      doubleChunk.getActiveData,
+      doubleChunk.chunks((doubleChunk.activeIndex + 1) % 2).remaining(),
+      doubleChunk.getInactiveData
     ))
   }
 

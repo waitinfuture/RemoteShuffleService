@@ -52,7 +52,7 @@ public class MemoryPoolSuiteJ
         Thread.sleep(1000);
         status = fs.getFileStatus(file);
         assert status.getLen() == 256;
-        doubleChunk.flush();
+        doubleChunk.close(true);
         Thread.sleep(1000);
         status = fs.getFileStatus(file);
         assert status.getLen() == 320;

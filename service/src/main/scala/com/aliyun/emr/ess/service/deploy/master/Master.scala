@@ -214,7 +214,8 @@ private[deploy] class Master(
     val currentTime = System.currentTimeMillis()
     var ind = 0
     while (ind < workers.size()) {
-      if (workers.get(ind).lastHeartbeat < currentTime - WORKER_TIMEOUT_MS) {
+      if (workers.get(ind).lastHeartbeat < currentTime - WORKER_TIMEOUT_MS
+        && !workerLostEvents.contains(workers.get(ind).hostPort)) {
         logInfo(s"Worker ${workers.get(ind)} timeout! Trigger WorkerLost event")
         // trigger WorkerLost event
         workerLostEvents.add(workers.get(ind).hostPort)
@@ -304,9 +305,11 @@ private[deploy] class Master(
           // record commited Files
           val committedPartitions = shuffleCommittedPartitions.get(shuffleKey)
           committedPartitions.synchronized {
-            committedPartitions.addAll(
-              elem._2.filter(p => res.committedLocations.contains(p.getUniqueId))
-            )
+            val committed = elem._2.filter(p => res.committedLocations.contains(p.getUniqueId))
+            committedPartitions.addAll(committed)
+            if (mode == PartitionLocation.Mode.Master) {
+              committedPartitions.addAll(committed.map(_.getPeer))
+            }
           }
           // destroy peer partitions
           val destroyMsg =
@@ -741,6 +744,7 @@ private[deploy] class Master(
     workers.foreach(w => {
       if (!w.endpoint.asInstanceOf[NettyRpcEndpointRef].client.isActive
         && !workerLostEvents.contains(w.hostPort)) {
+        logInfo(s"Find WorkerLost in StageEnd ${w.hostPort}")
         self.send(WorkerLost(w.host, w.port))
         workerLostEvents.add(w.hostPort)
       }

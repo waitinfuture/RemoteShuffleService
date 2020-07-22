@@ -33,9 +33,8 @@ class EssShuffleManager(conf: SparkConf)
     context: TaskContext): ShuffleWriter[K, V] = {
     handle match {
       case h: BaseShuffleHandle[K@unchecked, V@unchecked, _] =>
-        new EssShuffleWriter(
-          context.taskMemoryManager(), h, mapId, context, conf,
-          h.numMaps, h.dependency.partitioner.numPartitions)
+        new EssShuffleWriter(h, mapId, context, conf, h.numMaps,
+          h.dependency.partitioner.numPartitions)
     }
   }
 
