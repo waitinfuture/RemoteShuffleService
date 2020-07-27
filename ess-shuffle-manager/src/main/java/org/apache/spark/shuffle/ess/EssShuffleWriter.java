@@ -2,10 +2,8 @@ package org.apache.spark.shuffle.ess;
 
 import com.aliyun.emr.ess.client.ShuffleClient;
 import com.aliyun.emr.ess.common.EssConf;
-import org.apache.spark.Partitioner;
-import org.apache.spark.ShuffleDependency;
-import org.apache.spark.SparkConf;
-import org.apache.spark.TaskContext;
+
+import org.apache.spark.*;
 import org.apache.spark.annotation.Private;
 import org.apache.spark.executor.ShuffleWriteMetrics;
 import org.apache.spark.scheduler.MapStatus;

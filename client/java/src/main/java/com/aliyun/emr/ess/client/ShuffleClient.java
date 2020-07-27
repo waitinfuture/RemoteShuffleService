@@ -1,14 +1,11 @@
 package com.aliyun.emr.ess.client;
 
 import com.aliyun.emr.ess.client.impl.ShuffleClientImpl;
+import com.aliyun.emr.ess.client.stream.EssInputStream;
 import com.aliyun.emr.ess.common.EssConf;
-import com.aliyun.emr.ess.protocol.PartitionLocation;
 import com.aliyun.emr.ess.protocol.message.StatusCode;
-import io.netty.util.internal.ConcurrentSet;
 
 import java.io.IOException;
-import java.io.InputStream;
-import java.util.List;
 
 /**
  * ShuffleClient有可能是进程单例
@@ -103,7 +100,7 @@ public abstract class ShuffleClient implements Cloneable
      * @param reduceId
      * @return
      */
-    public abstract InputStream readPartition(
+    public abstract EssInputStream readPartition(
         String applicationId,
         int shuffleId,
         int reduceId) throws IOException;

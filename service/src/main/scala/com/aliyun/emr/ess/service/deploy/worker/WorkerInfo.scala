@@ -1,6 +1,5 @@
 package com.aliyun.emr.ess.service.deploy.worker
 
-import java.lang.management.ManagementFactory
 import java.util
 
 import com.aliyun.emr.ess.common.rpc.RpcEndpointRef
@@ -153,7 +152,7 @@ private[ess] class WorkerInfo(
   }
 
   private def getLocation(shuffleKey: String, uniqueId: String,
-    mode: PartitionLocation.Mode): PartitionLocation = this.synchronized {
+    mode: PartitionLocation.Mode): PartitionLocation = {
     val tokens = uniqueId.split("-", 2)
     val reduceId = tokens(0).toInt
     val epoch = tokens(1).toInt

@@ -5,5 +5,5 @@ import org.scalatest.FunSuite
 import org.scalatest.junit.JUnitRunner
 
 @RunWith(classOf[JUnitRunner])
-class DoubleChunkSuite extends FunSuite {
+class FileWriterSuite extends FunSuite {
 }

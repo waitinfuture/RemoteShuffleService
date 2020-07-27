@@ -5,14 +5,14 @@ import org.junit.Test;
 
 import java.util.*;
 
-public class PartitionLocationWithDoubleChunksSuiteJ {
+public class WorkingPartitionSuiteJ {
     @Test
     public void testEquals() {
-        List<PartitionLocationWithDoubleChunks> list = new ArrayList<>();
+        List<WorkingPartition> list = new ArrayList<>();
         PartitionLocation p1 = new PartitionLocation(0, 0, "host1", 10, PartitionLocation.Mode.Slave);
         PartitionLocation p2 = new PartitionLocation(1, 1, "host1", 11, PartitionLocation.Mode.Slave);
-        PartitionLocationWithDoubleChunks pd1 = new PartitionLocationWithDoubleChunks(p1, null);
-        PartitionLocationWithDoubleChunks pd2 = new PartitionLocationWithDoubleChunks(p2, null);
+        WorkingPartition pd1 = new WorkingPartition(p1, null);
+        WorkingPartition pd2 = new WorkingPartition(p2, null);
         list.add(pd1);
         list.add(pd2);
         assert list.size() == 2;
@@ -35,7 +35,7 @@ public class PartitionLocationWithDoubleChunksSuiteJ {
         assert map.size() == 1;
 
         Map<PartitionLocation, PartitionLocation> map2 = new HashMap<>();
-        PartitionLocation p3 = new PartitionLocationWithDoubleChunks(
+        PartitionLocation p3 = new WorkingPartition(
             new PartitionLocation(
                 2,
                 1,

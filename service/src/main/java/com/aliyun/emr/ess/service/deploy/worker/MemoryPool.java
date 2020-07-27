@@ -7,7 +7,7 @@ import org.slf4j.LoggerFactory;
 import java.util.ArrayList;
 
 public class MemoryPool {
-    private static final Logger logger = LoggerFactory.getLogger(DoubleChunk.class);
+    private static final Logger logger = LoggerFactory.getLogger(FileWriter.class);
 
     private long capacity;
     private long chunkSize;
@@ -20,7 +20,7 @@ public class MemoryPool {
     public MemoryPool(long capacity, long chunkSize) {
         this.capacity = capacity;
         this.chunkSize = chunkSize;
-        memoryPoolAddress = Platform.allocateMemory(capacity);
+        memoryPoolAddress = 0L; // Platform.allocateMemory(capacity);
         logger.info("allocated memory, size " + capacity);
         numSlots = (int) (capacity / chunkSize);
         startAddresses = new long[numSlots];

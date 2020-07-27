@@ -531,5 +531,13 @@ object EssConf extends Logging {
   def essFlushTimeout(conf: EssConf): Long = {
     conf.getTimeAsSeconds("ess.flush.timeout", "240s")
   }
+
+  def essWorkerBaseDirPrefix(conf: EssConf): String = {
+    conf.get("ess.worker.base.dir.prefix", "/mnt/disk")
+  }
+
+  def essWorkerBaseDirNumber(conf: EssConf): Int = {
+    conf.getInt("ess.worker.base.dir.number", 16)
+  }
 }
 

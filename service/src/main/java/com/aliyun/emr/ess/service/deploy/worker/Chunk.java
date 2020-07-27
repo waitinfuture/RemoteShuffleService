@@ -2,12 +2,11 @@ package com.aliyun.emr.ess.service.deploy.worker;
 
 import com.aliyun.emr.ess.unsafe.Platform;
 import io.netty.buffer.ByteBuf;
-import org.apache.hadoop.fs.FSDataOutputStream;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.DataOutputStream;
 import java.io.IOException;
-import java.io.OutputStream;
 
 public final class Chunk extends MinimalByteBuf {
     private static final Logger logger = LoggerFactory.getLogger(Chunk.class);
@@ -44,7 +43,7 @@ public final class Chunk extends MinimalByteBuf {
         currentAddress = startAddress;
     }
 
-    public boolean flushData(FSDataOutputStream ostream) {
+    public boolean flushData(DataOutputStream ostream) {
         return flushData(ostream, true);
     }
     /**
@@ -53,13 +52,13 @@ public final class Chunk extends MinimalByteBuf {
      * @param flush whether to flush or just clear buffer
      * @return
      */
-    public boolean flushData(FSDataOutputStream ostream, boolean flush) {
+    public boolean flushData(DataOutputStream ostream, boolean flush) {
         try {
             if (flush) {
                 byte[] data = new byte[(int)(currentAddress - startAddress)];
                 Platform.copyMemory(null, startAddress, data, Platform.BYTE_ARRAY_OFFSET, data.length);
                 ostream.write(data);
-                ostream.hflush();
+                ostream.flush();
             }
             currentAddress = startAddress;
             return true;

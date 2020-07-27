@@ -7,7 +7,6 @@ import com.aliyun.emr.ess.common.EssConf;
 import com.aliyun.emr.ess.common.rpc.RpcAddress;
 import com.aliyun.emr.ess.common.rpc.RpcEndpointRef;
 import com.aliyun.emr.ess.common.rpc.RpcEnv;
-import com.aliyun.emr.ess.common.util.EssPathUtil;
 import com.aliyun.emr.ess.common.util.Utils;
 import com.aliyun.emr.ess.protocol.PartitionLocation;
 import com.aliyun.emr.ess.protocol.RpcNameConstants;
@@ -26,9 +25,6 @@ import com.aliyun.emr.network.util.TransportConf;
 import com.google.common.collect.Lists;
 import io.netty.buffer.Unpooled;
 import io.netty.util.internal.ConcurrentSet;
-import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.fs.FileSystem;
-import org.apache.hadoop.fs.Path;
 import org.apache.log4j.Logger;
 import scala.reflect.ClassTag$;
 
@@ -62,7 +58,7 @@ public class ShuffleClientImpl extends ShuffleClient {
         final ConcurrentSet<Integer> inFlightBatches = new ConcurrentSet<>();
         AtomicReference<IOException> exception = new AtomicReference<>();
     }
-    // key: appId-shuffleId-mapId-attemptId
+    // key: shuffleId-mapId-attemptId
     private final Map<String, PushState> pushStates = new ConcurrentHashMap<>();
     ThreadLocal<EssLz4Compressor> lz4CompressorThreadLocal = new ThreadLocal<EssLz4Compressor>() {
         @Override
@@ -72,12 +68,17 @@ public class ShuffleClientImpl extends ShuffleClient {
         }
     };
 
-    // key: appId-shuffleId-reduceId   value: file path set
-    private final Map<String, HashSet<String>> reducerFileGroup = new HashMap<>();
-    // key: appId-shuffleId    value: attempts
-    private final Map<String, int[]> mapAttempts = new HashMap<>();
-    // filesystem for read partition
-    FileSystem fs;
+    private static class ReduceFileGroups {
+        final PartitionLocation[][] partitionGroups;
+        final int[] mapAttempts;
+
+        ReduceFileGroups(PartitionLocation[][] partitionGroups, int[] mapAttempts) {
+            this.partitionGroups = partitionGroups;
+            this.mapAttempts = mapAttempts;
+        }
+    }
+    // key: shuffleId
+    private final Map<Integer, ReduceFileGroups> reduceFileGroupsMap = new ConcurrentHashMap<>();
 
     private volatile boolean stopped = false;
 
@@ -115,14 +116,6 @@ public class ShuffleClientImpl extends ShuffleClient {
             new TransportContext(dataTransportConf, new NoOpRpcHandler(), true);
         List<TransportClientBootstrap> bootstraps = Lists.newArrayList();
         dataClientFactory = context.createClientFactory(bootstraps);
-
-        Configuration hadoopConf = new Configuration();
-        Path path = EssPathUtil.GetBaseDir(conf);
-        try {
-            fs = path.getFileSystem(hadoopConf);
-        } catch (IOException e) {
-            logger.error("GetFileSystem failed!", e);
-        }
     }
 
     @Override
@@ -163,14 +156,14 @@ public class ShuffleClientImpl extends ShuffleClient {
                 if (inFlightBatches.size() <= limit) {
                     break;
                 }
-                if (pushState.exception != null) {
+                if (pushState.exception.get() != null) {
                     throw pushState.exception.get();
                 }
                 Thread.sleep(delta);
                 times--;
             }
-        } catch (Exception e) {
-            logger.error("sleep caught exception");
+        } catch (InterruptedException e) {
+            logger.error("sleep caught exception " + e);
         }
         if (inFlightBatches.size() > limit) {
             for (int req : inFlightBatches) {
@@ -209,7 +202,7 @@ public class ShuffleClientImpl extends ShuffleClient {
         int length,
         int numMappers,
         int numPartitions) throws IOException {
-        final String mapKey = Utils.makeMapKey(applicationId, shuffleId, mapId, attemptId);
+        final String mapKey = Utils.makeMapKey(shuffleId, mapId, attemptId);
         PushState pushState = pushStates.computeIfAbsent(mapKey, (s) -> new PushState());
         limitMaxInFlight(mapKey, pushState, maxInFlight);
 
@@ -234,9 +227,7 @@ public class ShuffleClientImpl extends ShuffleClient {
         pushState.inFlightBatches.add(nextBatchId);
 
         // register shuffle if not registered
-        synchronized (reducePartitionMap) {
-            reducePartitionMap.putIfAbsent(shuffleId, new ConcurrentHashMap<>());
-        }
+        reducePartitionMap.putIfAbsent(shuffleId, new ConcurrentHashMap<>());
         ConcurrentHashMap<Integer, PartitionLocation> map = reducePartitionMap.get(shuffleId);
         synchronized (map) {
             if (!map.containsKey(reduceId)) {
@@ -320,7 +311,7 @@ public class ShuffleClientImpl extends ShuffleClient {
         int mapId,
         int attemptId,
         int numMappers) throws IOException {
-        final String mapKey = Utils.makeMapKey(applicationId, shuffleId, mapId, attemptId);
+        final String mapKey = Utils.makeMapKey(shuffleId, mapId, attemptId);
         PushState pushState = pushStates.computeIfAbsent(mapKey, (s) -> new PushState());
 
         try {
@@ -344,23 +335,11 @@ public class ShuffleClientImpl extends ShuffleClient {
     public boolean unregisterShuffle(String applicationId, int shuffleId) {
         UnregisterShuffleResponse response = master.askSync(
             new UnregisterShuffle(applicationId, shuffleId),
-            ClassTag$.MODULE$.apply(UnregisterShuffleResponse.class)
-        );
+            ClassTag$.MODULE$.apply(UnregisterShuffleResponse.class));
 
         // clear status
-        String shuffleKey = Utils.makeShuffleKey(applicationId, shuffleId);
         reducePartitionMap.remove(shuffleId);
-        synchronized (reducerFileGroup) {
-            Set<String> keys = new HashSet<>(reducerFileGroup.keySet());
-            for (String key : keys) {
-                if (key.startsWith(Utils.shuffleKeyPrefix(shuffleKey))) {
-                    reducerFileGroup.remove(key);
-                }
-            }
-        }
-        synchronized (mapAttempts) {
-            mapAttempts.remove(shuffleKey);
-        }
+        reduceFileGroupsMap.remove(shuffleId);
 
         return response.status().equals(StatusCode.Success);
     }
@@ -375,54 +354,31 @@ public class ShuffleClientImpl extends ShuffleClient {
     }
 
     @Override
-    public InputStream readPartition(
+    public EssInputStream readPartition(
         String applicationId, int shuffleId, int reduceId) throws IOException {
-        String shuffleKey = Utils.makeShuffleKey(applicationId, shuffleId);
-        String reducerKey = Utils.makeReducerKey(applicationId, shuffleId, reduceId);
-        synchronized (reducerFileGroup) {
-            if (!reducerFileGroup.containsKey(reducerKey)) {
-                GetReducerFileGroupResponse response = master.askSync(
+        ReduceFileGroups fileGroups = reduceFileGroupsMap.computeIfAbsent(shuffleId, (id) -> {
+            GetReducerFileGroupResponse response = master.askSync(
                     new GetReducerFileGroup(applicationId, shuffleId),
-                    ClassTag$.MODULE$.apply(GetReducerFileGroupResponse.class)
-                );
-                if (response.status() != StatusCode.Success) {
-                    String msg = "GetReducerFileGroup failed! status: " + response.status();
-                    logger.error(msg);
-                    throw new IOException(msg);
-                }
-                // update reducerFileGroup
-                if (response.fileGroup() != null) {
-                    reducerFileGroup.putAll(response.fileGroup());
-                }
-                // update attempts
-                logger.debug("get fileGroup success, shuflfleKey " + shuffleKey +
-                    "mapAttempts " + Arrays.toString(response.attempts()));
-                if (response.attempts() != null) {
-                    mapAttempts.put(shuffleKey, response.attempts());
-                }
+                    ClassTag$.MODULE$.apply(GetReducerFileGroupResponse.class));
+
+            if (response.status() == StatusCode.Success && response.fileGroup() != null
+                    && response.attempts() != null) {
+                return new ReduceFileGroups(response.fileGroup(), response.attempts());
             } else {
-                if (!mapAttempts.containsKey(shuffleKey)) {
-                    logger.error("reducerFileGroup contains " + reducerKey +
-                        " but mapAttempts doesn't contain " + shuffleKey);
-                } else {
-                    logger.debug("reducerFileGroup contains " + reducerKey +
-                        " and mapAttempts contains " + shuffleKey);
-                }
+                return null;
             }
+        });
+
+        if (fileGroups == null) {
+            String msg = "GetReducerFileGroup failed! " +
+                    Utils.makeReducerKey(applicationId, shuffleId, reduceId);;
+            logger.error(msg);
+            throw new IOException(msg);
         }
 
-        HashSet<String> files;
-        int[] attempts;
-        synchronized (reducerFileGroup) {
-            files = reducerFileGroup.getOrDefault(reducerKey, new HashSet<>());
-            attempts = mapAttempts.getOrDefault(shuffleKey, null);
-        }
-        EssInputStream inputStream = new EssInputStream(conf, files, attempts);
-        if (attempts == null) {
-            logger.warn("mapAttempts doesn't contains " + shuffleKey);
-        }
-
-        return inputStream;
+        String shuffleKey = Utils.makeShuffleKey(applicationId, shuffleId);
+        return EssInputStream.create(conf, dataClientFactory, shuffleKey,
+                fileGroups.partitionGroups[reduceId], fileGroups.mapAttempts);
     }
 
     @Override

@@ -486,8 +486,12 @@ object Utils
     s"$applicationId-$shuffleId-$reduceId"
   }
 
-  def makeMapKey(applicationId: String, shuffleId: Int, mapId: Int, attempId: Int): String = {
-    s"$applicationId-$shuffleId-$mapId-$attempId"
+  def makeMapKey(applicationId: String, shuffleId: Int, mapId: Int, attemptId: Int): String = {
+    s"$applicationId-$shuffleId-$mapId-$attemptId"
+  }
+
+  def makeMapKey(shuffleId: Int, mapId: Int, attemptId: Int): String = {
+    s"$shuffleId-$mapId-$attemptId"
   }
 
   def shuffleKeyPrefix(shuffleKey: String): String = {

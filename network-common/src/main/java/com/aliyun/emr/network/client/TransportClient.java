@@ -24,6 +24,7 @@ import java.nio.ByteBuffer;
 import java.util.UUID;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 import javax.annotation.Nullable;
 
 import com.aliyun.emr.network.buffer.NettyManagedBuffer;
@@ -204,7 +205,7 @@ public class TransportClient implements Closeable {
       logger.trace("Pushing data to {}", NettyUtils.getRemoteAddress(channel));
     }
 
-    long requestId = requestId();
+    long requestId = dataRequestId();
     handler.addRpcRequest(requestId, callback);
 
     pushData.requestId = requestId;
@@ -321,6 +322,11 @@ public class TransportClient implements Closeable {
 
   public static long requestId() {
     return Math.abs(UUID.randomUUID().getLeastSignificantBits());
+  }
+
+  private static final AtomicLong counter = new AtomicLong();
+  public static long dataRequestId() {
+    return counter.getAndIncrement();
   }
 
   public class StdChannelListener
