@@ -15,47 +15,47 @@ public class MemoryPool {
     private long[] startAddresses;
     private boolean[] empty;
     private int numSlots;
-    private Chunk[] chunks;
+    private FlushBuffer[] flushBuffers;
 
     public MemoryPool(long capacity, long chunkSize) {
         this.capacity = capacity;
         this.chunkSize = chunkSize;
-        memoryPoolAddress = 0L; // Platform.allocateMemory(capacity);
+        memoryPoolAddress = Platform.allocateMemory(capacity);
         logger.info("allocated memory, size " + capacity);
         numSlots = (int) (capacity / chunkSize);
         startAddresses = new long[numSlots];
         empty = new boolean[numSlots];
         long curAddress = memoryPoolAddress;
-        chunks = new Chunk[numSlots];
+        flushBuffers = new FlushBuffer[numSlots];
         for (int i = 0; i < numSlots; i++) {
             empty[i] = true;
             startAddresses[i] = curAddress;
             curAddress += chunkSize;
 
-            chunks[i] = new Chunk(i, startAddresses[i], curAddress);
+            flushBuffers[i] = new FlushBuffer(i, startAddresses[i], curAddress);
         }
     }
 
     /**
      * @return allocated address, null if failed
      */
-    public Chunk allocateChunk() {
+    public FlushBuffer allocateChunk() {
         for (int i = 0; i < numSlots; i++) {
             if (empty[i]) {
                 empty[i] = false;
-                return new Chunk(i, startAddresses[i], startAddresses[i] + chunkSize);
+                return new FlushBuffer(i, startAddresses[i], startAddresses[i] + chunkSize);
             }
         }
         return null;
     }
 
-    public void returnChunk(Chunk chunk) {
-        empty[chunk.getId()] = true;
-        chunk.reset();
+    public void returnChunk(FlushBuffer flushBuffer) {
+        empty[flushBuffer.getId()] = true;
+        flushBuffer.reset();
     }
 
-    public ArrayList<Chunk> allocateChunks(int size) {
-        ArrayList<Chunk> ret = new ArrayList<>();
+    public ArrayList<FlushBuffer> allocateChunks(int size) {
+        ArrayList<FlushBuffer> ret = new ArrayList<>();
         int retIndx = 0;
         for (int i = 0; i < numSlots; i++) {
             if (retIndx == size) {
@@ -63,7 +63,7 @@ public class MemoryPool {
             }
             if (empty[i]) {
                 empty[i] = false;
-                ret.add(chunks[i]);
+                ret.add(flushBuffers[i]);
                 if (ret.get(retIndx) == null) {
                     logger.error("Chunk is NULL!, i " + i + " numSlots " + numSlots);
                 }
@@ -74,17 +74,17 @@ public class MemoryPool {
         return ret;
     }
 
-    public void returnChunks(Chunk[] chunks) {
-        for (int i = 0; i < chunks.length; i++) {
-            empty[chunks[i].getId()] = true;
-            chunks[i].reset();
+    public void returnChunks(FlushBuffer[] flushBuffers) {
+        for (int i = 0; i < flushBuffers.length; i++) {
+            empty[flushBuffers[i].getId()] = true;
+            flushBuffers[i].reset();
         }
     }
 
-    public void returnChunks(ArrayList<Chunk> chunks) {
-        for (int i = 0; i < chunks.size(); i++) {
-            empty[chunks.get(i).getId()] = true;
-            chunks.get(i).reset();
+    public void returnChunks(ArrayList<FlushBuffer> flushBuffers) {
+        for (int i = 0; i < flushBuffers.size(); i++) {
+            empty[flushBuffers.get(i).getId()] = true;
+            flushBuffers.get(i).reset();
         }
     }
 }

@@ -16,7 +16,7 @@ public class MemoryPoolSuiteJ
 
         File file = new File("tmp/ess-test", UUID.randomUUID().toString());
 
-        FileWriter fileWriter = new FileWriter(file);
+        FileWriter fileWriter = new FileWriter(file, null, 0);
         byte[] bytes = new byte[64];
         ByteBuf data = Unpooled.copiedBuffer(bytes);
         fileWriter.write(data);

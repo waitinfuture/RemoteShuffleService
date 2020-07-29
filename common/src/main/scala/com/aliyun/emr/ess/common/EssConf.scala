@@ -516,8 +516,12 @@ object EssConf extends Logging {
     conf.getInt("ess.master.port", 9099)
   }
 
-  def essWorkerFlushThread(conf: EssConf): Int = {
-    conf.getInt("ess.worker.flush.thread", 8)
+  def essWorkerFlushBufferSize(conf: EssConf): Long = {
+    conf.getSizeAsBytes("ess.worker.flush.buffer.size", "512k")
+  }
+
+  def essWorkerFlushQueueCapacity(conf: EssConf): Int = {
+    conf.getInt("ess.worker.flush.queue.capacity", 512)
   }
 
   def essRpcParallelism(conf: EssConf): Int = {

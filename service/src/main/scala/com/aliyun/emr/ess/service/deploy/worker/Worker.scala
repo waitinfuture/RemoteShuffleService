@@ -356,7 +356,6 @@ private[deploy] class Worker(
       callback.onSuccess(ByteBuffer.wrap(new Array[Byte](0)))
     }
 
-    // append data
     try {
       fileWriter.write(body)
     } catch {

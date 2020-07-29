@@ -5,18 +5,15 @@ import io.netty.buffer.ByteBuf;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.io.DataOutputStream;
-import java.io.IOException;
+public final class FlushBuffer extends MinimalByteBuf {
+    private static final Logger logger = LoggerFactory.getLogger(FlushBuffer.class);
 
-public final class Chunk extends MinimalByteBuf {
-    private static final Logger logger = LoggerFactory.getLogger(Chunk.class);
-
-    private int id;
-    private long startAddress;
-    private long endAddress;
+    private final int id;
+    private final long startAddress;
+    private final long endAddress;
     private long currentAddress;
 
-    public Chunk(int id, long startAddress, long endAddress) {
+    public FlushBuffer(int id, long startAddress, long endAddress) {
         this.id = id;
         this.startAddress = startAddress;
         this.endAddress = endAddress;
@@ -25,11 +22,6 @@ public final class Chunk extends MinimalByteBuf {
 
     public int remaining() {
         return (int)(endAddress - currentAddress);
-    }
-
-    public void append(byte[] data) {
-        Platform.copyMemory(data, Platform.BYTE_ARRAY_OFFSET, null, currentAddress, data.length);
-        currentAddress += data.length;
     }
 
     public void append(ByteBuf data) {
@@ -41,39 +33,6 @@ public final class Chunk extends MinimalByteBuf {
 
     public void reset() {
         currentAddress = startAddress;
-    }
-
-    public boolean flushData(DataOutputStream ostream) {
-        return flushData(ostream, true);
-    }
-    /**
-     *
-     * @param ostream
-     * @param flush whether to flush or just clear buffer
-     * @return
-     */
-    public boolean flushData(DataOutputStream ostream, boolean flush) {
-        try {
-            if (flush) {
-                byte[] data = new byte[(int)(currentAddress - startAddress)];
-                Platform.copyMemory(null, startAddress, data, Platform.BYTE_ARRAY_OFFSET, data.length);
-                ostream.write(data);
-                ostream.flush();
-            }
-            currentAddress = startAddress;
-            return true;
-        } catch (IOException e) {
-            logger.error("flush data failed", e);
-        }
-        return false;
-    }
-
-    public byte[] toBytes() {
-        byte[] data = new byte[(int)(currentAddress - startAddress)];
-        for (long addr = startAddress; addr < currentAddress; addr++) {
-            data[(int)(addr - startAddress)] = Platform.getByte(null, addr);
-        }
-        return data;
     }
 
     public boolean hasData() {
