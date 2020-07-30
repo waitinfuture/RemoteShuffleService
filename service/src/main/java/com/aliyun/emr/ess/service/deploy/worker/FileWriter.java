@@ -29,14 +29,12 @@ public final class FileWriter {
     private long bytesWritten;
 
     private final DiskFlusher flusher;
-    private final int flushBufferSize;
     private ByteBuffer flushBuffer;
     private final AtomicInteger numPendingFlushes = new AtomicInteger();
 
-    public FileWriter(File file, DiskFlusher flusher, int flushBufferSize) throws FileNotFoundException {
+    public FileWriter(File file, DiskFlusher flusher) throws FileNotFoundException {
         this.file = file;
         this.flusher = flusher;
-        this.flushBufferSize = flushBufferSize;
         channel = new FileOutputStream(file).getChannel();
         flushBuffer = flusher.takeBuffer();
     }

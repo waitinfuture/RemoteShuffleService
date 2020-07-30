@@ -63,10 +63,9 @@ private[worker] final class LocalStorageManager(conf: EssConf) extends Logging {
     dir.mkdirs()
   }
 
-  private val flushBufferSize = EssConf.essWorkerFlushBufferSize(conf).toInt
-
   private val diskFlushers = {
     val queueCapacity = EssConf.essWorkerFlushQueueCapacity(conf)
+    val flushBufferSize = EssConf.essWorkerFlushBufferSize(conf).toInt
     (1 to baseDirs.length).map(i => new DiskFlusher(i, queueCapacity, flushBufferSize)).toArray
   }
 
@@ -103,7 +102,7 @@ private[worker] final class LocalStorageManager(conf: EssConf) extends Logging {
     val shuffleDir = new File(baseDirs(index), s"$appId/$shuffleId")
     shuffleDir.mkdirs()
     val fileName = s"$reduceId-$epoch-${mode.mode()}"
-    new FileWriter(new File(shuffleDir, fileName), diskFlushers(index), flushBufferSize)
+    new FileWriter(new File(shuffleDir, fileName), diskFlushers(index))
   }
 }
 
