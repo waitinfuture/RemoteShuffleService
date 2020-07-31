@@ -94,16 +94,17 @@ public class EssShuffleWriter<K, V, C> extends ShuffleWriter<K, V> {
     }
 
     private class DataPusher {
-        final int capacity = 512;
-        LinkedBlockingQueue<PushTask> idleQueue = new LinkedBlockingQueue<>(capacity);
-        LinkedBlockingQueue<PushTask> workingQueue = new LinkedBlockingQueue<>(capacity);
+        LinkedBlockingQueue<PushTask> idleQueue;
+        LinkedBlockingQueue<PushTask> workingQueue;
 
         AtomicReference<IOException> exception = new AtomicReference<>();
+
+        private volatile boolean terminated;
 
         final Thread worker = new Thread("DataPusher-" + taskContext.taskAttemptId()) {
             @Override
             public void run() {
-                while (!stopping && exception.get() == null) {
+                while (!terminated && !stopping && exception.get() == null) {
                     try {
                         PushTask task = workingQueue.take();
                         pushData(task.partitionId, task.buffer, task.size);
@@ -117,7 +118,10 @@ public class EssShuffleWriter<K, V, C> extends ShuffleWriter<K, V> {
             }
         };
 
-        DataPusher() throws IOException {
+        DataPusher(int capacity) throws IOException {
+            idleQueue = new LinkedBlockingQueue<>(capacity);
+            workingQueue = new LinkedBlockingQueue<>(capacity);
+
             for (int i = 0; i < capacity; i++) {
                 try {
                     idleQueue.put(new PushTask());
@@ -146,9 +150,13 @@ public class EssShuffleWriter<K, V, C> extends ShuffleWriter<K, V> {
                 try {
                     Thread.sleep(20);
                 } catch (InterruptedException e) {
-                    throw new IOException(e);
+                    exception.set(new IOException(e));
+                    break;
                 }
             }
+            terminated = true;
+            idleQueue.clear();
+            workingQueue.clear();
             checkException();
         }
 
@@ -210,7 +218,7 @@ public class EssShuffleWriter<K, V, C> extends ShuffleWriter<K, V> {
         sendBuffers = new byte[partitioner.numPartitions()][];
         sendOffsets = new int[partitioner.numPartitions()];
 
-        dataPusher = new DataPusher();
+        dataPusher = new DataPusher(EssConf.essPushDataQueueCapacity(conf));
     }
 
     @Override

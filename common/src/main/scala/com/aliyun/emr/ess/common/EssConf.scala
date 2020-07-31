@@ -480,6 +480,10 @@ object EssConf extends Logging {
     conf.getSizeAsBytes("ess.push.data.buffer.size", "128k")
   }
 
+  def essPushDataQueueCapacity(conf: EssConf): Int = {
+    conf.getInt("ess.push.data.queue.capacity", 512)
+  }
+
   def essPushDataMaxInflight(conf: EssConf): Int = {
     conf.getInt("ess.push.data.max.inflight", 1024)
   }
