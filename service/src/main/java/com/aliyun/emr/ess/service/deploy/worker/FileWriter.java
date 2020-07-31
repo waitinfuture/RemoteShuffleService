@@ -1,6 +1,5 @@
 package com.aliyun.emr.ess.service.deploy.worker;
 
-import com.aliyun.emr.ess.unsafe.Platform;
 import io.netty.buffer.ByteBuf;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -12,12 +11,12 @@ import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.util.ArrayList;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 public final class FileWriter {
     private static final Logger logger = LoggerFactory.getLogger(FileWriter.class);
-
-    private static final int CHUNK_SIZE = 1024 * 1024 * 8;
 
     private final File file;
     private final FileChannel channel;
@@ -30,11 +29,35 @@ public final class FileWriter {
 
     private final DiskFlusher flusher;
     private ByteBuffer flushBuffer;
-    private final AtomicInteger numPendingFlushes = new AtomicInteger();
 
-    public FileWriter(File file, DiskFlusher flusher) throws FileNotFoundException {
+    private final long chunkSize;
+
+    static class FlushNotifier {
+        final AtomicInteger numPendingFlushes = new AtomicInteger();
+        final AtomicReference<IOException> exception = new AtomicReference<>();
+
+        void setException(IOException e) {
+            exception.set(e);
+        }
+
+        boolean hasException() {
+            return exception.get() != null;
+        }
+
+        void checkException() throws IOException {
+            IOException e = exception.get();
+            if (e != null) {
+                throw e;
+            }
+        }
+    }
+
+    private final FlushNotifier notifier = new FlushNotifier();
+
+    public FileWriter(File file, DiskFlusher flusher, long chunkSize) throws FileNotFoundException {
         this.file = file;
         this.flusher = flusher;
+        this.chunkSize = chunkSize;
         channel = new FileOutputStream(file).getChannel();
         flushBuffer = flusher.takeBuffer();
     }
@@ -55,10 +78,11 @@ public final class FileWriter {
         numPendingWrites.incrementAndGet();
     }
 
-    private void flush() {
+    private void flush() throws IOException {
+        notifier.checkException();
         flushBuffer.flip();
-        numPendingFlushes.incrementAndGet();
-        WriteTask task = new WriteTask(flushBuffer, channel, numPendingFlushes);
+        notifier.numPendingFlushes.incrementAndGet();
+        WriteTask task = new WriteTask(flushBuffer, channel, notifier);
         flusher.addTask(task);
     }
 
@@ -66,18 +90,22 @@ public final class FileWriter {
      * assume data size is less than chunk capacity
      *
      * @param data
-     * @return written bytes
      */
-    public int write(ByteBuf data) throws IOException {
+    public void write(ByteBuf data) throws IOException {
         if (closed) {
             String msg = "already closed!";
             logger.error(msg);
             throw new IOException(msg);
         }
+
+        if (notifier.hasException()) {
+            return;
+        }
+
         synchronized (this) {
             if (bytesWritten >= nextBoundary) {
                 chunkOffsets.add(bytesWritten);
-                nextBoundary = bytesWritten + CHUNK_SIZE;
+                nextBoundary = bytesWritten + chunkSize;
             }
 
             final int numBytes = data.readableBytes();
@@ -92,7 +120,6 @@ public final class FileWriter {
 
             bytesWritten += numBytes;
             numPendingWrites.decrementAndGet();
-            return numBytes;
         }
     }
 
@@ -102,30 +129,39 @@ public final class FileWriter {
             logger.error(msg);
             throw new IOException(msg);
         }
-
-        while (numPendingWrites.get() > 0) {
-            try {
-                Thread.sleep(20);
-            } catch (InterruptedException e) {
-                throw new IOException(e);
-            }
-        }
-
-        if (flushBuffer.position() > 0) {
-            flush();
-            flushBuffer = null;
-        }
-
-        while (numPendingFlushes.get() > 0) {
-            try {
-                Thread.sleep(20);
-            } catch (InterruptedException e) {
-                throw new IOException(e);
-            }
-        }
-
         closed = true;
-        channel.close();
+
+        try {
+            while (numPendingWrites.get() > 0) {
+                try {
+                    notifier.checkException();
+                    TimeUnit.MILLISECONDS.sleep(20);
+                } catch (InterruptedException e) {
+                    throw new IOException(e);
+                }
+            }
+
+            if (flushBuffer.position() > 0) {
+                flush();
+                flushBuffer = null;
+            }
+
+            while (notifier.numPendingFlushes.get() > 0) {
+                try {
+                    notifier.checkException();
+                    TimeUnit.MILLISECONDS.sleep(20);
+                } catch (InterruptedException e) {
+                    throw new IOException(e);
+                }
+            }
+        } finally {
+            if (flushBuffer != null) {
+                flusher.returnBuffer(flushBuffer);
+                flushBuffer = null;
+            }
+            channel.close();
+        }
+
         return bytesWritten;
     }
 

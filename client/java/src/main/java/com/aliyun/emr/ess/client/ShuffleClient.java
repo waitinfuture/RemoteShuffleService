@@ -33,20 +33,6 @@ public abstract class ShuffleClient implements Cloneable
     }
 
     /**
-     * 一般在Shuffle启动时候由Driver仅调用一次
-     * @param applicationId
-     * @param shuffleId
-     * @param numMappers
-     * @param numPartitions
-     * @return
-     */
-    public abstract StatusCode registerShuffle(
-        String applicationId,
-        int shuffleId,
-        int numMappers,
-        int numPartitions);
-
-    /**
      * 往具体的一个reduce partition里写数据
      * @param applicationId
      * @param shuffleId

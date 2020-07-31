@@ -23,14 +23,14 @@ object ControlMessages {
   case class RegisterWorker(
       host: String,
       port: Int,
-      memory: Long,
+      numSlots: Int,
       worker: RpcEndpointRef)
     extends MasterMessage
 
   case class ReregisterWorker(
       host: String,
       port: Int,
-      memory: Long,
+      numSlots: Int,
       worker: RpcEndpointRef)
     extends MasterMessage
 

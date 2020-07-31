@@ -22,12 +22,12 @@ public class MasterUtil {
             for (int i = 0; i < allocatedSlots._1.size(); i++) {
                 ids.add(allocatedSlots._1.get(i).getUniqueId());
             }
-            worker.removeMasterPartition(shuffleKey, ids);
+            worker.removeMasterPartitions(shuffleKey, ids);
             ids.clear();
             for (int i = 0; i < allocatedSlots._2.size(); i++) {
                 ids.add(allocatedSlots._2.get(i).getUniqueId());
             }
-            worker.removeSlavePartition(shuffleKey, ids);
+            worker.removeSlavePartitions(shuffleKey, ids);
         }
     }
 

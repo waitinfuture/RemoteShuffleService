@@ -66,6 +66,9 @@ public abstract class EssInputStream extends InputStream {
         private final String shuffleKey;
         private final PartitionLocation[] locations;
         private final int[] attempts;
+
+        private final int maxInFlight;
+
         private final Map<Integer, Set<Integer>> batchesRead = new HashMap<>();
 
         private final byte[] compressedBuf;
@@ -95,6 +98,8 @@ public abstract class EssInputStream extends InputStream {
             this.locations = locations;
             this.attempts = attempts;
 
+            maxInFlight = EssConf.essFetchChunkMaxReqsInFlight(conf);
+
             int blockSize = ((int) EssConf.essPushDataBufferSize(conf)) + EssLz4CompressorTrait
                     .HEADER_LENGTH;
             compressedBuf = new byte[blockSize];
@@ -115,7 +120,7 @@ public abstract class EssInputStream extends InputStream {
             try {
                 TransportClient client =
                         clientFactory.createClient(location.getHost(), location.getPort());
-                return new PartitionReader(client, location.getUniqueId());
+                return new PartitionReader(client, location.getFileName());
             } catch (InterruptedException e) {
                 throw new IOException(e);
             }
@@ -240,8 +245,6 @@ public abstract class EssInputStream extends InputStream {
         }
 
         private final class PartitionReader {
-            private static final int MAX_IN_FLIGHT = 3;
-
             private final TransportClient client;
             private final long streamId;
             private final int numChunks;
@@ -252,10 +255,10 @@ public abstract class EssInputStream extends InputStream {
             private final LinkedBlockingQueue<ByteBuf> results;
             private final ChunkReceivedCallback callback;
 
-            PartitionReader(TransportClient client, String partitionId) {
+            PartitionReader(TransportClient client, String fileName) {
                 this.client = client;
 
-                ByteBuffer request = createOpenMessage(shuffleKey, partitionId);
+                ByteBuffer request = createOpenMessage(shuffleKey, fileName);
                 ByteBuffer response = client.sendRpcSync(request, 30 * 1000L);
                 streamId = response.getLong();
                 numChunks = response.getInt();
@@ -276,15 +279,15 @@ public abstract class EssInputStream extends InputStream {
                 };
             }
 
-            private ByteBuffer createOpenMessage(String shuffleKey, String partitionId) {
+            private ByteBuffer createOpenMessage(String shuffleKey, String fileName) {
                 byte[] shuffleKeyBytes = shuffleKey.getBytes(StandardCharsets.UTF_8);
-                byte[] partitionIdBytes = partitionId.getBytes(StandardCharsets.UTF_8);
+                byte[] fileNameBytes = fileName.getBytes(StandardCharsets.UTF_8);
                 ByteBuffer openMessage = ByteBuffer.allocate(
-                        4 + shuffleKeyBytes.length + 4 + partitionIdBytes.length);
+                        4 + shuffleKeyBytes.length + 4 + fileNameBytes.length);
                 openMessage.putInt(shuffleKeyBytes.length);
                 openMessage.put(shuffleKeyBytes);
-                openMessage.putInt(partitionIdBytes.length);
-                openMessage.put(partitionIdBytes);
+                openMessage.putInt(fileNameBytes.length);
+                openMessage.put(fileNameBytes);
                 openMessage.flip();
                 return openMessage;
             }
@@ -307,8 +310,8 @@ public abstract class EssInputStream extends InputStream {
 
             private void fetchChunks() {
                 final int inFlight = chunkIndex - returnedChunks - results.size();
-                if (inFlight < MAX_IN_FLIGHT) {
-                    final int toFetch = Math.min(MAX_IN_FLIGHT, numChunks - chunkIndex);
+                if (inFlight < maxInFlight) {
+                    final int toFetch = Math.min(maxInFlight, numChunks - chunkIndex);
                     for (int i = 0; i < toFetch; i++) {
                         client.fetchChunk(streamId, chunkIndex++, callback);
                     }

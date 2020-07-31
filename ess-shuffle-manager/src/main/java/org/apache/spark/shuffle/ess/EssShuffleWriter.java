@@ -28,7 +28,10 @@ import javax.annotation.Nullable;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.locks.Condition;
+import java.util.concurrent.locks.ReentrantLock;
 
 @Private
 public class EssShuffleWriter<K, V, C> extends ShuffleWriter<K, V> {
@@ -94,21 +97,42 @@ public class EssShuffleWriter<K, V, C> extends ShuffleWriter<K, V> {
     }
 
     private class DataPusher {
-        LinkedBlockingQueue<PushTask> idleQueue;
-        LinkedBlockingQueue<PushTask> workingQueue;
+        private final LinkedBlockingQueue<PushTask> idleQueue;
+        private final LinkedBlockingQueue<PushTask> workingQueue;
 
-        AtomicReference<IOException> exception = new AtomicReference<>();
+        private final ReentrantLock idleLock = new ReentrantLock();
+        private final Condition idleFull = idleLock.newCondition();
+
+        private final AtomicReference<IOException> exception = new AtomicReference<>();
 
         private volatile boolean terminated;
 
         final Thread worker = new Thread("DataPusher-" + taskContext.taskAttemptId()) {
+            private void reclaimTask(PushTask task) throws InterruptedException {
+                idleLock.lockInterruptibly();
+                try {
+                    idleQueue.put(task);
+                    if (idleQueue.remainingCapacity() == 0) {
+                        idleFull.signal();
+                    }
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    exception.set(new IOException(e));
+                } finally {
+                    idleLock.unlock();
+                }
+            }
+
             @Override
             public void run() {
                 while (!terminated && !stopping && exception.get() == null) {
                     try {
-                        PushTask task = workingQueue.take();
+                        PushTask task = workingQueue.poll(500, TimeUnit.MILLISECONDS);
+                        if (task == null) {
+                            continue;
+                        }
                         pushData(task.partitionId, task.buffer, task.size);
-                        idleQueue.put(task);
+                        reclaimTask(task);
                     } catch (InterruptedException e) {
                         exception.set(new IOException(e));
                     } catch (IOException e) {
@@ -126,6 +150,7 @@ public class EssShuffleWriter<K, V, C> extends ShuffleWriter<K, V> {
                 try {
                     idleQueue.put(new PushTask());
                 } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
                     throw new IOException(e);
                 }
             }
@@ -141,19 +166,22 @@ public class EssShuffleWriter<K, V, C> extends ShuffleWriter<K, V> {
                 task.size = size;
                 workingQueue.put(task);
             } catch (InterruptedException e) {
-                throw new IOException(e);
+                Thread.currentThread().interrupt();
+                IOException ioe = new IOException(e);
+                exception.set(ioe);
+                throw ioe;
             }
         }
 
         void waitOnTermination() throws IOException {
-            while (idleQueue.remainingCapacity() > 0 && exception.get() == null) {
-                try {
-                    Thread.sleep(20);
-                } catch (InterruptedException e) {
-                    exception.set(new IOException(e));
-                    break;
-                }
+            try {
+                idleLock.lockInterruptibly();
+                waitIdleQueueFullWithLock();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                exception.set(new IOException(e));
             }
+
             terminated = true;
             idleQueue.clear();
             workingQueue.clear();
@@ -180,6 +208,19 @@ public class EssShuffleWriter<K, V, C> extends ShuffleWriter<K, V> {
                 numPartitions
             );
             writeMetrics.incBytesWritten(bytesWritten);
+        }
+
+        private void waitIdleQueueFullWithLock() {
+            try {
+                while (idleQueue.remainingCapacity() > 0 && exception.get() == null) {
+                    idleFull.await();
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                exception.set(new IOException(e));
+            } finally {
+                idleLock.unlock();
+            }
         }
     }
 
@@ -337,7 +378,7 @@ public class EssShuffleWriter<K, V, C> extends ShuffleWriter<K, V> {
         writeMetrics.incWriteTime(System.nanoTime() - waitStartTime);
 
         BlockManagerId dummyId = BlockManagerId$.MODULE$.apply(
-            "amor", "127.0.0.1", 1111, Option.apply(null));
+            "rss", "127.0.0.1", 1111, Option.apply(null));
         mapStatus = SparkUtils.createMapStatus(dummyId, mapStatusLengths, mapStatusRecords);
     }
 

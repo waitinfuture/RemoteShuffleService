@@ -33,7 +33,6 @@ private[deploy] class Master(
   private var checkForApplicationTimeOutTask: ScheduledFuture[_] = _
 
   // Configs
-  private val CHUNK_SIZE = EssConf.essPartitionMemory(conf) * 2 // double buffer
   private val WORKER_TIMEOUT_MS = EssConf.essWorkerTimeoutMs(conf)
   private val APPLICATION_TIMEOUT_MS = EssConf.essApplicationTimeoutMs(conf)
 
@@ -165,9 +164,9 @@ private[deploy] class Master(
   }
 
   override def receiveAndReply(context: RpcCallContext): PartialFunction[Any, Unit] = {
-    case RegisterWorker(host, port, memory, worker) =>
-      logInfo(s"received RegisterWorker request, $host:$port $memory")
-      handleRegisterWorker(context, host, port, memory, worker)
+    case RegisterWorker(host, port, numSlots, worker) =>
+      logInfo(s"received RegisterWorker request, $host:$port $numSlots")
+      handleRegisterWorker(context, host, port, numSlots, worker)
 
     case RegisterShuffle(applicationId, shuffleId, numMappers, numPartitions) =>
       logDebug(s"received RegisterShuffle request, " +
@@ -329,9 +328,9 @@ private[deploy] class Master(
           }
           // remove partitions
           if (mode == PartitionLocation.Mode.Master) {
-            worker.removeSlavePartition(shuffleKey, elem._2.map(_.getUniqueId))
+            worker.removeSlavePartitions(shuffleKey, elem._2.map(_.getUniqueId))
           } else {
-            worker.removeMasterPartition(shuffleKey, elem._2.map(_.getUniqueId))
+            worker.removeMasterPartitions(shuffleKey, elem._2.map(_.getUniqueId))
           }
         })
       })
@@ -364,16 +363,15 @@ private[deploy] class Master(
       context: RpcCallContext,
       host: String,
       port: Int,
-      memory: Long,
+      numSlots: Int,
       workerRef: RpcEndpointRef): Unit = {
-    logInfo("Registering worker %s:%d with %s RAM".format(
-      host, port, Utils.bytesToString(memory)))
+    logInfo(s"Registering worker $host:$port with $numSlots slots")
     if (workers.exists(w => w.host == host && w.port == port)) {
       logError(s"Worker already registered! $host:$port")
       context.reply(RegisterWorkerResponse(false, "Worker already registered!"))
     } else {
-      logInfo(s"worker info memory $memory, chunk size $CHUNK_SIZE")
-      val worker = new WorkerInfo(host, port, memory, CHUNK_SIZE, workerRef)
+      logInfo(s"worker info numSlots $numSlots")
+      val worker = new WorkerInfo(host, port, numSlots, workerRef)
       workers.synchronized {
         workers.add(worker)
       }
@@ -450,8 +448,8 @@ private[deploy] class Master(
         destroyBuffersWithRetry(shuffleKey, entry._1,
           entry._2._1.map(_.getUniqueId),
           entry._2._2.map(_.getUniqueId))
-        entry._1.removeMasterPartition(shuffleKey, entry._2._1.map(_.getUniqueId))
-        entry._1.removeSlavePartition(shuffleKey, entry._2._2.map(_.getUniqueId))
+        entry._1.removeMasterPartitions(shuffleKey, entry._2._1.map(_.getUniqueId))
+        entry._1.removeSlavePartitions(shuffleKey, entry._2._2.map(_.getUniqueId))
       })
       logInfo("fail to reserve buffers")
       context.reply(RegisterShuffleResponse(StatusCode.ReserveBufferFailed, null))
@@ -577,8 +575,8 @@ private[deploy] class Master(
         destroyBuffersWithRetry(shuffleKey,
           entry._1, entry._2._1.map(_.getUniqueId),
           entry._2._2.map(_.getUniqueId))
-        entry._1.removeMasterPartition(shuffleKey, entry._2._1.map(_.getUniqueId))
-        entry._1.removeSlavePartition(shuffleKey, entry._2._2.map(_.getUniqueId))
+        entry._1.removeMasterPartitions(shuffleKey, entry._2._1.map(_.getUniqueId))
+        entry._1.removeSlavePartitions(shuffleKey, entry._2._2.map(_.getUniqueId))
       })
       logError("fail to reserve buffers")
       shuffleReviving.synchronized {
@@ -771,35 +769,33 @@ private[deploy] class Master(
     }
 
     ThreadUtils.parmap(
-      workers.to, "CommitFiles Master", EssConf.essRpcParallelism(conf)
-    ) {
-      worker =>
-        if (worker.containsShuffleMaster(shuffleKey)) {
-          val masterLocs = worker.getAllMasterLocations(shuffleKey)
-          val start = System.currentTimeMillis()
-          val res = worker.endpoint.askSync[CommitFilesResponse](
-            CommitFiles(shuffleKey,
-              masterLocs.map(_.getUniqueId),
-              PartitionLocation.Mode.Master)
-          )
-          // record failed masters
-          if (res.failedLocations != null) {
-            res.failedLocations.foreach(id => {
-              failedMasters.add(masterLocs.find(loc => loc.getUniqueId == id).get)
-            })
-          }
-          // record committed partitionIds
-          val committedPartitions = shuffleCommittedPartitions.get(shuffleKey)
-          committedPartitions.synchronized {
-            res.committedLocations.foreach(id => {
-              committedPartitions.add(masterLocs.find(loc => loc.getUniqueId == id).get)
-            })
-          }
-          logDebug(s"Finished CommitFiles Master Mode for worker ${
-            worker.endpoint.address
-              .toEssURL
-          } in ${System.currentTimeMillis() - start}ms")
+      workers.to, "CommitFiles Master", EssConf.essRpcParallelism(conf)) { worker =>
+      if (worker.containsShuffleMaster(shuffleKey)) {
+        val masterLocs = worker.getAllMasterLocations(shuffleKey)
+        val start = System.currentTimeMillis()
+        val res = worker.endpoint.askSync[CommitFilesResponse](
+          CommitFiles(shuffleKey,
+            masterLocs.map(_.getUniqueId),
+            PartitionLocation.Mode.Master)
+        )
+        // record failed masters
+        if (res.failedLocations != null) {
+          res.failedLocations.foreach(id => {
+            failedMasters.add(masterLocs.find(loc => loc.getUniqueId == id).get)
+          })
         }
+        // record committed partitionIds
+        val committedPartitions = shuffleCommittedPartitions.get(shuffleKey)
+        committedPartitions.synchronized {
+          res.committedLocations.foreach(id => {
+            committedPartitions.add(masterLocs.find(loc => loc.getUniqueId == id).get)
+          })
+        }
+        logDebug(s"Finished CommitFiles Master Mode for worker ${
+          worker.endpoint.address
+            .toEssURL
+        } in ${System.currentTimeMillis() - start}ms")
+      }
     }
 
     // if any failedMasters, ask allLocations workers holding slave partitions to commit files
@@ -841,27 +837,23 @@ private[deploy] class Master(
       val allMasterIds = worker.getAllMasterIds(shuffleKey)
       val allSlaveIds = worker.getAllSlaveIds(shuffleKey)
       var res = worker.endpoint.askSync[DestroyResponse](
-        Destroy(shuffleKey,
-          allMasterIds,
-          allSlaveIds
+        Destroy(shuffleKey, allMasterIds, allSlaveIds
         )
       )
       // retry once to destroy
       if (res.status != StatusCode.Success) {
         res = worker.endpoint.askSync[DestroyResponse](
-          Destroy(shuffleKey,
-            res.failedMasters,
-            res.failedSlaves
+          Destroy(shuffleKey, res.failedMasters, res.failedSlaves
           )
         )
       }
     })
     // release resources and clear worker info
     workers.synchronized {
-      workers.foreach(worker => {
-        worker.removeMasterPartition(shuffleKey)
-        worker.removeSlavePartition(shuffleKey)
-      })
+      workers.foreach { worker =>
+        worker.removeMasterPartitions(shuffleKey)
+        worker.removeSlavePartitions(shuffleKey)
+      }
     }
 
     // check if committed files contains all files mappers written
@@ -968,8 +960,8 @@ private[deploy] class Master(
             )
           }
           // remove partitions from workerinfo
-          worker.removeMasterPartition(shuffleKey, masterLocs)
-          worker.removeSlavePartition(shuffleKey, slaveLocs)
+          worker.removeMasterPartitions(shuffleKey, masterLocs)
+          worker.removeSlavePartitions(shuffleKey, slaveLocs)
         }
         nextShufflePartitions = getNextShufflePartitions(worker)
       }
@@ -1042,8 +1034,7 @@ private[deploy] class Master(
   }
 }
 
-private[deploy] object Master
-  extends Logging {
+private[deploy] object Master extends Logging {
   def main(args: Array[String]): Unit = {
     val conf = new EssConf()
     val masterArgs = new MasterArguments(args, conf)

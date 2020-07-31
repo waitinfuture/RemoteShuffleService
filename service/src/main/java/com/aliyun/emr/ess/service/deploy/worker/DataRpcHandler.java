@@ -42,8 +42,8 @@ public final class DataRpcHandler extends RpcHandler {
     @Override
     public void receive(TransportClient client, ByteBuffer message, RpcResponseCallback callback) {
         String shuffleKey = readString(message);
-        String partitionId = readString(message);
-        DataHandler.FileInfo fileInfo = handler.handleOpenStream(shuffleKey, partitionId);
+        String fileName = readString(message);
+        DataHandler.FileInfo fileInfo = handler.handleOpenStream(shuffleKey, fileName);
         if (fileInfo != null) {
             long streamId = streamManager.registerStream(
                     client.getClientId(), new ManagedBufferIterator(fileInfo), client.getChannel());

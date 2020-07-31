@@ -112,6 +112,10 @@ public class PartitionLocation implements Serializable
         return reduceId + "-" + epoch;
     }
 
+    public String getFileName() {
+        return reduceId + "-" + epoch + "-" + mode.mode;
+    }
+
     @Override
     public boolean equals(Object other) {
         if (!(other instanceof PartitionLocation)) {

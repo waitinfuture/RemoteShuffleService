@@ -445,9 +445,9 @@ object EssConf extends Logging {
     * @param deprecationMessage Message to include in the deprecation warning.
     */
   private case class DeprecatedConfig(
-                                       key: String,
-                                       version: String,
-                                       deprecationMessage: String)
+      key: String,
+      version: String,
+      deprecationMessage: String)
 
   /**
     * Information about an alternate configuration key that has been deprecated.
@@ -457,24 +457,11 @@ object EssConf extends Logging {
     * @param translation A translation function for converting old config values into new ones.
     */
   private case class AlternateConfig(
-                                      key: String,
-                                      version: String,
-                                      translation: String => String = null)
+      key: String,
+      version: String,
+      translation: String => String = null)
 
   // Conf getters
-  val TEST_HDFS_BASE: String = "hdfs://11.158.199.162:9000/tmp/ess-test/"
-
-  def essWorkerBaseDir(conf: EssConf): String = {
-    conf.get("ess.worker.base.dir", TEST_HDFS_BASE)
-  }
-
-  def essMemoryPoolCapacity(conf: EssConf): Long = {
-    conf.getSizeAsBytes("ess.memoryPool.capacity", "1g")
-  }
-
-  def essPartitionMemory(conf: EssConf): Long = {
-    conf.getSizeAsBytes("ess.partition.memory", "8m")
-  }
 
   def essPushDataBufferSize(conf: EssConf): Long = {
     conf.getSizeAsBytes("ess.push.data.buffer.size", "128k")
@@ -484,28 +471,20 @@ object EssConf extends Logging {
     conf.getInt("ess.push.data.queue.capacity", 512)
   }
 
-  def essPushDataMaxInflight(conf: EssConf): Int = {
-    conf.getInt("ess.push.data.max.inflight", 1024)
+  def essPushDataMaxReqsInFlight(conf: EssConf): Int = {
+    conf.getInt("ess.push.data.maxReqsInFlight", 1024)
+  }
+
+  def essFetchChunkMaxReqsInFlight(conf: EssConf): Int = {
+    conf.getInt("ess.fetch.chunk.maxReqsInFlight", 3)
   }
 
   def essReplicate(conf: EssConf): Boolean = {
-    conf.getBoolean("ess.push.data.replicate", false)
-  }
-
-  def essDfsReplication(conf: EssConf): String = {
-    conf.get("ess.dfs.replication", "2")
-  }
-
-  def essWorkerTimeoutS(conf: EssConf): Long = {
-    conf.getTimeAsSeconds("ess.worker.timeout", "120s")
+    conf.getBoolean("ess.push.data.replicate", true)
   }
 
   def essWorkerTimeoutMs(conf: EssConf): Long = {
     conf.getTimeAsMs("ess.worker.timeout", "120s")
-  }
-
-  def essApplicationTimeoutS(conf: EssConf): Long = {
-    conf.getTimeAsSeconds("ess.application.timeout", "120s")
   }
 
   def essApplicationTimeoutMs(conf: EssConf): Long = {
@@ -526,6 +505,19 @@ object EssConf extends Logging {
 
   def essWorkerFlushQueueCapacity(conf: EssConf): Int = {
     conf.getInt("ess.worker.flush.queue.capacity", 512)
+  }
+
+  def essWorkerFetchChunkSize(conf: EssConf): Long = {
+    conf.getSizeAsBytes("ess.worker.fetch.chunk.size", "8m")
+  }
+
+  def essWorkerNumSlots(conf: EssConf): Int = {
+    val userNumSlots = conf.getInt("ess.worker.numSlots", -1)
+    if (userNumSlots > 0) {
+      userNumSlots
+    } else {
+      essWorkerFlushQueueCapacity(conf: EssConf) * essWorkerBaseDirNumber(conf) / 2
+    }
   }
 
   def essRpcParallelism(conf: EssConf): Int = {

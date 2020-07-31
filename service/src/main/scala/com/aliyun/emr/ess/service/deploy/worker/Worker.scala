@@ -65,12 +65,8 @@ private[deploy] class Worker(
   private val masterEndpoint: RpcEndpointRef =
     rpcEnv.setupEndpointRef(masterRpcAddress, RpcNameConstants.MASTER_EP)
 
-  // Memory Pool (only for slots scheduling)
-  private val MemoryPoolCapacity = EssConf.essMemoryPoolCapacity(conf)
-  private val ChunkSize = EssConf.essPartitionMemory(conf) // double buffer
-
   // worker info
-  private val workerInfo = new WorkerInfo(host, port, MemoryPoolCapacity, ChunkSize * 2, self)
+  private val workerInfo = new WorkerInfo(host, port, EssConf.essWorkerNumSlots(conf), self)
 
   private val localStorageManager = new LocalStorageManager(conf)
 
@@ -85,12 +81,8 @@ private[deploy] class Worker(
   private val commitThreadPool = ThreadUtils.newDaemonCachedThreadPool(
     "Worker-CommitFiles", 32)
 
-  private val flushThreadPool = ThreadUtils.newDaemonCachedThreadPool(
-    "Worker-Flush", 32)
-
   override def onStart(): Unit = {
-    logInfo("Starting Worker %s:%d with %s RAM".format(
-      host, port, Utils.bytesToString(MemoryPoolCapacity)))
+    logInfo(s"Starting Worker $host:$port with ${workerInfo.numSlots} slots")
     registerWithMaster()
 
     // start heartbeat
@@ -153,7 +145,7 @@ private[deploy] class Worker(
     val masterPartitions = new util.ArrayList[PartitionLocation]()
     for (ind <- 0 until masterLocations.size()) {
       val location = masterLocations.get(ind)
-      val writer = localStorageManager.getWriter(applicationId, shuffleId, location)
+      val writer = localStorageManager.createWriter(applicationId, shuffleId, location)
       masterPartitions.add(new WorkingPartition(location, writer))
     }
     if (masterPartitions.size() < masterLocations.size()) {
@@ -166,7 +158,7 @@ private[deploy] class Worker(
     val slavePartitions = new util.ArrayList[PartitionLocation]()
     for (ind <- 0 until slaveLocations.size()) {
       val location = slaveLocations.get(ind)
-      val writer = localStorageManager.getWriter(applicationId, shuffleId, location)
+      val writer = localStorageManager.createWriter(applicationId, shuffleId, location)
       slavePartitions.add(new WorkingPartition(slaveLocations.get(ind), writer))
     }
     if (slavePartitions.size() < slaveLocations.size()) {
@@ -180,8 +172,8 @@ private[deploy] class Worker(
     val shuffleKey = Utils.makeShuffleKey(applicationId, shuffleId)
 
     // reserve success, update status
-    workerInfo.addMasterPartition(shuffleKey, masterPartitions)
-    workerInfo.addSlavePartition(shuffleKey, slavePartitions)
+    workerInfo.addMasterPartitions(shuffleKey, masterPartitions)
+    workerInfo.addSlavePartitions(shuffleKey, slavePartitions)
 
     logDebug(s"reserve buffer succeed!, $shuffleKey")
     logDebug("masters========")
@@ -193,9 +185,9 @@ private[deploy] class Worker(
   }
 
   private def handleCommitFiles(context: RpcCallContext,
-    shuffleKey: String,
-    commitLocationIds: util.List[String],
-    mode: PartitionLocation.Mode): Unit = {
+      shuffleKey: String,
+      commitLocationIds: util.List[String],
+      mode: PartitionLocation.Mode): Unit = {
     // return null if shuffleKey does not exist
     if (mode == PartitionLocation.Mode.Master) {
       if (!workerInfo.containsShuffleMaster(shuffleKey)) {
@@ -255,9 +247,9 @@ private[deploy] class Worker(
   }
 
   private def handleDestroy(context: RpcCallContext,
-    shuffleKey: String,
-    masterLocations: util.List[String],
-    slaveLocations: util.List[String]): Unit = {
+      shuffleKey: String,
+      masterLocations: util.List[String],
+      slaveLocations: util.List[String]): Unit = {
     // check whether shuffleKey has registered
     if (!workerInfo.containsShuffleMaster(shuffleKey) &&
       !workerInfo.containsShuffleSlave(shuffleKey)) {
@@ -272,31 +264,29 @@ private[deploy] class Worker(
 
     // destroy master locations
     if (masterLocations != null && !masterLocations.isEmpty) {
-      masterLocations.foreach(loc => {
+      masterLocations.foreach { loc =>
         val allocatedLoc = workerInfo.getMasterLocation(shuffleKey, loc)
         if (allocatedLoc == null) {
           failedMasters.add(loc)
         } else {
-          allocatedLoc.asInstanceOf[WorkingPartition]
-            .getFileWriter.destroy()
+          allocatedLoc.asInstanceOf[WorkingPartition].getFileWriter.destroy()
         }
-      })
-      // remove master locations from workerinfo
-      // workerInfo.removeMasterPartition(shuffleKey, masterLocations)
+      }
+      // remove master locations from WorkerInfo
+      workerInfo.removeMasterPartitions(shuffleKey, masterLocations)
     }
     // destroy slave locations
     if (slaveLocations != null && !slaveLocations.isEmpty) {
-      slaveLocations.foreach(loc => {
+      slaveLocations.foreach { loc =>
         val allocatedLoc = workerInfo.getSlaveLocation(shuffleKey, loc)
         if (allocatedLoc == null) {
           failedSlaves.add(loc)
         } else {
-          allocatedLoc.asInstanceOf[WorkingPartition]
-            .getFileWriter.destroy()
+          allocatedLoc.asInstanceOf[WorkingPartition].getFileWriter.destroy()
         }
-      })
+      }
       // remove slave locations from worker info
-      // workerInfo.removeSlavePartition(shuffleKey, slaveLocations)
+      workerInfo.removeSlavePartitions(shuffleKey, slaveLocations)
     }
     // reply
     if (failedMasters.isEmpty && failedSlaves.isEmpty) {
@@ -343,7 +333,8 @@ private[deploy] class Worker(
     if (EssConf.essReplicate(conf) && isMaster) {
       try {
         val peer = location.getPeer
-        val client = dataClientFactory.createClient(peer.getHost, peer.getPort)
+        val client = dataClientFactory.createClient(
+          peer.getHost, peer.getPort, location.getReduceId)
         val newPushData = new PushData(PartitionLocation.Mode.Slave.mode(), shuffleKey,
           pushData.partitionUniqueId, pushData.body)
         pushData.body().retain()
@@ -362,19 +353,17 @@ private[deploy] class Worker(
       case e: Exception =>
         val msg = "append data failed!"
         logError(s"msg ${e.getMessage}")
-        callback.onFailure(new IOException(msg, e))
     }
   }
 
-  override def handleOpenStream(shuffleKey: String, partitionId: String): DataHandler.FileInfo = {
+  override def handleOpenStream(shuffleKey: String, fileName: String): DataHandler.FileInfo = {
     // find FileWriter responsible for the data
-    val location = workerInfo.getMasterLocation(shuffleKey, partitionId)
-    if (location == null) {
-      val msg = s"Partition Location not found!, $partitionId, $shuffleKey"
+    val fileWriter = localStorageManager.getWriter(shuffleKey, fileName)
+    if (fileWriter eq null) {
+      val msg = s"File not found! $shuffleKey, $fileName"
       logError(msg)
       return null
     }
-    val fileWriter = location.asInstanceOf[WorkingPartition].getFileWriter
     new DataHandler.FileInfo(
       fileWriter.getFile, fileWriter.getChunkOffsets, fileWriter.getFileLength)
   }
@@ -382,14 +371,14 @@ private[deploy] class Worker(
   private def registerWithMaster() {
     logInfo("Trying to register with master")
     var res = masterEndpoint.askSync[RegisterWorkerResponse](
-      RegisterWorker(host, port, MemoryPoolCapacity, self)
+      RegisterWorker(host, port, workerInfo.numSlots, self)
     )
     while (!res.success) {
       logInfo("register worker failed!")
       Thread.sleep(1000)
       logInfo("Trying to re-register with master")
       res = masterEndpoint.askSync[RegisterWorkerResponse](
-        RegisterWorker(host, port, MemoryPoolCapacity, self)
+        RegisterWorker(host, port, workerInfo.numSlots, self)
       )
     }
     logInfo("Registered worker successfully")
@@ -398,13 +387,13 @@ private[deploy] class Worker(
   private def reRegisterWithMaster(): Unit = {
     logInfo("Trying to re-register worker!")
     var res = masterEndpoint.askSync[ReregisterWorkerResponse](
-      ReregisterWorker(host, port, MemoryPoolCapacity, self)
+      ReregisterWorker(host, port, workerInfo.numSlots, self)
     )
     while (!res.success) {
       Thread.sleep(1000)
       logInfo("Trying to re-register worker!")
       res = masterEndpoint.askSync[ReregisterWorkerResponse](
-        ReregisterWorker(host, port, MemoryPoolCapacity, self)
+        ReregisterWorker(host, port, workerInfo.numSlots, self)
       )
     }
   }
