@@ -27,6 +27,8 @@ import scala.reflect.ClassTag$;
 import javax.annotation.Nullable;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.atomic.AtomicReference;
 
 @Private
 public class EssShuffleWriter<K, V, C> extends ShuffleWriter<K, V> {
@@ -83,7 +85,97 @@ public class EssShuffleWriter<K, V, C> extends ShuffleWriter<K, V> {
      * and then call stop() with success = false if they get an exception, we want to make sure
      * we don't try deleting files, etc twice.
      */
-    private boolean stopping = false;
+    private volatile boolean stopping = false;
+
+    private class PushTask {
+        int partitionId;
+        final byte[] buffer = new byte[SEND_BUFFER_SIZE];
+        int size;
+    }
+
+    private class DataPusher {
+        final int capacity = 512;
+        LinkedBlockingQueue<PushTask> idleQueue = new LinkedBlockingQueue<>(capacity);
+        LinkedBlockingQueue<PushTask> workingQueue = new LinkedBlockingQueue<>(capacity);
+
+        AtomicReference<IOException> exception = new AtomicReference<>();
+
+        final Thread worker = new Thread("DataPusher-" + taskContext.taskAttemptId()) {
+            @Override
+            public void run() {
+                while (!stopping && exception.get() == null) {
+                    try {
+                        PushTask task = workingQueue.take();
+                        pushData(task.partitionId, task.buffer, task.size);
+                        idleQueue.put(task);
+                    } catch (InterruptedException e) {
+                        exception.set(new IOException(e));
+                    } catch (IOException e) {
+                        exception.set(e);
+                    }
+                }
+            }
+        };
+
+        DataPusher() throws IOException {
+            for (int i = 0; i < capacity; i++) {
+                try {
+                    idleQueue.put(new PushTask());
+                } catch (InterruptedException e) {
+                    throw new IOException(e);
+                }
+            }
+            worker.start();
+        }
+
+        void addTask(int partitionId, byte[] buffer, int size) throws IOException {
+            checkException();
+            try {
+                PushTask task = idleQueue.take();
+                task.partitionId = partitionId;
+                System.arraycopy(buffer, 0, task.buffer, 0, size);
+                task.size = size;
+                workingQueue.put(task);
+            } catch (InterruptedException e) {
+                throw new IOException(e);
+            }
+        }
+
+        void waitOnTermination() throws IOException {
+            while (idleQueue.remainingCapacity() > 0 && exception.get() == null) {
+                try {
+                    Thread.sleep(20);
+                } catch (InterruptedException e) {
+                    throw new IOException(e);
+                }
+            }
+            checkException();
+        }
+
+        private void checkException() throws IOException {
+            if (exception.get() != null) {
+                throw exception.get();
+            }
+        }
+
+        private void pushData(int partitionId, byte[] buffer, int size) throws IOException {
+            int bytesWritten = essShuffleClient.pushData(
+                sparkConf.getAppId(),
+                shuffleId,
+                mapId,
+                taskContext.attemptNumber(),
+                partitionId,
+                buffer,
+                0,
+                size,
+                numMappers,
+                numPartitions
+            );
+            writeMetrics.incBytesWritten(bytesWritten);
+        }
+    }
+
+    private final DataPusher dataPusher;
 
     public EssShuffleWriter(
         BaseShuffleHandle<K, V, C> handle,
@@ -91,7 +183,7 @@ public class EssShuffleWriter<K, V, C> extends ShuffleWriter<K, V> {
         TaskContext taskContext,
         SparkConf sparkConf,
         int numMappers,
-        int numPartitions) {
+        int numPartitions) throws IOException {
         this.mapId = mapId;
         this.dep = handle.dependency();
         this.shuffleId = dep.shuffleId();
@@ -117,6 +209,8 @@ public class EssShuffleWriter<K, V, C> extends ShuffleWriter<K, V> {
 
         sendBuffers = new byte[partitioner.numPartitions()][];
         sendOffsets = new int[partitioner.numPartitions()];
+
+        dataPusher = new DataPusher();
     }
 
     @Override
@@ -209,21 +303,9 @@ public class EssShuffleWriter<K, V, C> extends ShuffleWriter<K, V> {
     }
 
     private void flushSendBuffer(int partitionId, byte[] buffer, int size) throws IOException {
-        long flushStartTime = System.nanoTime();
-        int bytesWritten = essShuffleClient.pushData(
-            sparkConf.getAppId(),
-            shuffleId,
-            mapId,
-            taskContext.attemptNumber(),
-            partitionId,
-            buffer,
-            0,
-            size,
-            numMappers,
-            numPartitions
-        );
-        writeMetrics.incBytesWritten(bytesWritten);
-        writeMetrics.incWriteTime(System.nanoTime() - flushStartTime);
+        long pushStartTime = System.nanoTime();
+        dataPusher.addTask(partitionId, buffer, size);
+        writeMetrics.incWriteTime(System.nanoTime() - pushStartTime);
     }
 
     private void close() throws IOException {
@@ -234,6 +316,7 @@ public class EssShuffleWriter<K, V, C> extends ShuffleWriter<K, V> {
                 flushSendBuffer(i, sendBuffers[i], size);
             }
         }
+        dataPusher.waitOnTermination();
 
         updateMapStatus();
 
