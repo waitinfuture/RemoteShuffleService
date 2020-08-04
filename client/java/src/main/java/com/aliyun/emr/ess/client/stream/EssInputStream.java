@@ -19,6 +19,8 @@ import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 
 
 public abstract class EssInputStream extends InputStream {
@@ -29,11 +31,13 @@ public abstract class EssInputStream extends InputStream {
             TransportClientFactory clientFactory,
             String shuffleKey,
             PartitionLocation[] locations,
-            int[] attempts) throws IOException {
+            int[] attempts,
+            int attemptNumber) throws IOException {
         if (locations == null || locations.length == 0) {
             return emptyInputStream;
         } else {
-            return new EssInputStreamImpl(conf, clientFactory, shuffleKey, locations, attempts);
+            return new EssInputStreamImpl(
+                conf, clientFactory, shuffleKey, locations, attempts, attemptNumber);
         }
     }
 
@@ -66,6 +70,7 @@ public abstract class EssInputStream extends InputStream {
         private final String shuffleKey;
         private final PartitionLocation[] locations;
         private final int[] attempts;
+        private final int attemptNumber;
 
         private final int maxInFlight;
 
@@ -91,12 +96,14 @@ public abstract class EssInputStream extends InputStream {
                 TransportClientFactory clientFactory,
                 String shuffleKey,
                 PartitionLocation[] locations,
-                int[] attempts) throws IOException {
+                int[] attempts,
+                int attemptNumber) throws IOException {
             this.conf = conf;
             this.clientFactory = clientFactory;
             this.shuffleKey = shuffleKey;
             this.locations = locations;
             this.attempts = attempts;
+            this.attemptNumber = attemptNumber;
 
             maxInFlight = EssConf.essFetchChunkMaxReqsInFlight(conf);
 
@@ -117,6 +124,9 @@ public abstract class EssInputStream extends InputStream {
         }
 
         private PartitionReader createReader(PartitionLocation location) throws IOException {
+            if (attemptNumber % 2 == 1 && location.getPeer() != null) {
+                location = location.getPeer();
+            }
             try {
                 TransportClient client =
                         clientFactory.createClient(location.getHost(), location.getPort());
@@ -181,7 +191,11 @@ public abstract class EssInputStream extends InputStream {
 
         @Override
         public void close() throws IOException {
-            // TODO
+            if (currentReader != null) {
+                currentReader.close();
+                currentReader = null;
+                currentChunk = null;
+            }
         }
 
         private boolean moveToNextChunk() throws IOException {
@@ -255,11 +269,18 @@ public abstract class EssInputStream extends InputStream {
             private final LinkedBlockingQueue<ByteBuf> results;
             private final ChunkReceivedCallback callback;
 
-            PartitionReader(TransportClient client, String fileName) {
+            private final AtomicReference<IOException> exception = new AtomicReference<>();
+
+            PartitionReader(TransportClient client, String fileName) throws IOException {
                 this.client = client;
 
                 ByteBuffer request = createOpenMessage(shuffleKey, fileName);
-                ByteBuffer response = client.sendRpcSync(request, 30 * 1000L);
+                ByteBuffer response;
+                try {
+                    response = client.sendRpcSync(request, 20 * 1000L);
+                } catch (Exception e) {
+                    throw new IOException("FetchChunk failed", e);
+                }
                 streamId = response.getLong();
                 numChunks = response.getInt();
 
@@ -274,7 +295,8 @@ public abstract class EssInputStream extends InputStream {
 
                     @Override
                     public void onFailure(int chunkIndex, Throwable e) {
-
+                        logger.error(e);
+                        exception.set(new IOException("FetchChunk failed", e));
                     }
                 };
             }
@@ -297,24 +319,44 @@ public abstract class EssInputStream extends InputStream {
             }
 
             ByteBuf next() throws IOException {
+                checkException();
                 if (chunkIndex < numChunks) {
                     fetchChunks();
                 }
-                returnedChunks++;
+                ByteBuf chunk = null;
                 try {
-                    return results.take();
+                    while (chunk == null) {
+                        checkException();
+                        chunk = results.poll(500, TimeUnit.MILLISECONDS);
+                    }
                 } catch (InterruptedException e) {
-                    throw new IOException(e);
+                    Thread.currentThread().interrupt();
+                    IOException ioe = new IOException(e);
+                    exception.set(ioe);
+                    throw ioe;
                 }
+                returnedChunks++;
+                return chunk;
+            }
+
+            void close() {
+                results.clear();
             }
 
             private void fetchChunks() {
                 final int inFlight = chunkIndex - returnedChunks - results.size();
                 if (inFlight < maxInFlight) {
-                    final int toFetch = Math.min(maxInFlight, numChunks - chunkIndex);
+                    final int toFetch = Math.min(maxInFlight - inFlight + 1, numChunks - chunkIndex);
                     for (int i = 0; i < toFetch; i++) {
                         client.fetchChunk(streamId, chunkIndex++, callback);
                     }
+                }
+            }
+
+            private void checkException() throws IOException {
+                IOException e = exception.get();
+                if (e != null) {
+                    throw e;
                 }
             }
         }

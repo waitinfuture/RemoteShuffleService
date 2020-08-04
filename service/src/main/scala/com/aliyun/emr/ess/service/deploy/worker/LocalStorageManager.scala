@@ -1,15 +1,18 @@
 package com.aliyun.emr.ess.service.deploy.worker
 
-import java.io.{File, FileNotFoundException, IOException}
+import java.io.{File, IOException}
 import java.nio.channels.FileChannel
 import java.nio.ByteBuffer
+import java.util
 import java.util.concurrent.atomic.AtomicInteger
-import java.util.concurrent.{ConcurrentHashMap, LinkedBlockingQueue}
+import java.util.concurrent.{ConcurrentHashMap, LinkedBlockingQueue, TimeUnit}
 import java.util.function.IntUnaryOperator
+
+import scala.collection.JavaConversions._
 
 import com.aliyun.emr.ess.common.EssConf
 import com.aliyun.emr.ess.common.internal.Logging
-import com.aliyun.emr.ess.common.util.Utils
+import com.aliyun.emr.ess.common.util.{ThreadUtils, Utils}
 import com.aliyun.emr.ess.protocol.PartitionLocation
 
 private[worker] case class WriteTask(
@@ -17,7 +20,8 @@ private[worker] case class WriteTask(
     fileChannel: FileChannel,
     notifier: FileWriter.FlushNotifier)
 
-private[worker] final class DiskFlusher(index: Int, queueCapacity: Int, bufferSize: Int) {
+private[worker] final class DiskFlusher(
+    index: Int, queueCapacity: Int, bufferSize: Int) extends Logging {
   private val workingQueue = new LinkedBlockingQueue[WriteTask](queueCapacity)
   private val bufferQueue = new LinkedBlockingQueue[ByteBuffer](queueCapacity)
   for (_ <- 0 until queueCapacity) {
@@ -34,6 +38,7 @@ private[worker] final class DiskFlusher(index: Int, queueCapacity: Int, bufferSi
             task.fileChannel.write(task.buffer)
           } catch {
             case e: IOException =>
+              logError(s"[DiskFlusher] write failed ${e.getMessage}")
               task.notifier.setException(e)
           }
         }
@@ -46,8 +51,8 @@ private[worker] final class DiskFlusher(index: Int, queueCapacity: Int, bufferSi
   worker.setDaemon(true)
   worker.start()
 
-  def takeBuffer(): ByteBuffer = {
-    bufferQueue.take()
+  def takeBuffer(timeoutMs: Long): ByteBuffer = {
+    bufferQueue.poll(timeoutMs, TimeUnit.MILLISECONDS)
   }
 
   def returnBuffer(buffer: ByteBuffer): Unit = {
@@ -58,43 +63,42 @@ private[worker] final class DiskFlusher(index: Int, queueCapacity: Int, bufferSi
   def addTask(task: WriteTask): Unit = {
     workingQueue.put(task)
   }
+
+  def bufferQueueInfo(): String = s"${worker.getName} available buffers: ${bufferQueue.size()}"
 }
 
 private[worker] final class LocalStorageManager(conf: EssConf) extends Logging {
 
   import LocalStorageManager._
 
-  private val baseDirs = {
-    val prefix = EssConf.essWorkerBaseDirPrefix(conf)
-    val number = EssConf.essWorkerBaseDirNumber(conf)
-    (1 to number).map(i => new File(s"$prefix$i", workingDir)).toArray
+  private val workingDirs = {
+    val baseDirs = EssConf.essWorkerBaseDirs(conf)
+    baseDirs.map(new File(_, workingDirName))
   }
 
-  baseDirs.foreach { dir =>
-    if (dir.exists()) {
-      deleteDirectory(dir)
-    }
+  workingDirs.foreach { dir =>
     dir.mkdirs()
   }
 
   private val diskFlushers = {
     val queueCapacity = EssConf.essWorkerFlushQueueCapacity(conf)
     val flushBufferSize = EssConf.essWorkerFlushBufferSize(conf).toInt
-    (1 to baseDirs.length).map(i => new DiskFlusher(i, queueCapacity, flushBufferSize)).toArray
+    (1 to workingDirs.length).map(i => new DiskFlusher(i, queueCapacity, flushBufferSize)).toArray
   }
 
   private val fetchChunkSize = EssConf.essWorkerFetchChunkSize(conf)
+  private val timeoutMs = EssConf.essFlushTimeoutMs(conf)
 
   private val counter = new AtomicInteger()
   private val counterOperator = new IntUnaryOperator() {
-    override def applyAsInt(operand: Int): Int = (operand + 1) % baseDirs.length
+    override def applyAsInt(operand: Int): Int = (operand + 1) % workingDirs.length
   }
 
   // shuffleKey -> (fileName -> writer)
   private val writers =
     new ConcurrentHashMap[String, ConcurrentHashMap[String, FileWriter]]()
 
-  def deleteDirectory(dir: File): Boolean = {
+  private def deleteDirectory(dir: File): Boolean = {
     val allContents = dir.listFiles
     if (allContents != null) {
       for (file <- allContents) {
@@ -112,12 +116,12 @@ private[worker] final class LocalStorageManager(conf: EssConf) extends Logging {
         new ConcurrentHashMap()
     }
 
-  @throws[FileNotFoundException]
+  @throws[IOException]
   def createWriter(appId: String, shuffleId: Int, location: PartitionLocation): FileWriter = {
     createWriter(appId, shuffleId, location.getReduceId, location.getEpoch, location.getMode)
   }
 
-  @throws[FileNotFoundException]
+  @throws[IOException]
   def createWriter(
       appId: String,
       shuffleId: Int,
@@ -125,10 +129,12 @@ private[worker] final class LocalStorageManager(conf: EssConf) extends Logging {
       epoch: Int,
       mode: PartitionLocation.Mode): FileWriter = {
     val index = getNextIndex()
-    val shuffleDir = new File(baseDirs(index), s"$appId/$shuffleId")
-    shuffleDir.mkdirs()
+    val shuffleDir = new File(workingDirs(index), s"$appId/$shuffleId")
     val fileName = s"$reduceId-$epoch-${mode.mode()}"
-    val writer = new FileWriter(new File(shuffleDir, fileName), diskFlushers(index), fetchChunkSize)
+    val file = new File(shuffleDir, fileName)
+    shuffleDir.mkdirs()
+    file.createNewFile()
+    val writer = new FileWriter(file, diskFlushers(index), fetchChunkSize, timeoutMs)
 
     val shuffleKey = Utils.makeShuffleKey(appId, shuffleId)
     val shuffleMap = writers.computeIfAbsent(shuffleKey, newMapFunc)
@@ -145,14 +151,47 @@ private[worker] final class LocalStorageManager(conf: EssConf) extends Logging {
     }
   }
 
-  def cleanup(shuffleKey: String): Unit = {
-    val shuffleMap = writers.remove(shuffleKey)
-    if (shuffleMap ne null) {
-      // TODO
+  def shuffleKeySet(): util.Set[String] = writers.keySet()
+
+  def cleanup(expiredShuffleKeys: util.HashSet[String]): Unit = {
+    expiredShuffleKeys.foreach { shuffleKey =>
+      logInfo(s"cleanup $shuffleKey")
+      writers.remove(shuffleKey)
+      val splits = shuffleKey.split("-")
+      val appId = splits.dropRight(1).mkString("-")
+      val shuffleId = splits.last
+      workingDirs.foreach { workingDir =>
+        val dir = new File(workingDir, s"$appId/$shuffleId")
+        deleteDirectory(dir)
+      }
     }
   }
+
+  private val cleanupEmptyAppDirsScheduler =
+    ThreadUtils.newDaemonSingleThreadScheduledExecutor("cleanup-empty-dirs-scheduler")
+  cleanupEmptyAppDirsScheduler.scheduleAtFixedRate(new Runnable {
+    override def run(): Unit = {
+      cleanupEmptyAppDirs()
+    }
+  }, 30, 30, TimeUnit.MINUTES)
+
+  private def cleanupEmptyAppDirs(): Unit = {
+    val expireTime = System.currentTimeMillis() - expireDurationMs
+    workingDirs.foreach { workingDir =>
+      val appDirs = workingDir.listFiles
+      if (appDirs != null) {
+        for (appDir <- appDirs if appDir.lastModified() < expireTime) {
+          appDir.delete()
+        }
+      }
+    }
+  }
+
+  def logAvailableFlushBuffersInfo(): Unit =
+    diskFlushers.foreach(f => logInfo(f.bufferQueueInfo()))
 }
 
 private object LocalStorageManager {
-  private val workingDir = "hadoop/ess-worker/data"
+  private val workingDirName = "hadoop/ess-worker/data"
+  private val expireDurationMs = TimeUnit.HOURS.toMillis(2)
 }

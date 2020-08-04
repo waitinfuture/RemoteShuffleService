@@ -49,6 +49,13 @@ private[ess] class WorkerInfo(
     host + ":" + port
   }
 
+  def shuffleKeySet(): util.HashSet[String] = {
+    val shuffleKeySet = new util.HashSet[String]
+    shuffleKeySet.addAll(masterPartitionLocations.keySet())
+    shuffleKeySet.addAll(slavePartitionLocations.keySet())
+    shuffleKeySet
+  }
+
   private def addPartition(
       shuffleKey: String,
       location: PartitionLocation,
@@ -149,7 +156,9 @@ private[ess] class WorkerInfo(
   }
 
   private def getLocation(
-      shuffleKey: String, uniqueId: String, mode: PartitionLocation.Mode): PartitionLocation = {
+      shuffleKey: String,
+      uniqueId: String,
+      mode: PartitionLocation.Mode): PartitionLocation = {
     val tokens = uniqueId.split("-", 2)
     val reduceId = tokens(0).toInt
     val epoch = tokens(1).toInt
@@ -160,13 +169,15 @@ private[ess] class WorkerInfo(
         slavePartitionLocations
       }
 
-    if (!partitionInfo.containsKey(shuffleKey)
-      || !partitionInfo.get(shuffleKey).containsKey(reduceId)) {
-      return null
+    this.synchronized {
+      if (!partitionInfo.containsKey(shuffleKey)
+        || !partitionInfo.get(shuffleKey).containsKey(reduceId)) {
+        return null
+      }
+      partitionInfo.get(shuffleKey)
+        .get(reduceId)
+        .find(loc => loc.getEpoch == epoch).orNull
     }
-    partitionInfo.get(shuffleKey)
-      .get(reduceId)
-      .find(loc => loc.getEpoch == epoch).orNull
   }
 
   def addMasterPartition(shuffleKey: String, location: PartitionLocation): Unit = {
@@ -221,10 +232,7 @@ private[ess] class WorkerInfo(
 
   def getAllMasterLocations(shuffleKey: String): util.List[PartitionLocation] = this.synchronized {
     if (masterPartitionLocations.containsKey(shuffleKey)) {
-      masterPartitionLocations.get(shuffleKey)
-        .values()
-        .flatten
-        .toList
+      masterPartitionLocations.get(shuffleKey).values().flatten.toList
     } else {
       new util.ArrayList[PartitionLocation]()
     }
@@ -298,6 +306,11 @@ private[ess] class WorkerInfo(
 
   def containsShuffleSlave(shuffleKey: String): Boolean = this.synchronized {
     slavePartitionLocations.containsKey(shuffleKey)
+  }
+
+  def containsShuffle(shuffleKey: String): Boolean = this.synchronized {
+    masterPartitionLocations.containsKey(shuffleKey) ||
+      slavePartitionLocations.containsKey(shuffleKey)
   }
 
   def getMasterShuffleKeys(): util.Set[String] = this.synchronized {

@@ -5,7 +5,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.File;
-import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.nio.ByteBuffer;
@@ -17,6 +16,8 @@ import java.util.concurrent.atomic.AtomicReference;
 
 public final class FileWriter {
     private static final Logger logger = LoggerFactory.getLogger(FileWriter.class);
+
+    private static final long WAIT_INTERVAL_MS = 20;
 
     private final File file;
     private final FileChannel channel;
@@ -31,6 +32,7 @@ public final class FileWriter {
     private ByteBuffer flushBuffer;
 
     private final long chunkSize;
+    private final long timeoutMs;
 
     static class FlushNotifier {
         final AtomicInteger numPendingFlushes = new AtomicInteger();
@@ -54,12 +56,14 @@ public final class FileWriter {
 
     private final FlushNotifier notifier = new FlushNotifier();
 
-    public FileWriter(File file, DiskFlusher flusher, long chunkSize) throws FileNotFoundException {
+    public FileWriter(
+        File file, DiskFlusher flusher, long chunkSize, long timeoutMs) throws IOException {
         this.file = file;
         this.flusher = flusher;
         this.chunkSize = chunkSize;
+        this.timeoutMs = timeoutMs;
         channel = new FileOutputStream(file).getChannel();
-        flushBuffer = flusher.takeBuffer();
+        takeBuffer();
     }
 
     public File getFile() {
@@ -84,6 +88,7 @@ public final class FileWriter {
         notifier.numPendingFlushes.incrementAndGet();
         WriteTask task = new WriteTask(flushBuffer, channel, notifier);
         flusher.addTask(task);
+        flushBuffer = null;
     }
 
     /**
@@ -112,7 +117,7 @@ public final class FileWriter {
 
             if (flushBuffer.position() + numBytes >= flushBuffer.capacity()) {
                 flush();
-                flushBuffer = flusher.takeBuffer();
+                takeBuffer();
             }
 
             flushBuffer.limit(flushBuffer.position() + numBytes);
@@ -129,43 +134,73 @@ public final class FileWriter {
             logger.error(msg);
             throw new IOException(msg);
         }
-        closed = true;
 
         try {
-            while (numPendingWrites.get() > 0) {
-                try {
-                    notifier.checkException();
-                    TimeUnit.MILLISECONDS.sleep(20);
-                } catch (InterruptedException e) {
-                    throw new IOException(e);
+            waitOnNoPending(numPendingWrites);
+            closed = true;
+
+            synchronized (this) {
+                if (flushBuffer.position() > 0) {
+                    flush();
                 }
             }
 
-            if (flushBuffer.position() > 0) {
-                flush();
-                flushBuffer = null;
-            }
-
-            while (notifier.numPendingFlushes.get() > 0) {
-                try {
-                    notifier.checkException();
-                    TimeUnit.MILLISECONDS.sleep(20);
-                } catch (InterruptedException e) {
-                    throw new IOException(e);
-                }
-            }
+            waitOnNoPending(notifier.numPendingFlushes);
         } finally {
-            if (flushBuffer != null) {
-                flusher.returnBuffer(flushBuffer);
-                flushBuffer = null;
-            }
+            returnBuffer();
             channel.close();
         }
 
         return bytesWritten;
     }
 
-    public void destroy() throws IOException {
-//        channel.close();
+    public void destroy() {
+        if (!closed) {
+            closed = true;
+            notifier.setException(new IOException("destroyed"));
+            returnBuffer();
+            try {
+                channel.close();
+            } catch(IOException e) {
+                logger.warn("close channel failed: " + file);
+            }
+        }
+        file.delete();
+    }
+
+    private void waitOnNoPending(AtomicInteger counter) throws IOException {
+        long waitTime = timeoutMs;
+        while (counter.get() > 0 && waitTime > 0) {
+            try {
+                notifier.checkException();
+                TimeUnit.MILLISECONDS.sleep(WAIT_INTERVAL_MS);
+            } catch (InterruptedException e) {
+                IOException ioe = new IOException(e);
+                notifier.setException(ioe);
+                throw ioe;
+            }
+            waitTime -= WAIT_INTERVAL_MS;
+        }
+        if (counter.get() > 0) {
+            IOException ioe = new IOException("wait pending actions timeout");
+            notifier.setException(ioe);
+            throw ioe;
+        }
+    }
+
+    private void takeBuffer() throws IOException {
+        flushBuffer = flusher.takeBuffer(timeoutMs);
+        if (flushBuffer == null) {
+            IOException e = new IOException("take buffer timeout");
+            notifier.setException(e);
+            throw e;
+        }
+    }
+
+    private synchronized void returnBuffer() {
+        if (flushBuffer != null) {
+            flusher.returnBuffer(flushBuffer);
+            flushBuffer = null;
+        }
     }
 }

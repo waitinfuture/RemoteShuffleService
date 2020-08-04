@@ -532,6 +532,21 @@ object EssConf extends Logging {
     conf.getTimeAsSeconds("ess.flush.timeout", "240s")
   }
 
+  def essFlushTimeoutMs(conf: EssConf): Long = {
+    conf.getTimeAsMs("ess.flush.timeout", "240s")
+  }
+
+  def essWorkerBaseDirs(conf: EssConf): Array[String] = {
+    val baseDirs = conf.get("ess.worker.base.dirs", "")
+    if (baseDirs.nonEmpty) {
+      baseDirs.split(",")
+    } else {
+      val prefix = EssConf.essWorkerBaseDirPrefix(conf)
+      val number = EssConf.essWorkerBaseDirNumber(conf)
+      (1 to number).map(i => s"$prefix$i").toArray
+    }
+  }
+
   def essWorkerBaseDirPrefix(conf: EssConf): String = {
     conf.get("ess.worker.base.dir.prefix", "/mnt/disk")
   }
@@ -544,11 +559,11 @@ object EssConf extends Logging {
     conf.getTimeAsMs("ess.stage.end.timeout", "120s")
   }
 
-  def essLimitInFlightTimeout(conf: EssConf): Int = {
+  def essLimitInFlightTimeoutMs(conf: EssConf): Long = {
     conf.getTimeAsMs("ess.limit.in.flight.timeout", "60s")
   }
 
-  def essLimitInFlightSleepDelta(conf: EssConf): Int = {
+  def essLimitInFlightSleepDeltaMs(conf: EssConf): Long = {
     conf.getTimeAsMs("ess.limit.in.flight.sleep.delta", "50ms")
   }
 }

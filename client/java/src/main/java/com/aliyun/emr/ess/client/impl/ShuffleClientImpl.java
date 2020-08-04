@@ -160,8 +160,8 @@ public class ShuffleClientImpl extends ShuffleClient {
         }
 
         ConcurrentSet<Integer> inFlightBatches = pushState.inFlightBatches;
-        int delta = EssConf.essLimitInFlightSleepDelta(conf);
-        int times = EssConf.essLimitInFlightTimeout(conf) / delta;
+        long delta = EssConf.essLimitInFlightSleepDeltaMs(conf);
+        long times = EssConf.essLimitInFlightTimeoutMs(conf) / delta;
         try {
             while (times > 0) {
                 if (inFlightBatches.size() <= limit) {
@@ -367,7 +367,7 @@ public class ShuffleClientImpl extends ShuffleClient {
 
     @Override
     public EssInputStream readPartition(
-        String applicationId, int shuffleId, int reduceId) throws IOException {
+        String applicationId, int shuffleId, int reduceId, int attemptNumber) throws IOException {
         ReduceFileGroups fileGroups = reduceFileGroupsMap.computeIfAbsent(shuffleId, (id) -> {
             GetReducerFileGroupResponse response = master.askSync(
                     new GetReducerFileGroup(applicationId, shuffleId),
@@ -392,7 +392,7 @@ public class ShuffleClientImpl extends ShuffleClient {
         }
         String shuffleKey = Utils.makeShuffleKey(applicationId, shuffleId);
         return EssInputStream.create(conf, dataClientFactory, shuffleKey,
-                fileGroups.partitionGroups[reduceId], fileGroups.mapAttempts);
+                fileGroups.partitionGroups[reduceId], fileGroups.mapAttempts, attemptNumber);
     }
 
     @Override

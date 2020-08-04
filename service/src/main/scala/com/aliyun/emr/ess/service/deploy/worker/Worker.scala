@@ -20,7 +20,7 @@ package com.aliyun.emr.ess.service.deploy.worker
 import java.io.IOException
 import java.nio.ByteBuffer
 import java.util
-import java.util.concurrent.{Future, TimeUnit}
+import java.util.concurrent.{Future, LinkedBlockingQueue, TimeUnit}
 
 import scala.collection.JavaConversions._
 
@@ -88,6 +88,7 @@ private[deploy] class Worker(
     // start heartbeat
     forwardMessageScheduler.scheduleAtFixedRate(new Runnable {
       override def run(): Unit = Utils.tryLogNonFatalError {
+        localStorageManager.logAvailableFlushBuffersInfo()
         self.send(SendHeartbeat)
       }
     }, 0, HEARTBEAT_MILLIS, TimeUnit.MILLISECONDS)
@@ -107,7 +108,12 @@ private[deploy] class Worker(
 
   override def receive: PartialFunction[Any, Unit] = {
     case SendHeartbeat =>
-      masterEndpoint.send(HeartbeatFromWorker(host, port))
+      val shuffleKeys = new util.HashSet[String]
+      shuffleKeys.addAll(workerInfo.shuffleKeySet())
+      shuffleKeys.addAll(localStorageManager.shuffleKeySet())
+      val response = masterEndpoint.askSync[HeartbeatResponse](
+        HeartbeatFromWorker(host, port, shuffleKeys))
+      cleanup(response.expiredShuffleKeys)
   }
 
   override def receiveAndReply(context: RpcCallContext): PartialFunction[Any, Unit] = {
@@ -115,17 +121,14 @@ private[deploy] class Worker(
       logInfo(s"received ReserveBuffers request, $applicationId $shuffleId")
       handleReserveBuffers(context, applicationId, shuffleId, masterLocations, slaveLocations)
 
-    case CommitFiles(shuffleKey, commitLocations, mode) =>
-      logInfo(s"receive CommitFiles request, $shuffleKey, $mode, files ${commitLocations.mkString(",")}")
+    case CommitFiles(shuffleKey, masterIds, slaveIds) =>
+      logInfo(s"receive CommitFiles request, $shuffleKey, " +
+        s"master files ${masterIds.mkString(",")} slave files ${slaveIds.mkString(",")}")
       val commitFilesTimeMs = Utils.timeIt({
-        handleCommitFiles(context, shuffleKey, commitLocations, mode)
+        handleCommitFiles(context, shuffleKey, masterIds, slaveIds)
       })
-      logInfo(s"Done processed CommitFiles request with shuffleKey:$shuffleKey,mode:$mode in " +
+      logInfo(s"Done processed CommitFiles request with shuffleKey:$shuffleKey, in " +
         s"${commitFilesTimeMs}ms")
-
-    case Destroy(shuffleKey, masterLocations, slaveLocations) =>
-      logInfo(s"received Destroy request, $shuffleKey")
-      handleDestroy(context, shuffleKey, masterLocations, slaveLocations)
 
     case GetWorkerInfos =>
       logInfo("received GetWorkerInfos request")
@@ -134,6 +137,10 @@ private[deploy] class Worker(
     case ThreadDump =>
       logInfo("receive ThreadDump request")
       handleThreadDump(context)
+
+    case Destroy(_, _, _) =>
+      logInfo("receive Destroy request")
+      context.reply(DestroyResponse(StatusCode.Success, null, null))
   }
 
   private def handleReserveBuffers(
@@ -184,116 +191,93 @@ private[deploy] class Worker(
     context.reply(ReserveBuffersResponse(StatusCode.Success))
   }
 
-  private def handleCommitFiles(context: RpcCallContext,
+  private def handleCommitFiles(
+      context: RpcCallContext,
       shuffleKey: String,
-      commitLocationIds: util.List[String],
-      mode: PartitionLocation.Mode): Unit = {
+      masterIds: util.List[String],
+      slaveIds: util.List[String]): Unit = {
     // return null if shuffleKey does not exist
-    if (mode == PartitionLocation.Mode.Master) {
-      if (!workerInfo.containsShuffleMaster(shuffleKey)) {
-        logError(s"shuffle $shuffleKey doesn't exist!")
-        context.reply(CommitFilesResponse(StatusCode.ShuffleNotRegistered, commitLocationIds, null))
-        return
-      }
-    } else if (mode == PartitionLocation.Mode.Slave) {
-      if (!workerInfo.containsShuffleSlave(shuffleKey)) {
-        logError(s"shuffle $shuffleKey doesn't exist!")
-        context.reply(CommitFilesResponse(StatusCode.ShuffleNotRegistered, commitLocationIds, null))
-        return
-      }
+    if (!workerInfo.containsShuffle(shuffleKey)) {
+      logError(s"shuffle $shuffleKey doesn't exist!")
+      context.reply(CommitFilesResponse(
+        StatusCode.ShuffleNotRegistered, null, null, masterIds, slaveIds))
+      return
     }
 
-    val failedLocations = new util.ArrayList[String]()
-    val committedLocations = new util.ArrayList[String]()
+    val committedMasterIds = new util.ArrayList[String]()
+    val committedSlaveIds = new util.ArrayList[String]()
+    val failedMasterIds = new util.ArrayList[String]()
+    val failedSlaveIds = new util.ArrayList[String]()
 
     val futures = new util.ArrayList[Future[_]]()
-    if (commitLocationIds != null) {
-      commitLocationIds.foreach { id =>
-        val target = if (mode == PartitionLocation.Mode.Master) {
-          workerInfo.getMasterLocation(shuffleKey, id)
-        } else {
-          workerInfo.getSlaveLocation(shuffleKey, id)
-        }
 
+    if (masterIds != null) {
+      masterIds.foreach { id =>
+        val target = workerInfo.getMasterLocation(shuffleKey, id)
         if (target != null) {
           val future = commitThreadPool.submit(new Runnable {
             override def run(): Unit = {
               try {
                 val bytes = target.asInstanceOf[WorkingPartition].getFileWriter.close()
                 if (bytes > 0L) {
-                  committedLocations.synchronized { committedLocations.add(id) }
+                  committedMasterIds.synchronized {
+                    committedMasterIds.add(id)
+                  }
                 }
               } catch {
                 case _: IOException =>
-                  failedLocations.synchronized { failedLocations.add(id) }
+                  failedMasterIds.synchronized {
+                    failedMasterIds.add(id)
+                  }
               }
             }
           })
           futures.add(future)
         }
       }
-      futures.foreach(_.get(EssConf.essFlushTimeout(conf), TimeUnit.SECONDS))
     }
 
+    if (slaveIds != null) {
+      slaveIds.foreach { id =>
+        val target = workerInfo.getSlaveLocation(shuffleKey, id)
+        if (target != null) {
+          val future = commitThreadPool.submit(new Runnable {
+            override def run(): Unit = {
+              try {
+                val bytes = target.asInstanceOf[WorkingPartition].getFileWriter.close()
+                if (bytes > 0L) {
+                  committedSlaveIds.synchronized {
+                    committedSlaveIds.add(id)
+                  }
+                }
+              } catch {
+                case _: IOException =>
+                  failedSlaveIds.synchronized {
+                    failedSlaveIds.add(id)
+                  }
+              }
+            }
+          })
+          futures.add(future)
+        }
+      }
+    }
+
+    masterIds.foreach(id => workerInfo.removeMasterPartition(shuffleKey, id))
+    slaveIds.foreach(id => workerInfo.removeSlavePartition(shuffleKey, id))
+
+    futures.foreach(_.get(EssConf.essFlushTimeout(conf), TimeUnit.SECONDS))
+
     // reply
-    if (failedLocations.isEmpty) {
+    if (failedMasterIds.isEmpty && failedSlaveIds.isEmpty) {
       logInfo("CommitFile success!")
-      context.reply(CommitFilesResponse(StatusCode.Success, null, committedLocations))
+      context.reply(CommitFilesResponse(
+        StatusCode.Success, committedMasterIds, committedSlaveIds, null, null))
     } else {
       logError("CommitFiles failed!")
       context.reply(CommitFilesResponse(
-        StatusCode.PartialSuccess, failedLocations, committedLocations))
-    }
-  }
-
-  private def handleDestroy(context: RpcCallContext,
-      shuffleKey: String,
-      masterLocations: util.List[String],
-      slaveLocations: util.List[String]): Unit = {
-    // check whether shuffleKey has registered
-    if (!workerInfo.containsShuffleMaster(shuffleKey) &&
-      !workerInfo.containsShuffleSlave(shuffleKey)) {
-      logWarning(s"[handleDestroy] shuffle $shuffleKey not registered!")
-      context.reply(DestroyResponse(
-        StatusCode.ShuffleNotRegistered, masterLocations, slaveLocations))
-      return
-    }
-
-    val failedMasters = new util.ArrayList[String]()
-    val failedSlaves = new util.ArrayList[String]()
-
-    // destroy master locations
-    if (masterLocations != null && !masterLocations.isEmpty) {
-      masterLocations.foreach { loc =>
-        val allocatedLoc = workerInfo.getMasterLocation(shuffleKey, loc)
-        if (allocatedLoc == null) {
-          failedMasters.add(loc)
-        } else {
-          allocatedLoc.asInstanceOf[WorkingPartition].getFileWriter.destroy()
-        }
-      }
-      // remove master locations from WorkerInfo
-      workerInfo.removeMasterPartitions(shuffleKey, masterLocations)
-    }
-    // destroy slave locations
-    if (slaveLocations != null && !slaveLocations.isEmpty) {
-      slaveLocations.foreach { loc =>
-        val allocatedLoc = workerInfo.getSlaveLocation(shuffleKey, loc)
-        if (allocatedLoc == null) {
-          failedSlaves.add(loc)
-        } else {
-          allocatedLoc.asInstanceOf[WorkingPartition].getFileWriter.destroy()
-        }
-      }
-      // remove slave locations from worker info
-      workerInfo.removeSlavePartitions(shuffleKey, slaveLocations)
-    }
-    // reply
-    if (failedMasters.isEmpty && failedSlaves.isEmpty) {
-      logInfo("finished handle destroy")
-      context.reply(DestroyResponse(StatusCode.Success, null, null))
-    } else {
-      context.reply(DestroyResponse(StatusCode.PartialSuccess, failedMasters, failedSlaves))
+        StatusCode.PartialSuccess, committedMasterIds, committedSlaveIds,
+        failedMasterIds, failedSlaveIds))
     }
   }
 
@@ -396,6 +380,38 @@ private[deploy] class Worker(
         ReregisterWorker(host, port, workerInfo.numSlots, self)
       )
     }
+  }
+
+  private val cleanTaskQueue = new LinkedBlockingQueue[util.HashSet[String]]
+  private val cleaner = new Thread("Cleaner") {
+    override def run(): Unit = {
+      while (true) {
+        val expiredShuffleKeys = cleanTaskQueue.take()
+        try {
+          cleanup(expiredShuffleKeys)
+        } catch {
+          case e: Exception =>
+            logError(s"cleanup failed: ${e.getMessage}")
+        }
+      }
+    }
+  }
+  cleaner.setDaemon(true)
+  cleaner.start()
+
+  private def cleanup(expiredShuffleKeys: util.HashSet[String]): Unit = {
+    expiredShuffleKeys.foreach { shuffleKey =>
+      workerInfo.getAllMasterLocations(shuffleKey).foreach { partition =>
+        partition.asInstanceOf[WorkingPartition].getFileWriter.destroy()
+      }
+      workerInfo.getAllSlaveLocations(shuffleKey).foreach { partition =>
+        partition.asInstanceOf[WorkingPartition].getFileWriter.destroy()
+      }
+      workerInfo.removeMasterPartitions(shuffleKey)
+      workerInfo.removeSlavePartitions(shuffleKey)
+    }
+
+    localStorageManager.cleanup(expiredShuffleKeys)
   }
 }
 

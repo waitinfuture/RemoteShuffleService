@@ -89,7 +89,8 @@ public abstract class ShuffleClient implements Cloneable
     public abstract EssInputStream readPartition(
         String applicationId,
         int shuffleId,
-        int reduceId) throws IOException;
+        int reduceId,
+        int attemptNumber) throws IOException;
 
     /**
      * 注销

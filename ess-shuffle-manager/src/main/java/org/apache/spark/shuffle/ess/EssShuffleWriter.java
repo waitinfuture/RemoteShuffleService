@@ -27,6 +27,7 @@ import scala.reflect.ClassTag$;
 import javax.annotation.Nullable;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.sql.Time;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
@@ -97,6 +98,8 @@ public class EssShuffleWriter<K, V, C> extends ShuffleWriter<K, V> {
     }
 
     private class DataPusher {
+        private final long WAIT_TIME_NANOS = TimeUnit.MILLISECONDS.toNanos(500);
+
         private final LinkedBlockingQueue<PushTask> idleQueue;
         private final LinkedBlockingQueue<PushTask> workingQueue;
 
@@ -127,7 +130,7 @@ public class EssShuffleWriter<K, V, C> extends ShuffleWriter<K, V> {
             public void run() {
                 while (!terminated && !stopping && exception.get() == null) {
                     try {
-                        PushTask task = workingQueue.poll(500, TimeUnit.MILLISECONDS);
+                        PushTask task = workingQueue.poll(WAIT_TIME_NANOS, TimeUnit.NANOSECONDS);
                         if (task == null) {
                             continue;
                         }
@@ -158,13 +161,18 @@ public class EssShuffleWriter<K, V, C> extends ShuffleWriter<K, V> {
         }
 
         void addTask(int partitionId, byte[] buffer, int size) throws IOException {
-            checkException();
             try {
-                PushTask task = idleQueue.take();
+                PushTask task = null;
+                while (task == null) {
+                    checkException();
+                    task = idleQueue.poll(WAIT_TIME_NANOS, TimeUnit.NANOSECONDS);
+                }
                 task.partitionId = partitionId;
                 System.arraycopy(buffer, 0, task.buffer, 0, size);
                 task.size = size;
-                workingQueue.put(task);
+                while (!workingQueue.offer(task, WAIT_TIME_NANOS, TimeUnit.NANOSECONDS)) {
+                    checkException();
+                }
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 IOException ioe = new IOException(e);
@@ -213,7 +221,7 @@ public class EssShuffleWriter<K, V, C> extends ShuffleWriter<K, V> {
         private void waitIdleQueueFullWithLock() {
             try {
                 while (idleQueue.remainingCapacity() > 0 && exception.get() == null) {
-                    idleFull.await();
+                    idleFull.await(WAIT_TIME_NANOS, TimeUnit.NANOSECONDS);
                 }
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();

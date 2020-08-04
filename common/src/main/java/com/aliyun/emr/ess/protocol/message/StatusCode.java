@@ -20,6 +20,4 @@ public enum StatusCode {
     PushDataFailed,
     ReplicateDataFailed,
     NumMapperZero;
-
-    private String reason;
 }

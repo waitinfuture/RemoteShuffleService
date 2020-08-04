@@ -34,7 +34,12 @@ object ControlMessages {
       worker: RpcEndpointRef)
     extends MasterMessage
 
-  case class HeartbeatFromWorker(host: String, port: Int) extends MasterMessage
+  case class HeartbeatFromWorker(
+      host: String,
+      port: Int,
+      shuffleKeys: util.HashSet[String]) extends MasterMessage
+
+  case class HeartbeatResponse(expiredShuffleKeys: util.HashSet[String]) extends MasterMessage
 
   case class RegisterShuffle(
       applicationId: String,
@@ -123,15 +128,17 @@ object ControlMessages {
   case class ReserveBuffersResponse(status: StatusCode) extends WorkerMessage
 
   case class CommitFiles(
-      shuffleKey: String,
-      commitLocationIds: util.List[String],
-      mode: PartitionLocation.Mode)
+    shuffleKey: String,
+    masterIds: util.List[String],
+    slaveIds: util.List[String])
     extends WorkerMessage
 
   case class CommitFilesResponse(
       status: StatusCode,
-      failedLocations: util.List[String],
-      committedLocations: util.List[String])
+      committedMasterIds: util.List[String],
+      committedSlaveIds: util.List[String],
+      failedMasterIds: util.List[String],
+      failedSlaveIds: util.List[String])
     extends WorkerMessage
 
   case class Destroy(
