@@ -396,15 +396,6 @@ private[deploy] class Master(
         registerShuffleRequest.get(shuffleKey).add(context)
         return
       } else {
-        // if numMappers equals zero, just return
-        if (numMappers == 0) {
-          logWarning("numMappers is 0!")
-          stageEndShuffleSet.synchronized {
-            stageEndShuffleSet.add(shuffleKey)
-          }
-          context.reply(RegisterShuffleResponse(StatusCode.NumMapperZero, null))
-          return
-        }
         // check if shuffle is registered
         if (registeredShuffle.contains(shuffleKey)) {
           val locs = workers.flatMap(w => w.getAllMasterLocationsWithMaxEpoch(shuffleKey))
@@ -649,22 +640,20 @@ private[deploy] class Master(
 
     val shuffleKey = Utils.makeShuffleKey(applicationId, shuffleId)
 
+    var timeout = EssConf.essStageEndTimeout(conf)
+    val delta = 50
     while (!stageEndShuffleSet.contains(shuffleKey)) {
       logInfo(s"wait for StageEnd, ${shuffleKey}")
       Thread.sleep(50)
+      if (timeout <= 0) {
+        logError(s"StageEnd Timeout! ${shuffleKey}")
+        context.reply(GetReducerFileGroupResponse(StatusCode.Failed, null, null))
+        return
+      }
+      timeout = timeout - delta
     }
 
     val shuffleFileGroup = reducerFileGroupsMap.get(shuffleKey)
-
-    if (!shuffleMapperAttempts.containsKey(shuffleKey)) {
-      logWarning(s"shuffleKey Not Found in shuffleMapperAttempts! ${shuffleKey}")
-      context.reply(GetReducerFileGroupResponse(
-        StatusCode.Success,
-        null,
-        null
-      ))
-      return
-    }
 
     context.reply(GetReducerFileGroupResponse(
       StatusCode.Success,

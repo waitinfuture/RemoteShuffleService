@@ -373,10 +373,10 @@ public class ShuffleClientImpl extends ShuffleClient {
                     new GetReducerFileGroup(applicationId, shuffleId),
                     ClassTag$.MODULE$.apply(GetReducerFileGroupResponse.class));
 
-            if (response.status() == StatusCode.Success && response.fileGroup() != null
-                    && response.attempts() != null) {
+            if (response.status() == StatusCode.Success) {
                 return new ReduceFileGroups(response.fileGroup(), response.attempts());
             } else {
+                logger.error("GetReduceFile Failed! reason " + response.status());
                 return null;
             }
         });
@@ -387,7 +387,9 @@ public class ShuffleClientImpl extends ShuffleClient {
             logger.error(msg);
             throw new IOException(msg);
         }
-
+        if (fileGroups.partitionGroups == null) {
+            return EssInputStream.empty();
+        }
         String shuffleKey = Utils.makeShuffleKey(applicationId, shuffleId);
         return EssInputStream.create(conf, dataClientFactory, shuffleKey,
                 fileGroups.partitionGroups[reduceId], fileGroups.mapAttempts);

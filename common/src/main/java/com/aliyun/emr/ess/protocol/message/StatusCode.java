@@ -1,7 +1,6 @@
 package com.aliyun.emr.ess.protocol.message;
 
-public enum StatusCode
-{
+public enum StatusCode {
     // 1/0 Status
     Success,
     PartialSuccess,
@@ -20,5 +19,7 @@ public enum StatusCode
     ReviveFailed,
     PushDataFailed,
     ReplicateDataFailed,
-    NumMapperZero,
+    NumMapperZero;
+
+    private String reason;
 }

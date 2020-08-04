@@ -539,5 +539,9 @@ object EssConf extends Logging {
   def essWorkerBaseDirNumber(conf: EssConf): Int = {
     conf.getInt("ess.worker.base.dir.number", 16)
   }
+
+  def essStageEndTimeout(conf: EssConf): Long = {
+    conf.getTimeAsMs("ess.stage.end.timeout", "120s")
+  }
 }
 
