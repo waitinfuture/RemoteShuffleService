@@ -160,8 +160,8 @@ public class ShuffleClientImpl extends ShuffleClient {
         }
 
         ConcurrentSet<Integer> inFlightBatches = pushState.inFlightBatches;
-        int delta = 50;
-        int times = 60 * 1000 / 50;
+        int delta = EssConf.essLimitInFlightSleepDelta(conf);
+        int times = EssConf.essLimitInFlightTimeout(conf) / delta;
         try {
             while (times > 0) {
                 if (inFlightBatches.size() <= limit) {

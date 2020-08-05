@@ -543,5 +543,13 @@ object EssConf extends Logging {
   def essStageEndTimeout(conf: EssConf): Long = {
     conf.getTimeAsMs("ess.stage.end.timeout", "120s")
   }
+
+  def essLimitInFlightTimeout(conf: EssConf): Int = {
+    conf.getTimeAsMs("ess.limit.in.flight.timeout", "60s")
+  }
+
+  def essLimitInFlightSleepDelta(conf: EssConf): Int = {
+    conf.getTimeAsMs("ess.limit.in.flight.sleep.delta", "50ms")
+  }
 }
 
