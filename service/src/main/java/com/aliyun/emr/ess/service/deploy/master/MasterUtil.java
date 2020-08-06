@@ -11,6 +11,8 @@ import java.util.*;
 public class MasterUtil {
     private static final Logger logger = LoggerFactory.getLogger(MasterUtil.class);
 
+    private static final Random rand = new Random();
+
     public static void releaseSlots(String shuffleKey, Map<WorkerInfo,
         Tuple2<List<PartitionLocation>, List<PartitionLocation>>> slots) {
         Iterator<WorkerInfo> workers = slots.keySet().iterator();
@@ -51,7 +53,7 @@ public class MasterUtil {
             int[] oldEpochs) {
         // master partition index
         logger.info("inside offerSlots, reduceId num " + reduceIds.size());
-        int masterInd = 0;
+        int masterInd = rand.nextInt(workers.size());
         Map<WorkerInfo, Tuple2<List<PartitionLocation>, List<PartitionLocation>>> slots =
                 new HashMap<>();
         // foreach iteration, allocate both master and slave partitions
@@ -132,7 +134,6 @@ public class MasterUtil {
 
     public static Tuple2<WorkerInfo, PartitionLocation> offerSlaveSlot(
         PartitionLocation masterLocation, List<WorkerInfo> workers) {
-        Random rand = new Random();
         int startInd = rand.nextInt(workers.size());
         if (workers.get(startInd).hostPort().equals(masterLocation.hostPort())) {
             startInd = (startInd + 1) % workers.size();
