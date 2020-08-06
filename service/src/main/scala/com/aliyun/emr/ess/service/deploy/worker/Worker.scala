@@ -113,7 +113,7 @@ private[deploy] class Worker(
       shuffleKeys.addAll(localStorageManager.shuffleKeySet())
       val response = masterEndpoint.askSync[HeartbeatResponse](
         HeartbeatFromWorker(host, port, shuffleKeys))
-      cleanup(response.expiredShuffleKeys)
+      cleanTaskQueue.put(response.expiredShuffleKeys)
   }
 
   override def receiveAndReply(context: RpcCallContext): PartialFunction[Any, Unit] = {
@@ -138,9 +138,9 @@ private[deploy] class Worker(
       logInfo("receive ThreadDump request")
       handleThreadDump(context)
 
-    case Destroy(_, _, _) =>
+    case Destroy(shuffleKey, masterLocations, slaveLocations) =>
       logInfo("receive Destroy request")
-      context.reply(DestroyResponse(StatusCode.Success, null, null))
+      handleDestroy(context, shuffleKey, masterLocations, slaveLocations)
   }
 
   private def handleReserveBuffers(
@@ -281,6 +281,58 @@ private[deploy] class Worker(
     }
   }
 
+  private def handleDestroy(
+      context: RpcCallContext,
+      shuffleKey: String,
+      masterLocations: util.List[String],
+      slaveLocations: util.List[String]): Unit = {
+    // check whether shuffleKey has registered
+    if (!workerInfo.containsShuffleMaster(shuffleKey) &&
+      !workerInfo.containsShuffleSlave(shuffleKey)) {
+      logWarning(s"[handleDestroy] shuffle $shuffleKey not registered!")
+      context.reply(DestroyResponse(
+        StatusCode.ShuffleNotRegistered, masterLocations, slaveLocations))
+      return
+    }
+
+    val failedMasters = new util.ArrayList[String]()
+    val failedSlaves = new util.ArrayList[String]()
+
+    // destroy master locations
+    if (masterLocations != null && !masterLocations.isEmpty) {
+      masterLocations.foreach { loc =>
+        val allocatedLoc = workerInfo.getMasterLocation(shuffleKey, loc)
+        if (allocatedLoc == null) {
+          failedMasters.add(loc)
+        } else {
+          allocatedLoc.asInstanceOf[WorkingPartition].getFileWriter.destroy()
+        }
+      }
+      // remove master locations from WorkerInfo
+      workerInfo.removeMasterPartitions(shuffleKey, masterLocations)
+    }
+    // destroy slave locations
+    if (slaveLocations != null && !slaveLocations.isEmpty) {
+      slaveLocations.foreach { loc =>
+        val allocatedLoc = workerInfo.getSlaveLocation(shuffleKey, loc)
+        if (allocatedLoc == null) {
+          failedSlaves.add(loc)
+        } else {
+          allocatedLoc.asInstanceOf[WorkingPartition].getFileWriter.destroy()
+        }
+      }
+      // remove slave locations from worker info
+      workerInfo.removeSlavePartitions(shuffleKey, slaveLocations)
+    }
+    // reply
+    if (failedMasters.isEmpty && failedSlaves.isEmpty) {
+      logInfo("finished handle destroy")
+      context.reply(DestroyResponse(StatusCode.Success, null, null))
+    } else {
+      context.reply(DestroyResponse(StatusCode.PartialSuccess, failedMasters, failedSlaves))
+    }
+  }
+
   private def handleGetWorkerInfos(context: RpcCallContext): Unit = {
     val list = new util.ArrayList[WorkerInfo]()
     list.add(workerInfo)
@@ -391,7 +443,7 @@ private[deploy] class Worker(
           cleanup(expiredShuffleKeys)
         } catch {
           case e: Exception =>
-            logError(s"cleanup failed: ${e.getMessage}")
+            logError("cleanup failed", e)
         }
       }
     }

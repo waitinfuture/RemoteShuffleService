@@ -138,7 +138,7 @@ public class ShuffleClientImpl extends ShuffleClient {
                     break;
                 }
             } catch (Exception e) {
-                logger.error("registerShuffle failed: " + e.getMessage());
+                logger.error("registerShuffle failed", e);
                 break;
             }
 
@@ -189,18 +189,23 @@ public class ShuffleClientImpl extends ShuffleClient {
     }
 
     private boolean revive(String applicationId, int shuffleId, PartitionLocation location) {
-        ReviveResponse response = master.askSync(
-            new Revive(applicationId, shuffleId, location),
-            ClassTag$.MODULE$.apply(ReviveResponse.class)
-        );
+        try {
+            ReviveResponse response = master.askSync(
+                new Revive(applicationId, shuffleId, location),
+                ClassTag$.MODULE$.apply(ReviveResponse.class)
+            );
 
-        // per partitionKey only serve single PartitionLocation in Client Cache.
-        if (response.status().equals(StatusCode.Success)) {
-            ConcurrentHashMap<Integer, PartitionLocation> map = reducePartitionMap.get(shuffleId);
-            map.put(location.getReduceId(), response.partitionLocation());
-            return true;
-        } else {
-            logger.error("revive failed, " + response.status());
+            // per partitionKey only serve single PartitionLocation in Client Cache.
+            if (response.status().equals(StatusCode.Success)) {
+                ConcurrentHashMap<Integer, PartitionLocation> map = reducePartitionMap.get(shuffleId);
+                map.put(location.getReduceId(), response.partitionLocation());
+                return true;
+            } else {
+                logger.error("revive failed, " + response.status());
+                return false;
+            }
+        } catch (Exception e) {
+            logger.error("revive failed", e);
             return false;
         }
     }
@@ -225,7 +230,7 @@ public class ShuffleClientImpl extends ShuffleClient {
         // get location
         PartitionLocation loc = map.get(reduceId);
         if (loc == null) {
-            String msg = "loc is NULL! shuffleKey"
+            String msg = "loc is NULL! shuffleKey "
                 + Utils.makeShuffleKey(applicationId, shuffleId) + ", reduceId " + reduceId;
             throw new IOException(msg);
         }
@@ -269,7 +274,7 @@ public class ShuffleClientImpl extends ShuffleClient {
             @Override
             public void onFailure(Throwable e) {
                 pushState.exception.compareAndSet(null, new IOException(e));
-                logger.error("PushData Exception", e);
+                logger.error("Revived PushData failed!", e);
             }
         };
 
@@ -282,7 +287,7 @@ public class ShuffleClientImpl extends ShuffleClient {
             @Override
             public void onFailure(Throwable e) {
                 // revive and push again on failure
-                logger.error("PushData failed!", e);
+                logger.warn("PushData exception", e);
                 if (revive(applicationId, shuffleId, loc)) {
                     PartitionLocation newLoc = reducePartitionMap.get(shuffleId).get(reduceId);
                     try {
@@ -298,8 +303,9 @@ public class ShuffleClientImpl extends ShuffleClient {
                         callback.onFailure(ex);
                     }
                 } else {
-                    logger.error("Revive failed!");
-                    callback.onFailure(e);
+                    String msg = "Revive failed!";
+                    logger.error(msg);
+                    callback.onFailure(new IOException(msg));
                 }
             }
         };

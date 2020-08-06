@@ -37,8 +37,7 @@ private[deploy] class Master(
   private val APPLICATION_TIMEOUT_MS = EssConf.essApplicationTimeoutMs(conf)
 
   // States
-  val workers: util.List[WorkerInfo] = new util.ArrayList[WorkerInfo]()
-  val workersLock = new Object()
+  private val workers = new ConcurrentSet[WorkerInfo]()
 
   private val appHeartbeatTime = new util.HashMap[String, Long]()
 
@@ -116,7 +115,7 @@ private[deploy] class Master(
     val failed = new util.ArrayList[WorkerInfo]()
 
     slots.foreach { entry =>
-      val res = entry._1.endpoint.askSync[ReserveBuffersResponse](
+      val res = requestReserveBuffers(entry._1.endpoint,
         ReserveBuffers(applicationId, shuffleId, entry._2._1, entry._2._2))
       if (res.status.equals(StatusCode.Success)) {
         logInfo(s"Successfully allocated partitions buffer from worker ${entry._1.hostPort}")
@@ -153,13 +152,10 @@ private[deploy] class Master(
       worker: WorkerInfo,
       masterLocations: util.List[String],
       slaveLocations: util.List[String]): (util.List[String], util.List[String]) = {
-    var res = worker.endpoint.askSync[DestroyResponse](
-      Destroy(shuffleKey, masterLocations, slaveLocations)
-    )
+    var res = requestDestroy(worker.endpoint, Destroy(shuffleKey, masterLocations, slaveLocations))
     if (res.status != StatusCode.Success) {
-      res = worker.endpoint.askSync[DestroyResponse](
-        Destroy(shuffleKey, res.failedMasters, res.failedSlaves)
-      )
+      res = requestDestroy(worker.endpoint,
+        Destroy(shuffleKey, res.failedMasters, res.failedSlaves))
     }
     (res.failedMasters, res.failedSlaves)
   }
@@ -217,15 +213,13 @@ private[deploy] class Master(
   private def timeoutDeadWorkers() {
     val currentTime = System.currentTimeMillis()
     var ind = 0
-    while (ind < workers.size()) {
-      if (workers.get(ind).lastHeartbeat < currentTime - WORKER_TIMEOUT_MS
-        && !workerLostEvents.contains(workers.get(ind).hostPort)) {
-        logInfo(s"Worker ${workers.get(ind)} timeout! Trigger WorkerLost event")
+    workers.foreach { worker =>
+      if (worker.lastHeartbeat < currentTime - WORKER_TIMEOUT_MS
+        && !workerLostEvents.contains(worker.hostPort)) {
+        logInfo(s"Worker ${worker} timeout! Trigger WorkerLost event")
         // trigger WorkerLost event
-        workerLostEvents.add(workers.get(ind).hostPort)
-        self.send(
-          WorkerLost(workers.get(ind).host, workers.get(ind).port)
-        )
+        workerLostEvents.add(worker.hostPort)
+        self.send(WorkerLost(worker.host, worker.port))
       }
       ind += 1
     }
@@ -354,15 +348,13 @@ private[deploy] class Master(
       } else {
         // check if shuffle is registered
         if (registeredShuffle.contains(shuffleKey)) {
-          val locs = workers.flatMap(w => w.getAllMasterLocationsWithMaxEpoch(shuffleKey))
+          val locs = workers.flatMap(w => w.getAllMasterLocationsWithMaxEpoch(shuffleKey)).toList
           logDebug(s"shuffle $shuffleKey already registered, just return")
           if (locs.size != numPartitions) {
-            logError(s"shuffle $shuffleKey location size ${locs.size} not equal to " +
+            logWarning(s"shuffle $shuffleKey location size ${locs.size} not equal to " +
               s"numPartitions: $numPartitions!")
-            context.reply(RegisterShuffleResponse(StatusCode.Failed, null))
-          } else {
-            context.reply(RegisterShuffleResponse(StatusCode.Success, locs))
           }
+          context.reply(RegisterShuffleResponse(StatusCode.Success, locs))
           return
         }
         logInfo(s"new shuffle request, shuffleKey $shuffleKey")
@@ -689,13 +681,7 @@ private[deploy] class Master(
         val slaveIds = slaveParts.map(_.getUniqueId)
 
         val start = System.currentTimeMillis()
-        val res = try {
-          worker.endpoint.askSync[CommitFilesResponse](CommitFiles(shuffleKey, masterIds, slaveIds))
-        } catch {
-          case e: Exception =>
-            logError(s"CommitFiles failed ${e.getMessage}")
-            CommitFilesResponse(StatusCode.Failed, null, null, masterIds, slaveIds)
-        }
+        val res = requestCommitFiles(worker.endpoint, CommitFiles(shuffleKey, masterIds, slaveIds))
 
         // record committed partitionIds
         if (res.committedMasterIds != null) {
@@ -713,7 +699,7 @@ private[deploy] class Master(
           failedSlaveIds.addAll(res.failedSlaveIds)
         }
 
-        logDebug(s"Finished CommitFiles Master Mode for worker " +
+        logDebug(s"Finished CommitFiles for worker " +
           s"${worker.endpoint.address.toEssURL} in ${System.currentTimeMillis() - start}ms")
       }
     }
@@ -729,6 +715,7 @@ private[deploy] class Master(
     def hasCommonFailedIds(): Boolean = {
       for (id <- failedMasterIds) {
         if(failedSlaveIds.contains(id)) {
+          logError(s"shuffle $shuffleKey partition $id: data lost")
           return true
         }
       }
@@ -751,11 +738,11 @@ private[deploy] class Master(
         if (masterPartition ne null) {
           masterPartition.setPeer(slavePartition)
         } else {
+          logWarning(s"shuffle $shuffleKey partition $id: master lost, use slave")
           committedPartitions.put(id, slavePartition)
         }
       }
 
-      // check if committed files contains all files mappers written
       val fileGroups = reducerFileGroupsMap.get(shuffleKey)
       val sets = Array.fill(fileGroups.length)(new util.HashSet[PartitionLocation]())
       committedPartitions.values().foreach { partition =>
@@ -846,7 +833,7 @@ private[deploy] class Master(
   }
 
   private def workersNotBlacklisted(): util.List[WorkerInfo] = {
-    workers.filter(w => !blacklist.contains(w.hostPort))
+    workers.filter(w => !blacklist.contains(w.hostPort)).toList
   }
 
   def getWorkerInfos(): String = {
@@ -855,7 +842,7 @@ private[deploy] class Master(
       sb.append("==========WorkerInfos in Master==========\n")
       sb.append(w).append("\n")
 
-      val workerInfo = w.endpoint.askSync[GetWorkerInfosResponse](GetWorkerInfos)
+      val workerInfo = requestGetWorkerInfos(w.endpoint)
         .workerInfos.asInstanceOf[util.List[WorkerInfo]](0)
 
       sb.append("==========WorkerInfos in Workers==========\n")
@@ -868,9 +855,6 @@ private[deploy] class Master(
       }
     }
 
-    workers.foreach(w => {
-    })
-
     sb.toString()
   }
 
@@ -881,11 +865,65 @@ private[deploy] class Master(
     sb.append(threadDump).append("\n")
     workers.foreach(w => {
       sb.append(s"==========Worker ${w.hostPort} ThreadDump==========\n")
-      val res = w.endpoint.askSync[ThreadDumpResponse](ThreadDump)
+      val res = requestThreadDump(w.endpoint)
       sb.append(res.threadDump).append("\n")
     })
 
     sb.toString()
+  }
+
+  private def requestReserveBuffers(
+    endpoint: RpcEndpointRef, message: ReserveBuffers): ReserveBuffersResponse = {
+    try {
+      endpoint.askSync[ReserveBuffersResponse](message)
+    } catch {
+      case e: Exception =>
+        logError("askSync ReserveBuffers failed", e)
+        ReserveBuffersResponse(StatusCode.Failed)
+    }
+  }
+
+  private def requestDestroy(endpoint: RpcEndpointRef, message: Destroy): DestroyResponse = {
+    try {
+      endpoint.askSync[DestroyResponse](message)
+    } catch {
+      case e: Exception =>
+        logError(s"askSync Destroy failed", e)
+        DestroyResponse(StatusCode.Failed, message.masterLocations, message.slaveLocation)
+    }
+  }
+
+  private def requestCommitFiles(
+      endpoint: RpcEndpointRef, message: CommitFiles): CommitFilesResponse = {
+    try {
+      endpoint.askSync[CommitFilesResponse](message)
+    } catch {
+      case e: Exception =>
+        logError(s"askSync CommitFiles failed", e)
+        CommitFilesResponse(StatusCode.Failed, null, null, message.masterIds, message.slaveIds)
+    }
+  }
+
+  private def requestGetWorkerInfos(endpoint: RpcEndpointRef): GetWorkerInfosResponse = {
+    try {
+      endpoint.askSync[GetWorkerInfosResponse](GetWorkerInfos)
+    } catch {
+      case e: Exception =>
+        logError(s"askSync GetWorkerInfos failed", e)
+        val result = new util.ArrayList[WorkerInfo]
+        result.add(new WorkerInfo("unknown", -1, 0, null))
+        GetWorkerInfosResponse(StatusCode.Failed, result)
+    }
+  }
+
+  private def requestThreadDump(endpoint: RpcEndpointRef): ThreadDumpResponse = {
+    try {
+      endpoint.askSync[ThreadDumpResponse](ThreadDump)
+    } catch {
+      case e: Exception =>
+        logError(s"askSync ThreadDump failed", e)
+        ThreadDumpResponse("Unknown")
+    }
   }
 }
 

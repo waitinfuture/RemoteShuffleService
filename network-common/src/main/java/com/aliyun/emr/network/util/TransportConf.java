@@ -29,6 +29,7 @@ public class TransportConf {
 
   private final String ESS_NETWORK_IO_MODE_KEY;
   private final String ESS_NETWORK_IO_PREFERDIRECTBUFS_KEY;
+  private final String ESS_NETWORK_IO_CONNECTTIMEOUT_KEY;
   private final String ESS_NETWORK_IO_CONNECTIONTIMEOUT_KEY;
   private final String ESS_NETWORK_IO_BACKLOG_KEY;
   private final String ESS_NETWORK_IO_NUMCONNECTIONSPERPEER_KEY;
@@ -51,6 +52,7 @@ public class TransportConf {
     this.conf = conf;
     ESS_NETWORK_IO_MODE_KEY = getConfKey("io.mode");
     ESS_NETWORK_IO_PREFERDIRECTBUFS_KEY = getConfKey("io.preferDirectBufs");
+    ESS_NETWORK_IO_CONNECTTIMEOUT_KEY = getConfKey("io.connectTimeout");
     ESS_NETWORK_IO_CONNECTIONTIMEOUT_KEY = getConfKey("io.connectionTimeout");
     ESS_NETWORK_IO_BACKLOG_KEY = getConfKey("io.backLog");
     ESS_NETWORK_IO_NUMCONNECTIONSPERPEER_KEY =  getConfKey("io.numConnectionsPerPeer");
@@ -91,7 +93,16 @@ public class TransportConf {
     return conf.getBoolean(ESS_NETWORK_IO_PREFERDIRECTBUFS_KEY, true);
   }
 
-  /** Connect timeout in milliseconds. Default 240 secs. */
+  /** Connect timeout in milliseconds. Default 10 secs. */
+  public int connectTimeoutMs() {
+    long defaultConnectTimeoutS = JavaUtils.timeStringAsSec(
+        conf.get("ess.network.connect.timeout", "10s"));
+    long defaultTimeoutMs = JavaUtils.timeStringAsSec(
+        conf.get(ESS_NETWORK_IO_CONNECTTIMEOUT_KEY, defaultConnectTimeoutS + "s")) * 1000;
+    return (int) defaultTimeoutMs;
+  }
+
+  /** Connection active timeout in milliseconds. Default 240 secs. */
   public int connectionTimeoutMs() {
     long defaultNetworkTimeoutS = JavaUtils.timeStringAsSec(
       conf.get("ess.network.timeout", "240s"));
