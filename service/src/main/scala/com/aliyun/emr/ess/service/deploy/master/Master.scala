@@ -37,7 +37,8 @@ private[deploy] class Master(
   private val APPLICATION_TIMEOUT_MS = EssConf.essApplicationTimeoutMs(conf)
 
   // States
-  private val workers = new ConcurrentSet[WorkerInfo]()
+  private val workers = new util.ArrayList[WorkerInfo]()
+  private def workersSnapShot = workers.synchronized(new util.ArrayList[WorkerInfo](workers))
 
   private val appHeartbeatTime = new util.HashMap[String, Long]()
 
@@ -51,8 +52,9 @@ private[deploy] class Master(
   private val shuffleAllocatedWorkers = new ConcurrentHashMap[String, ConcurrentSet[WorkerInfo]]()
 
   // revive request waiting for response
+  // shuffleKey -> (partitionId -> set)
   private val reviving =
-    new util.HashMap[String, util.HashMap[PartitionLocation, util.Set[RpcCallContext]]]()
+    new util.HashMap[String, util.HashMap[String, util.Set[RpcCallContext]]]()
 
   // register shuffle request waiting for response
   private val registerShuffleRequest = new ConcurrentHashMap[String, util.Set[RpcCallContext]]()
@@ -170,9 +172,10 @@ private[deploy] class Master(
         s"$applicationId, $shuffleId, $numMappers, $numPartitions")
       handleRegisterShuffle(context, applicationId, shuffleId, numMappers, numPartitions)
 
-    case Revive(applicationId, shuffleId, oldPartition) =>
-      logDebug(s"received Revive request, $applicationId, $shuffleId, $oldPartition")
-      handleRevive(context, applicationId, shuffleId, oldPartition)
+    case Revive(applicationId, shuffleId, reduceId, epoch, oldPartition) =>
+      logDebug(s"received Revive request, $applicationId, $shuffleId, " +
+        s"$reduceId-$epoch $oldPartition")
+      handleRevive(context, applicationId, shuffleId, reduceId, epoch, oldPartition)
 
     case MapperEnd(applicationId, shuffleId, mapId, attemptId, numMappers) =>
       logDebug(s"received MapperEnd request, $applicationId, $shuffleId, $mapId, $attemptId")
@@ -213,7 +216,7 @@ private[deploy] class Master(
   private def timeoutDeadWorkers() {
     val currentTime = System.currentTimeMillis()
     var ind = 0
-    workers.foreach { worker =>
+    workersSnapShot.foreach { worker =>
       if (worker.lastHeartbeat < currentTime - WORKER_TIMEOUT_MS
         && !workerLostEvents.contains(worker.hostPort)) {
         logInfo(s"Worker ${worker} timeout! Trigger WorkerLost event")
@@ -252,7 +255,7 @@ private[deploy] class Master(
       port: Int,
       shuffleKeys: util.HashSet[String]): Unit = {
     logDebug(s"received heartbeat from $host:$port")
-    val worker: WorkerInfo = workers.find(w => w.host == host && w.port == port).orNull
+    val worker: WorkerInfo = workersSnapShot.find(w => w.host == host && w.port == port).orNull
     if (worker == null) {
       logInfo(s"received heartbeat from unknown worker! $host:$port")
       return
@@ -275,7 +278,7 @@ private[deploy] class Master(
 
   private def handleWorkerLost(context: RpcCallContext, host: String, port: Int): Unit = {
     // find worker
-    val worker: WorkerInfo = workers.find(w => w.host == host && w.port == port).orNull
+    val worker: WorkerInfo = workersSnapShot.find(w => w.host == host && w.port == port).orNull
     if (worker == null) {
       logError(s"Unknown worker $host:$port for WorkerLost handler!")
       return
@@ -298,7 +301,7 @@ private[deploy] class Master(
       context: RpcCallContext,
       shuffleKey: String,
       location: PartitionLocation): Unit = {
-    val worker: WorkerInfo = workers.find(w => w.hostPort == location.hostPort()).orNull
+    val worker: WorkerInfo = workersSnapShot.find(w => w.hostPort == location.hostPort()).orNull
     if (worker == null) {
       logError(s"worker not found for the location $location !")
       context.reply(MasterPartitionSuicideResponse(StatusCode.WorkerNotFound))
@@ -316,7 +319,7 @@ private[deploy] class Master(
       numSlots: Int,
       workerRef: RpcEndpointRef): Unit = {
     logInfo(s"Registering worker $host:$port with $numSlots slots")
-    if (workers.exists(w => w.host == host && w.port == port)) {
+    if (workersSnapShot.exists(w => w.host == host && w.port == port)) {
       logError(s"Worker already registered! $host:$port")
       context.reply(RegisterWorkerResponse(false, "Worker already registered!"))
     } else {
@@ -348,7 +351,7 @@ private[deploy] class Master(
       } else {
         // check if shuffle is registered
         if (registeredShuffle.contains(shuffleKey)) {
-          val locs = workers.flatMap(w => w.getAllMasterLocationsWithMaxEpoch(shuffleKey)).toList
+          val locs = workersSnapShot.flatMap(w => w.getAllMasterLocationsWithMaxEpoch(shuffleKey))
           logDebug(s"shuffle $shuffleKey already registered, just return")
           if (locs.size != numPartitions) {
             logWarning(s"shuffle $shuffleKey location size ${locs.size} not equal to " +
@@ -433,6 +436,8 @@ private[deploy] class Master(
       context: RpcCallContext,
       applicationId: String,
       shuffleId: Int,
+      reduceId: Int,
+      oldEpoch: Int,
       oldPartition: PartitionLocation): Unit = {
     // check whether shuffle has registered
     val shuffleKey = Utils.makeShuffleKey(applicationId, shuffleId)
@@ -443,87 +448,88 @@ private[deploy] class Master(
     }
 
     def checkAndBlacklist(loc: PartitionLocation): Unit = {
-      val worker = workers.find(w => w.hostPort == loc.hostPort()).orNull
-      if (worker == null || !worker.endpoint.asInstanceOf[NettyRpcEndpointRef].client.isActive) {
+      val worker = workersSnapShot.find(w => w.hostPort == loc.hostPort()).orNull
+      if (worker != null && !worker.endpoint.asInstanceOf[NettyRpcEndpointRef].client.isActive) {
+        logWarning(s"add ${worker.hostPort} to blacklist")
         blacklist.add(loc.hostPort())
       }
     }
 
-    // check to see if partition can be reached. if not, add into blacklist
-    checkAndBlacklist(oldPartition)
-    checkAndBlacklist(oldPartition.getPeer)
+    if (oldPartition != null) {
+      // check to see if partition can be reached. if not, add into blacklist
+      checkAndBlacklist(oldPartition)
+      checkAndBlacklist(oldPartition.getPeer)
+    }
+
+    val oldPartitionId = s"$reduceId-$oldEpoch"
 
     // check if there exists request for the partition, if do just register
     reviving.synchronized {
-      reviving.putIfAbsent(shuffleKey,
-        new util.HashMap[PartitionLocation, util.Set[RpcCallContext]]())
+      reviving.putIfAbsent(shuffleKey, new util.HashMap[String, util.Set[RpcCallContext]])
     }
     val shuffleReviving = reviving.get(shuffleKey)
     shuffleReviving.synchronized {
-      if (shuffleReviving.containsKey(oldPartition)) {
-        shuffleReviving.get(oldPartition).add(context)
-        logInfo("same partition is reviving, register context")
+      if (shuffleReviving.containsKey(oldPartitionId)) {
+        shuffleReviving.get(oldPartitionId).add(context)
+        logInfo(s"$shuffleKey same partition $oldPartitionId is reviving, register context")
         return
       } else {
         // check if new slot for the partition has allocated
-        val locs = workers.flatMap(worker => {
-          worker.getLocationWithMaxEpoch(shuffleKey, oldPartition.getReduceId)
-        })
+        val locs = workersSnapShot.flatMap(_.getLocationWithMaxEpoch(shuffleKey, reduceId))
         var currentEpoch = -1
         var currentLocation: PartitionLocation = null
-        locs.foreach(loc => {
+        locs.foreach { loc =>
           if (loc.getEpoch > currentEpoch) {
             currentEpoch = loc.getEpoch
             currentLocation = loc
           }
-        })
+        }
         // exists newer partition, just return it
-        if (currentEpoch > oldPartition.getEpoch) {
+        if (currentEpoch > oldEpoch) {
           context.reply(ReviveResponse(StatusCode.Success, currentLocation))
-          logDebug(s"new partition found, return it ${shuffleKey} " + currentLocation)
+          logInfo(s"new partition found, return it $shuffleKey " + currentLocation)
           return
         }
         // no newer partition, register and allocate
         val set = new util.HashSet[RpcCallContext]()
         set.add(context)
-        shuffleReviving.put(oldPartition, set)
+        shuffleReviving.put(oldPartitionId, set)
       }
     }
 
     // offer new slot
     val slots = workers.synchronized {
-      val availableWorkers = workersNotBlacklisted()
       MasterUtil.offerSlots(shuffleKey,
         // avoid offer slots on the same host of oldPartition
         workersNotBlacklisted(),
-        Seq(new Integer(oldPartition.getReduceId)),
-        Array(oldPartition.getEpoch)
+        Seq(new Integer(reduceId)),
+        Array(oldEpoch)
       )
     }
     // reply false if offer slots failed
     if (slots == null || slots.isEmpty()) {
       logError("offerSlot failed!")
       shuffleReviving.synchronized {
-        val set = shuffleReviving.get(oldPartition)
+        val set = shuffleReviving.get(oldPartitionId)
         set.foreach(_.reply(ReviveResponse(StatusCode.SlotNotAvailable, null)))
       }
       return
     }
-    logInfo("offered slots success")
+    logInfo("revive offered slots success")
     // reserve buffer
     val failed = reserveBuffersWithRetry(applicationId, shuffleId, slots)
     // reserve buffers failed, clear allocated resources
     if (failed != null && !failed.isEmpty()) {
-      slots.foreach(entry => {
+      slots.foreach { entry =>
         destroyBuffersWithRetry(shuffleKey,
           entry._1, entry._2._1.map(_.getUniqueId),
           entry._2._2.map(_.getUniqueId))
         entry._1.removeMasterPartitions(shuffleKey, entry._2._1.map(_.getUniqueId))
         entry._1.removeSlavePartitions(shuffleKey, entry._2._2.map(_.getUniqueId))
-      })
-      logError("fail to reserve buffers")
+      }
+      logError("revive fail to reserve buffers")
       shuffleReviving.synchronized {
-        val set = shuffleReviving.get(oldPartition)
+        val set = shuffleReviving.get(oldPartitionId)
         set.foreach(_.reply(ReviveResponse(StatusCode.ReserveBufferFailed, null)))
       }
       return
@@ -538,12 +544,12 @@ private[deploy] class Master(
     } else {
       slaves.head.getPeer
     }
-    logDebug(s"reserve buffer success $shuffleKey $location")
+    logInfo(s"revive reserve buffer success $shuffleKey $location")
     shuffleReviving.synchronized {
-      val set = shuffleReviving.get(oldPartition)
+      val set = shuffleReviving.get(oldPartitionId)
       set.foreach(_.reply(ReviveResponse(StatusCode.Success, location)))
-      shuffleReviving.remove(oldPartition)
-      logInfo("reply and remove oldPartition success")
+      shuffleReviving.remove(oldPartitionId)
+      logInfo(s"reply and remove $shuffleKey $oldPartitionId partition success")
     }
   }
 
@@ -622,7 +628,7 @@ private[deploy] class Master(
   }
 
   private def handleGetWorkerInfos(context: RpcCallContext): Unit = {
-    context.reply(GetWorkerInfosResponse(StatusCode.Success, workers))
+    context.reply(GetWorkerInfosResponse(StatusCode.Success, workersSnapShot))
   }
 
   private def handleStageEnd(
@@ -644,7 +650,7 @@ private[deploy] class Master(
     }
 
     // check connection before commit files
-    workers.foreach { w =>
+    workersSnapShot.foreach { w =>
       if (!w.endpoint.asInstanceOf[NettyRpcEndpointRef].client.isActive
         && !workerLostEvents.contains(w.hostPort)) {
         logInfo(s"Find WorkerLost in StageEnd ${w.hostPort}")
@@ -826,19 +832,19 @@ private[deploy] class Master(
   }
 
   private def partitionExists(shuffleKey: String): Boolean = {
-    workers.exists(w => {
+    workersSnapShot.exists(w => {
       w.containsShuffleMaster(shuffleKey) ||
         w.containsShuffleSlave(shuffleKey)
     })
   }
 
   private def workersNotBlacklisted(): util.List[WorkerInfo] = {
-    workers.filter(w => !blacklist.contains(w.hostPort)).toList
+    workersSnapShot.filter(w => !blacklist.contains(w.hostPort))
   }
 
   def getWorkerInfos(): String = {
     val sb = new StringBuilder
-    workers.foreach { w =>
+    workersSnapShot.foreach { w =>
       sb.append("==========WorkerInfos in Master==========\n")
       sb.append(w).append("\n")
 
@@ -863,7 +869,7 @@ private[deploy] class Master(
     val threadDump = Utils.getThreadDump()
     sb.append("==========Master ThreadDump==========\n")
     sb.append(threadDump).append("\n")
-    workers.foreach(w => {
+    workersSnapShot.foreach(w => {
       sb.append(s"==========Worker ${w.hostPort} ThreadDump==========\n")
       val res = requestThreadDump(w.endpoint)
       sb.append(res.threadDump).append("\n")

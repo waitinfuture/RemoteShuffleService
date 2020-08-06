@@ -70,6 +70,15 @@ public abstract class ShuffleClient implements Cloneable
         int numMappers) throws IOException;
 
     /**
+     * cleanup states of the map task
+     * @param applicationId
+     * @param shuffleId
+     * @param mapId
+     * @param attemptId
+     */
+    public abstract void cleanup(String applicationId, int shuffleId, int mapId, int attemptId);
+
+    /**
      * commit files, update status
      * @param appId
      * @param shuffleId

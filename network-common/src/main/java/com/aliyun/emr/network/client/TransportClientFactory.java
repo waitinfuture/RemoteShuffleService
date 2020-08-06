@@ -245,9 +245,9 @@ public class TransportClientFactory implements Closeable {
     // Connect to the remote server
     long preConnect = System.nanoTime();
     ChannelFuture cf = bootstrap.connect(address);
-    if (!cf.await(conf.connectionTimeoutMs())) {
+    if (!cf.await(conf.connectTimeoutMs())) {
       throw new IOException(
-        String.format("Connecting to %s timed out (%s ms)", address, conf.connectionTimeoutMs()));
+        String.format("Connecting to %s timed out (%s ms)", address, conf.connectTimeoutMs()));
     } else if (cf.cause() != null) {
       throw new IOException(String.format("Failed to connect to %s", address), cf.cause());
     }

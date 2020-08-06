@@ -48,6 +48,7 @@ public class EssShuffleWriter<K, V, C> extends ShuffleWriter<K, V> {
     private final SerializerInstance serializer;
     private final Partitioner partitioner;
     private final ShuffleWriteMetrics writeMetrics;
+    private final String appId;
     private final int shuffleId;
     private final int mapId;
     private final TaskContext taskContext;
@@ -204,7 +205,7 @@ public class EssShuffleWriter<K, V, C> extends ShuffleWriter<K, V> {
 
         private void pushData(int partitionId, byte[] buffer, int size) throws IOException {
             int bytesWritten = essShuffleClient.pushData(
-                sparkConf.getAppId(),
+                appId,
                 shuffleId,
                 mapId,
                 taskContext.attemptNumber(),
@@ -243,6 +244,7 @@ public class EssShuffleWriter<K, V, C> extends ShuffleWriter<K, V> {
         int numPartitions) throws IOException {
         this.mapId = mapId;
         this.dep = handle.dependency();
+        this.appId = sparkConf.getAppId();
         this.shuffleId = dep.shuffleId();
         this.serializer = dep.serializer().newInstance();
         this.partitioner = dep.partitioner();
@@ -381,7 +383,7 @@ public class EssShuffleWriter<K, V, C> extends ShuffleWriter<K, V> {
         sendOffsets = null;
 
         long waitStartTime = System.nanoTime();
-        essShuffleClient.mapperEnd(sparkConf.getAppId(), shuffleId, mapId, taskContext
+        essShuffleClient.mapperEnd(appId, shuffleId, mapId, taskContext
             .attemptNumber(), numMappers);
         writeMetrics.incWriteTime(System.nanoTime() - waitStartTime);
 
@@ -421,6 +423,7 @@ public class EssShuffleWriter<K, V, C> extends ShuffleWriter<K, V> {
                 }
             }
         } finally {
+            essShuffleClient.cleanup(appId, shuffleId, mapId, taskContext.attemptNumber());
         }
     }
 }
