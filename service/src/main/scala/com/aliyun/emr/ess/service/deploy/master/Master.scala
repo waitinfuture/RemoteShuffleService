@@ -379,7 +379,13 @@ private[deploy] class Master(
     // reply false if offer slots failed
     if (slots == null || slots.isEmpty()) {
       logError(s"offerSlots failed $shuffleKey!")
-      context.reply(RegisterShuffleResponse(StatusCode.SlotNotAvailable, null))
+      registerShuffleRequest.synchronized {
+        val set = registerShuffleRequest.get(shuffleKey)
+        set.foreach { context =>
+          context.reply(RegisterShuffleResponse(StatusCode.SlotNotAvailable, null))
+        }
+        registerShuffleRequest.remove(shuffleKey)
+      }
       return
     }
 
@@ -388,7 +394,7 @@ private[deploy] class Master(
 
     // reserve buffers failed, clear allocated resources
     if (failed != null && !failed.isEmpty()) {
-      logError("reserve buffers still fail after retry, clear buffers")
+      logWarning("reserve buffers still fail after retry, clear buffers")
       slots.foreach(entry => {
         destroyBuffersWithRetry(shuffleKey, entry._1,
           entry._2._1.map(_.getUniqueId),
@@ -396,8 +402,14 @@ private[deploy] class Master(
         entry._1.removeMasterPartitions(shuffleKey, entry._2._1.map(_.getUniqueId))
         entry._1.removeSlavePartitions(shuffleKey, entry._2._2.map(_.getUniqueId))
       })
-      logInfo("fail to reserve buffers")
-      context.reply(RegisterShuffleResponse(StatusCode.ReserveBufferFailed, null))
+      logError(s"registerShuffle $shuffleKey failed to reserve buffers, reply to all")
+      registerShuffleRequest.synchronized {
+        val set = registerShuffleRequest.get(shuffleKey)
+        set.foreach { context =>
+          context.reply(RegisterShuffleResponse(StatusCode.ReserveBufferFailed, null))
+        }
+        registerShuffleRequest.remove(shuffleKey)
+      }
       return
     }
 
@@ -425,9 +437,9 @@ private[deploy] class Master(
     logInfo(s"Handle RegisterShuffle Success, $shuffleKey")
     registerShuffleRequest.synchronized {
       val set = registerShuffleRequest.get(shuffleKey)
-      set.foreach(context => {
+      set.foreach { context =>
         context.reply(RegisterShuffleResponse(StatusCode.Success, locations))
-      })
+      }
       registerShuffleRequest.remove(shuffleKey)
     }
   }

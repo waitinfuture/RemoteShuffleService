@@ -222,6 +222,7 @@ public class ShuffleClientImpl extends ShuffleClient {
         PartitionLocation oldLocation) {
         ConcurrentHashMap<Integer, PartitionLocation> map = reducePartitionMap.get(shuffleId);
         if (waitRevivedLocation(map, reduceId, epoch)) {
+            logger.info("already revived, just return: " + shuffleId + "-" + reduceId + "-" + epoch);
             return true;
         }
 
