@@ -529,6 +529,7 @@ private[deploy] class Master(
       shuffleReviving.synchronized {
         val set = shuffleReviving.get(oldPartitionId)
         set.foreach(_.reply(ReviveResponse(StatusCode.SlotNotAvailable, null)))
+        shuffleReviving.remove(oldPartitionId)
       }
       return
     }
@@ -548,6 +549,7 @@ private[deploy] class Master(
       shuffleReviving.synchronized {
         val set = shuffleReviving.get(oldPartitionId)
         set.foreach(_.reply(ReviveResponse(StatusCode.ReserveBufferFailed, null)))
+        shuffleReviving.remove(oldPartitionId)
       }
       return
     }
@@ -616,7 +618,6 @@ private[deploy] class Master(
       context: RpcCallContext,
       applicationId: String,
       shuffleId: Int): Unit = {
-
     val shuffleKey = Utils.makeShuffleKey(applicationId, shuffleId)
 
     var timeout = EssConf.essStageEndTimeout(conf)
@@ -634,14 +635,14 @@ private[deploy] class Master(
 
     if (dataLostShuffleSet.contains(shuffleKey)) {
       context.reply(GetReducerFileGroupResponse(StatusCode.Failed, null, null))
+    } else {
+      val shuffleFileGroup = reducerFileGroupsMap.get(shuffleKey)
+      context.reply(GetReducerFileGroupResponse(
+        StatusCode.Success,
+        shuffleFileGroup,
+        shuffleMapperAttempts.get(shuffleKey)
+      ))
     }
-
-    val shuffleFileGroup = reducerFileGroupsMap.get(shuffleKey)
-    context.reply(GetReducerFileGroupResponse(
-      StatusCode.Success,
-      shuffleFileGroup,
-      shuffleMapperAttempts.get(shuffleKey)
-    ))
   }
 
   private def handleGetWorkerInfos(context: RpcCallContext): Unit = {
@@ -824,6 +825,7 @@ private[deploy] class Master(
     reducerFileGroupsMap.remove(shuffleKey)
     dataLostShuffleSet.remove(shuffleKey)
     shuffleAllocatedWorkers.remove(shuffleKey)
+    reviving.remove(shuffleKey)
 
     logInfo("unregister success")
     context.reply(UnregisterShuffleResponse(StatusCode.Success))
