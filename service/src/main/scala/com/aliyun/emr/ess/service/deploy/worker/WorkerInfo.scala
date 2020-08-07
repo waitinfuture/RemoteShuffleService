@@ -1,13 +1,14 @@
 package com.aliyun.emr.ess.service.deploy.worker
 
-import java.util
-
-import com.aliyun.emr.ess.common.rpc.RpcEndpointRef
-import com.aliyun.emr.ess.common.util.Utils
-import com.aliyun.emr.ess.protocol.PartitionLocation
 import scala.collection.JavaConversions._
 
+import java.util
+
 import com.aliyun.emr.ess.common.internal.Logging
+import com.aliyun.emr.ess.common.rpc.RpcEndpointRef
+import com.aliyun.emr.ess.common.rpc.netty.NettyRpcEndpointRef
+import com.aliyun.emr.ess.common.util.Utils
+import com.aliyun.emr.ess.protocol.PartitionLocation
 
 private[ess] class WorkerInfo(
     val host: String,
@@ -30,6 +31,10 @@ private[ess] class WorkerInfo(
     new PartitionInfo()
 
   init()
+
+  def isActive(): Boolean = {
+    endpoint.asInstanceOf[NettyRpcEndpointRef].client.isActive
+  }
 
   // only exposed for test
   def freeSlots(): Long = this.synchronized {

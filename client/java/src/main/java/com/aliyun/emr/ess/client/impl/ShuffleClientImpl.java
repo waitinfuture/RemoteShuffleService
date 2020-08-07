@@ -467,9 +467,7 @@ public class ShuffleClientImpl extends ShuffleClient {
                     @Override
                     public void run() {
                         while (!stopped) {
-                            master.send(
-                                new HeartBeatFromApplication(applicationId)
-                            );
+                            master.send(new HeartBeatFromApplication(applicationId));
                             try {
                                 Thread.sleep(30 * 1000);
                             } catch (Exception e) {

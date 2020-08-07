@@ -124,8 +124,12 @@ public abstract class EssInputStream extends InputStream {
         }
 
         private PartitionReader createReader(PartitionLocation location) throws IOException {
-            if (attemptNumber % 2 == 1 && location.getPeer() != null) {
+            if (location.getPeer() == null) {
+                logger.warn("has only one partition replica: " + location);
+            }
+            if (location.getPeer() != null && attemptNumber % 2 == 1) {
                 location = location.getPeer();
+                logger.warn("read peer: " + location + " for attempt " + attemptNumber);
             }
             try {
                 TransportClient client =

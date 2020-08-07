@@ -459,18 +459,23 @@ private[deploy] class Master(
       return
     }
 
-    def checkAndBlacklist(loc: PartitionLocation): Unit = {
-      val worker = workersSnapShot.find(w => w.hostPort == loc.hostPort()).orNull
-      if (worker != null && !worker.endpoint.asInstanceOf[NettyRpcEndpointRef].client.isActive) {
+    def checkAndBlacklist(hostPort: String): Unit = {
+      val worker = workersSnapShot.find(w => w.hostPort == hostPort).orNull
+      if (worker != null && !worker.isActive()) {
         logWarning(s"add ${worker.hostPort} to blacklist")
-        blacklist.add(loc.hostPort())
+        blacklist.add(hostPort)
       }
     }
 
-    if (oldPartition != null) {
+    val candidateWorkers = if (oldPartition != null) {
       // check to see if partition can be reached. if not, add into blacklist
-      checkAndBlacklist(oldPartition)
-      checkAndBlacklist(oldPartition.getPeer)
+      val hostPort = oldPartition.hostPort()
+      val peerHostPort = oldPartition.getPeer.hostPort()
+      checkAndBlacklist(hostPort)
+      checkAndBlacklist(peerHostPort)
+      workersNotBlacklisted(Set(hostPort, peerHostPort))
+    } else {
+      workersNotBlacklisted()
     }
 
     val oldPartitionId = s"$reduceId-$oldEpoch"
@@ -513,7 +518,7 @@ private[deploy] class Master(
     val slots = workers.synchronized {
       MasterUtil.offerSlots(shuffleKey,
         // avoid offer slots on the same host of oldPartition
-        workersNotBlacklisted(),
+        candidateWorkers,
         Seq(new Integer(reduceId)),
         Array(oldEpoch)
       )
@@ -663,8 +668,7 @@ private[deploy] class Master(
 
     // check connection before commit files
     workersSnapShot.foreach { w =>
-      if (!w.endpoint.asInstanceOf[NettyRpcEndpointRef].client.isActive
-        && !workerLostEvents.contains(w.hostPort)) {
+      if (!w.isActive() && !workerLostEvents.contains(w.hostPort)) {
         logInfo(s"Find WorkerLost in StageEnd ${w.hostPort}")
         self.send(WorkerLost(w.host, w.port))
         workerLostEvents.add(w.hostPort)
@@ -755,8 +759,10 @@ private[deploy] class Master(
         val masterPartition = committedPartitions.get(id)
         if (masterPartition ne null) {
           masterPartition.setPeer(slavePartition)
+          slavePartition.setPeer(masterPartition)
         } else {
-          logWarning(s"shuffle $shuffleKey partition $id: master lost, use slave")
+          logWarning(s"shuffle $shuffleKey partition $id: master lost, " +
+            s"use slave $slavePartition")
           committedPartitions.put(id, slavePartition)
         }
       }
@@ -850,8 +856,10 @@ private[deploy] class Master(
     })
   }
 
-  private def workersNotBlacklisted(): util.List[WorkerInfo] = {
-    workersSnapShot.filter(w => !blacklist.contains(w.hostPort))
+  private def workersNotBlacklisted(
+      tmpBlacklist: Set[String] = Set.empty): util.List[WorkerInfo] = {
+    workersSnapShot.filter(
+      w => !blacklist.contains(w.hostPort) && !tmpBlacklist.contains(w.hostPort))
   }
 
   def getWorkerInfos(): String = {

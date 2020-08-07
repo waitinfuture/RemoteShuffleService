@@ -15,14 +15,14 @@ import com.aliyun.emr.ess.common.internal.Logging
 import com.aliyun.emr.ess.common.util.{ThreadUtils, Utils}
 import com.aliyun.emr.ess.protocol.PartitionLocation
 
-private[worker] case class WriteTask(
+private[worker] case class FlushTask(
     buffer: ByteBuffer,
     fileChannel: FileChannel,
     notifier: FileWriter.FlushNotifier)
 
 private[worker] final class DiskFlusher(
     index: Int, queueCapacity: Int, bufferSize: Int) extends Logging {
-  private val workingQueue = new LinkedBlockingQueue[WriteTask](queueCapacity)
+  private val workingQueue = new LinkedBlockingQueue[FlushTask](queueCapacity)
   private val bufferQueue = new LinkedBlockingQueue[ByteBuffer](queueCapacity)
   for (_ <- 0 until queueCapacity) {
     bufferQueue.put(ByteBuffer.allocateDirect(bufferSize))
@@ -60,7 +60,7 @@ private[worker] final class DiskFlusher(
     bufferQueue.put(buffer)
   }
 
-  def addTask(task: WriteTask): Unit = {
+  def addTask(task: FlushTask): Unit = {
     workingQueue.put(task)
   }
 

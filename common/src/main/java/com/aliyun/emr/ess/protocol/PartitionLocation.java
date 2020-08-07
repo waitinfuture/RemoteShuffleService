@@ -132,7 +132,7 @@ public class PartitionLocation implements Serializable
 
     @Override
     public String toString() {
-        return reduceId + " " + epoch + " " + host + ":" + port + " " + "Mode: " + mode + (peer ==
-            null);
+        return reduceId + " " + epoch + " " + host + ":" + port + " " + "Mode: " + mode
+            + " HasPeer: " + (peer != null);
     }
 }

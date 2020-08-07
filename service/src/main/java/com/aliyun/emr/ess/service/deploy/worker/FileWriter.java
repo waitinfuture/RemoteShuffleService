@@ -86,7 +86,7 @@ public final class FileWriter {
         notifier.checkException();
         flushBuffer.flip();
         notifier.numPendingFlushes.incrementAndGet();
-        WriteTask task = new WriteTask(flushBuffer, channel, notifier);
+        FlushTask task = new FlushTask(flushBuffer, channel, notifier);
         flusher.addTask(task);
         flushBuffer = null;
     }
@@ -186,6 +186,7 @@ public final class FileWriter {
             notifier.setException(ioe);
             throw ioe;
         }
+        notifier.checkException();
     }
 
     private void takeBuffer() throws IOException {

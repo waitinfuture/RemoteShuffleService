@@ -39,9 +39,7 @@ public class MasterUtil {
         List<WorkerInfo> workers,
         List<Integer> reduceIds) {
         int[] oldEpochs = new int[reduceIds.size()];
-        for (int i = 0; i < oldEpochs.length; i++) {
-            oldEpochs[i] = -1;
-        }
+        Arrays.fill(oldEpochs, -1);
         return offerSlots(shuffleKey, workers, reduceIds, oldEpochs);
     }
 
@@ -51,8 +49,13 @@ public class MasterUtil {
             List<WorkerInfo> workers,
             List<Integer> reduceIds,
             int[] oldEpochs) {
-        // master partition index
         logger.info("inside offerSlots, reduceId num " + reduceIds.size());
+
+        if (workers.size() < 2) {
+            logger.error("offerSlots failed: require at least 2 active workers");
+            return null;
+        }
+
         int masterInd = rand.nextInt(workers.size());
         Map<WorkerInfo, Tuple2<List<PartitionLocation>, List<PartitionLocation>>> slots =
                 new HashMap<>();
