@@ -49,6 +49,12 @@ private[worker] final class DiskFlusher(
     }
   }
   worker.setDaemon(true)
+  worker.setUncaughtExceptionHandler(new Thread.UncaughtExceptionHandler {
+    override def uncaughtException(t: Thread, e: Throwable): Unit = {
+      logError(s"${t.getName} thread terminated, worker exits", e)
+      System.exit(1)
+    }
+  })
   worker.start()
 
   def takeBuffer(timeoutMs: Long): ByteBuffer = {
