@@ -131,13 +131,27 @@ public abstract class EssInputStream extends InputStream {
                 location = location.getPeer();
                 logger.warn("read peer: " + location + " for attempt " + attemptNumber);
             }
+
+            TransportClient client;
             try {
-                TransportClient client =
-                        clientFactory.createClient(location.getHost(), location.getPort());
-                return new PartitionReader(client, location.getFileName());
+                try {
+                    client = clientFactory.createClient(location.getHost(), location.getPort());
+                } catch (IOException e) {
+                    PartitionLocation peer = location.getPeer();
+                    if (peer != null) {
+                        logger.warn("connect to " + location + " failed, try to read peer " + peer);
+                        location = peer;
+                        client = clientFactory.createClient(location.getHost(), location.getPort());
+                    } else {
+                        throw e;
+                    }
+                }
             } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
                 throw new IOException(e);
             }
+
+            return new PartitionReader(client, location.getFileName());
         }
 
         public void setCallback(MetricsCallback callback) {
@@ -283,7 +297,7 @@ public abstract class EssInputStream extends InputStream {
                 try {
                     response = client.sendRpcSync(request, 20 * 1000L);
                 } catch (Exception e) {
-                    throw new IOException("FetchChunk failed", e);
+                    throw new IOException("FetchChunk open stream failed", e);
                 }
                 streamId = response.getLong();
                 numChunks = response.getInt();
