@@ -30,7 +30,6 @@ import scala.reflect.ClassTag$;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
-import java.sql.Time;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;

@@ -21,6 +21,7 @@ import java.io.IOException
 import java.nio.ByteBuffer
 import java.util
 import java.util.concurrent.{Future, LinkedBlockingQueue, TimeUnit}
+import java.util.concurrent.atomic.AtomicBoolean
 
 import scala.collection.JavaConversions._
 
@@ -48,10 +49,10 @@ private[deploy] class Worker(
     val transportConf = Utils.fromEssConf(conf, "data", conf.getInt("ess.data.io.threads", 0))
     val rpcHandler = new DataRpcHandler(transportConf, this)
     val transportContext: TransportContext =
-      new TransportContext(transportConf, rpcHandler, true)
+      new TransportContext(transportConf, rpcHandler, false)
     val serverBootstraps: Seq[TransportServerBootstrap] = Nil
     val clientBootstraps: Seq[TransportClientBootstrap] = Nil
-    (transportContext.createServer(serverBootstraps),
+    (transportContext.createServer(EssConf.essDataServerPort(conf), serverBootstraps),
       transportContext.createClientFactory(clientBootstraps))
   }
 
@@ -60,6 +61,10 @@ private[deploy] class Worker(
 
   Utils.checkHost(host)
   assert(port > 0)
+
+  // whether this Worker registered to Master succesfully
+  private val registered = new AtomicBoolean(false)
+
 
   // master endpoint
   private val masterEndpoint: RpcEndpointRef =
@@ -97,13 +102,6 @@ private[deploy] class Worker(
   override def onStop(): Unit = {
     forwardMessageScheduler.shutdownNow()
     dataServer.close()
-  }
-
-  override def onDisconnected(remoteAddress: RpcAddress): Unit = {
-    if (masterRpcAddress == remoteAddress) {
-      logInfo(s"Master $remoteAddress Disassociated !")
-      reRegisterWithMaster()
-    }
   }
 
   override def receive: PartialFunction[Any, Unit] = {
@@ -409,29 +407,21 @@ private[deploy] class Worker(
     var res = masterEndpoint.askSync[RegisterWorkerResponse](
       RegisterWorker(host, port, workerInfo.numSlots, self)
     )
-    while (!res.success) {
-      logInfo("register worker failed!")
-      Thread.sleep(1000)
+    var registerTimeout = EssConf.essRegisterWorkerTimeoutMs(conf)
+    val delta = 2000
+    while (!res.success && registerTimeout > 0) {
+      logInfo(s"register worker failed!, ${res.message}")
+      Thread.sleep(delta)
+      registerTimeout = registerTimeout - delta
       logInfo("Trying to re-register with master")
       res = masterEndpoint.askSync[RegisterWorkerResponse](
         RegisterWorker(host, port, workerInfo.numSlots, self)
       )
     }
     logInfo("Registered worker successfully")
-  }
 
-  private def reRegisterWithMaster(): Unit = {
-    logInfo("Trying to re-register worker!")
-    var res = masterEndpoint.askSync[ReregisterWorkerResponse](
-      ReregisterWorker(host, port, workerInfo.numSlots, self)
-    )
-    while (!res.success) {
-      Thread.sleep(1000)
-      logInfo("Trying to re-register worker!")
-      res = masterEndpoint.askSync[ReregisterWorkerResponse](
-        ReregisterWorker(host, port, workerInfo.numSlots, self)
-      )
-    }
+    // Registered successfully
+    registered.set(true)
   }
 
   private val cleanTaskQueue = new LinkedBlockingQueue[util.HashSet[String]]
@@ -464,6 +454,10 @@ private[deploy] class Worker(
     }
 
     localStorageManager.cleanup(expiredShuffleKeys)
+  }
+
+  def Registered(): Boolean = {
+    registered.get()
   }
 }
 

@@ -520,8 +520,8 @@ object EssConf extends Logging {
     }
   }
 
-  def essRpcParallelism(conf: EssConf): Int = {
-    conf.getInt("ess.rpc.parallelism", 8)
+  def essRpcMaxParallelism(conf: EssConf): Int = {
+    conf.getInt("ess.rpc.max.parallelism", 1024)
   }
 
   def essRegisterShuffleMaxRetry(conf: EssConf): Int = {
@@ -565,6 +565,14 @@ object EssConf extends Logging {
 
   def essLimitInFlightSleepDeltaMs(conf: EssConf): Long = {
     conf.getTimeAsMs("ess.limit.in.flight.sleep.delta", "50ms")
+  }
+
+  def essDataServerPort(conf: EssConf): Int = {
+    conf.getInt("ess.dataserver.port", 0)
+  }
+
+  def essRegisterWorkerTimeoutMs(conf: EssConf): Long = {
+    conf.getTimeAsMs("ess.register.worker.timeout", "180s")
   }
 }
 

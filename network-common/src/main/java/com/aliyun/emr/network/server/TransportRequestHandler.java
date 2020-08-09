@@ -100,20 +100,44 @@ public class TransportRequestHandler extends MessageHandler<RequestMessage> {
   @Override
   public void handle(RequestMessage request) {
     if (request instanceof ChunkFetchRequest) {
-      processFetchRequest((ChunkFetchRequest) request);
+      if (checkRegistered(request)) {
+        processFetchRequest((ChunkFetchRequest) request);
+      }
     } else if (request instanceof RpcRequest) {
-      processRpcRequest((RpcRequest) request);
+      if (checkRegistered(request)) {
+        processRpcRequest((RpcRequest) request);
+      }
     } else if (request instanceof OneWayMessage) {
-      processOneWayMessage((OneWayMessage) request);
+      if (checkRegistered(request)) {
+        processOneWayMessage((OneWayMessage) request);
+      }
     } else if (request instanceof StreamRequest) {
       processStreamRequest((StreamRequest) request);
     } else if (request instanceof UploadStream) {
       processStreamUpload((UploadStream) request);
     } else if (request instanceof PushData) {
-      processPushData((PushData) request);
+      if (checkRegistered(request)) {
+        processPushData((PushData) request);
+      }
     } else {
       throw new IllegalArgumentException("Unknown request type: " + request);
     }
+  }
+
+  private boolean checkRegistered(RequestMessage req) {
+      if (!rpcHandler.checkRegistered()) {
+        IOException e = new IOException("Worker Not Registered!");
+        if (req instanceof RpcRequest) {
+          respond(new RpcFailure(((RpcRequest)req).requestId, Throwables.getStackTraceAsString(e)));
+        } else if (req instanceof ChunkFetchRequest){
+          respond(new ChunkFetchFailure(((ChunkFetchRequest)req).streamChunkId,
+              Throwables.getStackTraceAsString(e)));
+        } else if (req instanceof OneWayMessage) {
+          logger.warn("Ignore OneWayMessage since worker is not registered!");
+        }
+        return false;
+      }
+      return true;
   }
 
   private void processFetchRequest(final ChunkFetchRequest req) {

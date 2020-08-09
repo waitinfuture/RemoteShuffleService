@@ -90,6 +90,10 @@ public abstract class RpcHandler {
     throw new UnsupportedOperationException();
   }
 
+  public boolean checkRegistered() {
+    return true;
+  }
+
   /**
    * Returns the StreamManager which contains the state about which streams are currently being
    * fetched by a TransportClient.

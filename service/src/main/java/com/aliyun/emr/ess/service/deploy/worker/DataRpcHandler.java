@@ -65,6 +65,11 @@ public final class DataRpcHandler extends RpcHandler {
     }
 
     @Override
+    public boolean checkRegistered() {
+        return ((Worker) handler).Registered();
+    }
+
+    @Override
     public void channelInactive(TransportClient client) {
         logger.debug("channel Inactive " + client.getSocketAddress());
     }

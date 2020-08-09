@@ -3,7 +3,6 @@ package com.aliyun.emr.ess.client;
 import com.aliyun.emr.ess.client.impl.ShuffleClientImpl;
 import com.aliyun.emr.ess.client.stream.EssInputStream;
 import com.aliyun.emr.ess.common.EssConf;
-import com.aliyun.emr.ess.protocol.message.StatusCode;
 
 import java.io.IOException;
 

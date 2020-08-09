@@ -89,6 +89,9 @@ private[deploy] class Master(
     if (checkForWorkerTimeOutTask != null) {
       checkForWorkerTimeOutTask.cancel(true)
     }
+    if (checkForApplicationTimeOutTask != null) {
+      checkForApplicationTimeOutTask.cancel(true)
+    }
     forwardMessageThread.shutdownNow()
   }
 
@@ -122,7 +125,7 @@ private[deploy] class Master(
       if (res.status.equals(StatusCode.Success)) {
         logInfo(s"Successfully allocated partitions buffer from worker ${entry._1.hostPort}")
       } else {
-        logError(s"Failed to reserve buffers from worker ${entry._1.hostPort}")
+        logError(s"[reserveBuffers] Failed to reserve buffers from worker ${entry._1.hostPort}")
         failed.add(entry._1)
       }
     }
@@ -283,6 +286,7 @@ private[deploy] class Master(
       logError(s"Unknown worker $host:$port for WorkerLost handler!")
       return
     }
+
     // remove worker from workers
     workers.synchronized {
       workers.remove(worker)
@@ -319,16 +323,25 @@ private[deploy] class Master(
       numSlots: Int,
       workerRef: RpcEndpointRef): Unit = {
     logInfo(s"Registering worker $host:$port with $numSlots slots")
-    if (workersSnapShot.exists(w => w.host == host && w.port == port)) {
-      logError(s"Worker already registered! $host:$port")
+    val hostPort = host + ":" + port;
+    if (workersSnapShot.exists(w => w.hostPort == hostPort)) {
+      logWarning("Receive RegisterWorker while worker already exists, trigger WorkerLost")
+      workerLostEvents.synchronized {
+        if (!workerLostEvents.contains(hostPort)) {
+          workerLostEvents.add(hostPort)
+          self.send(WorkerLost(host, port))
+        }
+      }
       context.reply(RegisterWorkerResponse(false, "Worker already registered!"))
+    } else if (workerLostEvents.contains(hostPort)) {
+      logWarning("Receive RegisterWorker while worker in workerLostEvents")
+      context.reply(RegisterWorkerResponse(false, "Worker in workerLostEvents"))
     } else {
-      logInfo(s"worker info numSlots $numSlots")
       val worker = new WorkerInfo(host, port, numSlots, workerRef)
       workers.synchronized {
         workers.add(worker)
       }
-      logInfo(s"registered worker $worker")
+      logInfo(s"registered worker ${worker}")
       context.reply(RegisterWorkerResponse(true, null))
     }
   }
@@ -454,7 +467,7 @@ private[deploy] class Master(
     // check whether shuffle has registered
     val shuffleKey = Utils.makeShuffleKey(applicationId, shuffleId)
     if (!registeredShuffle.contains(shuffleKey)) {
-      logError(s"shuffle $shuffleKey not registered!")
+      logError(s"[handleRevive] shuffle $shuffleKey not registered!")
       context.reply(ReviveResponse(StatusCode.ShuffleNotRegistered, null))
       return
     }
@@ -525,7 +538,7 @@ private[deploy] class Master(
     }
     // reply false if offer slots failed
     if (slots == null || slots.isEmpty()) {
-      logError("offerSlot failed!")
+      logError("[handleRevive] offerSlot failed!")
       shuffleReviving.synchronized {
         val set = shuffleReviving.get(oldPartitionId)
         set.foreach(_.reply(ReviveResponse(StatusCode.SlotNotAvailable, null)))
@@ -692,8 +705,9 @@ private[deploy] class Master(
 
     val allocatedWorkers = shuffleAllocatedWorkers.get(shuffleKey)
 
+    val parallelism = Math.min(workersSnapShot.size(), EssConf.essRpcMaxParallelism(conf))
     ThreadUtils.parmap(
-      allocatedWorkers.to, "CommitFiles", EssConf.essRpcParallelism(conf)) { worker =>
+      allocatedWorkers.to, "CommitFiles", parallelism) { worker =>
       if (worker.containsShuffle(shuffleKey)) {
         val masterParts = worker.getAllMasterLocations(shuffleKey)
         val slaveParts = worker.getAllSlaveLocations(shuffleKey)

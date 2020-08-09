@@ -55,12 +55,11 @@ private[ess] class WorkerInfo(
   }
 
   def shuffleKeySet(): util.HashSet[String] = {
-    val (masterKeySet, slaveKeySet) = this.synchronized {
-      (masterPartitionLocations.keySet(), slavePartitionLocations.keySet())
-    }
     val shuffleKeySet = new util.HashSet[String]
-    shuffleKeySet.addAll(masterKeySet)
-    shuffleKeySet.addAll(slaveKeySet)
+    this.synchronized {
+      shuffleKeySet.addAll(masterPartitionLocations.keySet())
+      shuffleKeySet.addAll(slavePartitionLocations.keySet())
+    }
     shuffleKeySet
   }
 

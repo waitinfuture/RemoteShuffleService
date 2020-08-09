@@ -78,6 +78,8 @@ private[ess] trait RpcEndpoint {
     case _ => context.sendFailure(new EssException(self + " won't reply anything"))
   }
 
+  def checkRegistered(): Boolean = true
+
   /**
    * Invoked when any exception is thrown during handling messages.
    */

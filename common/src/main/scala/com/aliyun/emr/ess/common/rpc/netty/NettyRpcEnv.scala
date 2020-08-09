@@ -33,6 +33,7 @@ import com.aliyun.emr.ess.common.internal.Logging
 import com.aliyun.emr.ess.common.rpc._
 import com.aliyun.emr.ess.common.serializer.{JavaSerializer, JavaSerializerInstance, SerializationStream}
 import com.aliyun.emr.ess.common.util.{ByteBufferInputStream, ByteBufferOutputStream, ThreadUtils, Utils}
+import com.aliyun.emr.ess.protocol.RpcNameConstants
 import com.aliyun.emr.network.TransportContext
 import com.aliyun.emr.network.client._
 import com.aliyun.emr.network.server._
@@ -50,6 +51,8 @@ private[ess] class NettyRpcEnv(
     conf.getInt("ess.rpc.io.threads", numUsableCores))
 
   private val dispatcher: Dispatcher = new Dispatcher(this, numUsableCores)
+
+  private var worker: RpcEndpoint = null
 
   private val streamManager = new NettyStreamManager(this)
 
@@ -116,7 +119,18 @@ private[ess] class NettyRpcEnv(
   }
 
   override def setupEndpoint(name: String, endpoint: RpcEndpoint): RpcEndpointRef = {
+    if (name == RpcNameConstants.WORKER_EP) {
+      worker = endpoint
+    }
     dispatcher.registerRpcEndpoint(name, endpoint)
+  }
+
+  def checkRegistered(): Boolean = {
+    if (worker == null) {
+      true
+    } else {
+      worker.checkRegistered()
+    }
   }
 
   def asyncSetupEndpointRefByURI(uri: String): Future[RpcEndpointRef] = {
@@ -659,6 +673,10 @@ private[ess] class NettyRpcHandler(
       }
       requestMessage
     }
+  }
+
+  override def checkRegistered(): Boolean = {
+    nettyEnv.checkRegistered()
   }
 
   override def getStreamManager: StreamManager = streamManager
