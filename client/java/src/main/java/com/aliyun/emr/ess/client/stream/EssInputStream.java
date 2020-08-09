@@ -289,13 +289,15 @@ public abstract class EssInputStream extends InputStream {
 
             private final AtomicReference<IOException> exception = new AtomicReference<>();
 
+            private final long timeoutMs = EssConf.essFetchChunkTimeoutMs(conf);
+
             PartitionReader(TransportClient client, String fileName) throws IOException {
                 this.client = client;
 
                 ByteBuffer request = createOpenMessage(shuffleKey, fileName);
                 ByteBuffer response;
                 try {
-                    response = client.sendRpcSync(request, 20 * 1000L);
+                    response = client.sendRpcSync(request, timeoutMs);
                 } catch (Exception e) {
                     throw new IOException("FetchChunk open stream failed", e);
                 }

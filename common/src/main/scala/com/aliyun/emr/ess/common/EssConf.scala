@@ -475,6 +475,10 @@ object EssConf extends Logging {
     conf.getInt("ess.push.data.maxReqsInFlight", 1024)
   }
 
+  def essFetchChunkTimeoutMs(conf: EssConf): Long = {
+    conf.getTimeAsMs("ess.fetch.chunk.timeout", "30s")
+  }
+
   def essFetchChunkMaxReqsInFlight(conf: EssConf): Int = {
     conf.getInt("ess.fetch.chunk.maxReqsInFlight", 3)
   }
