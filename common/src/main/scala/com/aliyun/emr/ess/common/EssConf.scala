@@ -578,5 +578,9 @@ object EssConf extends Logging {
   def essRegisterWorkerTimeoutMs(conf: EssConf): Long = {
     conf.getTimeAsMs("ess.register.worker.timeout", "180s")
   }
+
+  def essMasterPortMaxRetry(conf: EssConf): Int = {
+    conf.getInt("ess.master.port.maxretry", 1)
+  }
 }
 

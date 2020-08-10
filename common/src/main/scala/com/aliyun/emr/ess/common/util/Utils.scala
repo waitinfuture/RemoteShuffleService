@@ -221,7 +221,7 @@ object Utils
       "startPort should be between 1024 and 65535 (inclusive), or 0 for a random free port.")
 
     val serviceString = if (serviceName.isEmpty) "" else s" '$serviceName'"
-    val maxRetries = portMaxRetries(conf)
+    val maxRetries = EssConf.essMasterPortMaxRetry(conf)
     for (offset <- 0 to maxRetries) {
       // Do not increment port if startPort is 0, which is treated as a special port
       val tryPort = if (startPort == 0) {
@@ -270,16 +270,6 @@ object Utils
 
   def userPort(base: Int, offset: Int): Int = {
     (base + offset - 1024) % (65536 - 1024) + 1024
-  }
-
-  def portMaxRetries(conf: EssConf): Int = {
-    val maxRetries = conf.getOption("spark.port.maxRetries").map(_.toInt)
-    if (conf.contains("spark.testing")) {
-      // Set a higher number of retries for tests...
-      maxRetries.getOrElse(100)
-    } else {
-      maxRetries.getOrElse(16)
-    }
   }
 
   def isBindCollision(exception: Throwable): Boolean = {
