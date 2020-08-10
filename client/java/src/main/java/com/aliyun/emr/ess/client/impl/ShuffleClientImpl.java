@@ -438,13 +438,13 @@ public class ShuffleClientImpl extends ShuffleClient {
             if (response.status() == StatusCode.Success) {
                 return new ReduceFileGroups(response.fileGroup(), response.attempts());
             } else {
-                logger.error("GetReduceFile Failed! reason " + response.status());
+                logger.error("Get ReduceFileGroups Failed! reason " + response.status());
                 return null;
             }
         });
 
         if (fileGroups == null) {
-            String msg = "GetReducerFileGroup failed! " +
+            String msg = "Shuffle data lost! " +
                     Utils.makeReducerKey(applicationId, shuffleId, reduceId);;
             logger.error(msg);
             throw new IOException(msg);
