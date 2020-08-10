@@ -8,7 +8,6 @@ import scala.collection.JavaConversions._
 import com.aliyun.emr.ess.common.EssConf
 import com.aliyun.emr.ess.common.internal.Logging
 import com.aliyun.emr.ess.common.rpc._
-import com.aliyun.emr.ess.common.rpc.netty.NettyRpcEndpointRef
 import com.aliyun.emr.ess.common.util.{ThreadUtils, Utils}
 import com.aliyun.emr.ess.protocol.{PartitionLocation, RpcNameConstants}
 import com.aliyun.emr.ess.protocol.message.ControlMessages._
@@ -822,10 +821,13 @@ private[deploy] class Master(
       self.send(StageEnd(appId, shuffleId))
     }
 
-    // if PartitionLocations exists for the shuffle, return fail
     if (partitionExists(shuffleKey)) {
-      logInfo(s"Partition exists for shuffle $shuffleKey!, " +
+      logWarning(s"Partition exists for shuffle $shuffleKey!, " +
         "maybe caused by task rerun or speculative")
+      workersSnapShot.foreach { worker =>
+        worker.removeMasterPartitions(shuffleKey)
+        worker.removeSlavePartitions(shuffleKey)
+      }
     }
     // clear shuffle attempts for the shuffle
     shuffleMapperAttempts.synchronized {
