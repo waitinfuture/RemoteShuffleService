@@ -824,9 +824,8 @@ private[deploy] class Master(
 
     // if PartitionLocations exists for the shuffle, return fail
     if (partitionExists(shuffleKey)) {
-      logError(s"Partition exists for shuffle $shuffleKey!")
-      context.reply(UnregisterShuffleResponse(StatusCode.PartitionExists))
-      return
+      logInfo(s"Partition exists for shuffle $shuffleKey!, " +
+        "maybe caused by task rerun or speculative")
     }
     // clear shuffle attempts for the shuffle
     shuffleMapperAttempts.synchronized {
