@@ -57,6 +57,8 @@ SCALA_VERSION=$("$MVN" help:evaluate -Dexpression=scala.binary.version $@ 2>/dev
 
 echo "ESS version is $VERSION"
 
+NAME="release"
+
 echo "Making ess-$VERSION-bin-$NAME.tgz"
 
 # Build uber fat JAR
@@ -96,7 +98,7 @@ TARDIR_NAME="ess-$VERSION-bin-$NAME"
 TARDIR="$ESS_HOME/$TARDIR_NAME"
 rm -rf "$TARDIR"
 cp -r "$DISTDIR" "$TARDIR"
-tar czf "ess-$VERSION-release.tgz" -C "$ESS_HOME" "$TARDIR_NAME"
+tar czf "ess-$VERSION-$NAME.tgz" -C "$ESS_HOME" "$TARDIR_NAME"
 rm -rf "$TARDIR"
 
 
