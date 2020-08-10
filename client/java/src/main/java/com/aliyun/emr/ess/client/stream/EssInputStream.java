@@ -118,6 +118,7 @@ public abstract class EssInputStream extends InputStream {
         }
 
         private void moveToNextReader() throws IOException {
+            logger.info("move to next partition " + locations[fileIndex]);
             currentReader = createReader(locations[fileIndex]);
             currentChunk = currentReader.next();
             fileIndex++;
@@ -265,7 +266,8 @@ public abstract class EssInputStream extends InputStream {
                         hasData = true;
                         break;
                     } else {
-                        logger.warn("duplicate batchId! " + batchId);
+                        logger.warn("duplicated batch: mapId " + mapId + ", attemptId "
+                            + attemptId + ", batchId " + batchId);
                     }
                 }
             }
