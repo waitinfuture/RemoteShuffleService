@@ -20,13 +20,10 @@ BOOTSTRAP = 'bootstrap'
 
 def read_worker_list_file(filename):
     f = open(filename)
-    worker_list = list()
-    line = f.readline()
-    while line:
-        worker_list.append(line)
-        line = f.readline()
+    content = f.readlines()
     f.close()
-    return ','.join(worker_list)
+    content = [x.strip() for x in content]
+    return ','.join(content)
 
 
 def execute_command_with_timeout(command, timeout=300):
@@ -123,7 +120,7 @@ def main(argv):
     from optparse import OptionParser
     parser = OptionParser()
 
-    print("example:{}".format("python master_watcher.py -o check -m 192.168.6.85 -p 9099 -w 192.168.6.85,192.168.6.86"))
+    print("example:{}".format("python master_watcher.py -o check -m 192.168.6.85 -p 9099 -f filename"))
     parser.add_option("-o", "--operation", dest="operation", default='check', help="OPERATION for this call",
                       metavar="OPERATION")
     parser.add_option("-m", "--masterList", dest="masterList", help="node list to deploy master", metavar="masterlist")
