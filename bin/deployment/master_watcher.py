@@ -1,7 +1,7 @@
 # coding=utf-8
 # 使用说明：
 # Master的watcher脚本，用过类crontab逻辑来管理，不添加long running逻辑
-# 输入的master和worker部署节点列表，需要是salt能识别的id，测试使用的是ip
+# 输入的master和worker部署节点列表，需要是salt能识别的id
 
 import sys
 import random
@@ -18,15 +18,36 @@ CHECK = 'check'
 BOOTSTRAP = 'bootstrap'
 
 
-def execute_command_with_timeout(command):
-    t = Timeout(30)
+def read_worker_list_file(filename):
+    f = open(filename)
+    worker_list = list()
+    line = f.readline()
+    while line:
+        worker_list.append(line)
+        line = f.readline()
+    f.close()
+    return ','.join(worker_list)
+
+
+def execute_command_with_timeout(command, timeout=300):
+    t = Timeout(timeout)
     try:
         t.start()
         gevent.sleep(0.01)
+        print("command: {}".format(command))
         p = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE,
                              stderr=subprocess.PIPE)
-        outstr, errstr = p.communicate()
-        return p.returncode, outstr, errstr
+
+        output_str = list()
+        while True:
+            output = p.stdout.readline()
+            if output == '' and p.poll() is not None:
+                break
+            if output:
+                print(output.strip())
+                output_str.append(output.strip())
+        rc = p.poll()
+        return rc, ''.join(output_str), ''
     except Timeout as e:
         try:
             p.terminate()
@@ -40,6 +61,8 @@ def execute_command_with_timeout(command):
 # return master host
 def select_master_host(master_list):
     random.shuffle(master_list)
+    print("master list:")
+    print(master_list)
     for host in master_list:
         return_code, _, _ = execute_command_with_timeout("ping -c 1 " + host)
         if return_code == 0:
@@ -105,14 +128,14 @@ def main(argv):
                       metavar="OPERATION")
     parser.add_option("-m", "--masterList", dest="masterList", help="node list to deploy master", metavar="masterlist")
     parser.add_option("-p", "--port", dest="port", type="int", default=80, help="PORT for server", metavar="PORT")
-    parser.add_option("-w", "--workerList", dest="workerList", help="node list to deploy workers", metavar="workerlist")
+    parser.add_option("-f", "--workerListFile", dest="workerListFile", help="worker nodes file", metavar="workerListFile")
 
     (options, args) = parser.parse_args()
     print('options %s ,args %s' % (options, args))
     operation = options.operation
     master_list = options.masterList.split(",")
     port = options.port
-    worker_list = options.workerList
+    worker_list = read_worker_list_file(options.workerListFile)
 
     print("begin to run master watcher")
     try:
@@ -121,7 +144,7 @@ def main(argv):
             restart_cluster(master_list, worker_list, "", port)
         else:
             _, master_address_files, _ = execute_command_with_timeout("hdfs dfs -ls {}".format(MASTER_CHECKER_PATH) +
-                                                                "| awk '{print $8}' | awk -F'/' '{print $NF}'")
+                                                                      "| awk '{print $8}' | awk -F'/' '{print $NF}'")
             has_success = False if SUCCESS_FILE not in master_address_files else True
             print("success file status {}".format(has_success))
             if has_success:
@@ -136,7 +159,7 @@ def main(argv):
                     if not master_alive:
                         restart_cluster(master_list, worker_list, address, port)
                 else:
-                    restart_cluster(address.split(":")[0], worker_list, address, port)
+                    restart_cluster((address.split(":")[0]).split(), worker_list, address, port)
             else:
                 print("please bootstrap first since there is no master address on hdfs!")
     except Exception as ex:

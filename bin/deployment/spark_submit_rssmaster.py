@@ -13,15 +13,25 @@ SUCCESS_FILE = '_SUCCESS'
 MASTER_CHECKER_PATH = '/ess_master_address'
 
 
-def execute_command_with_timeout(command):
-    t = Timeout(30)
+def execute_command_with_timeout(command, timeout=300):
+    t = Timeout(timeout)
     try:
         t.start()
         gevent.sleep(0.01)
+        print("command: {}".format(command))
         p = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE,
                              stderr=subprocess.PIPE)
-        outstr, errstr = p.communicate()
-        return p.returncode, outstr, errstr
+
+        output_str = list()
+        while True:
+            output = p.stdout.readline()
+            if output == '' and p.poll() is not None:
+                break
+            if output:
+                print(output.strip())
+                output_str.append(output.strip())
+        rc = p.poll()
+        return rc, ''.join(output_str), ''
     except Timeout as e:
         try:
             p.terminate()

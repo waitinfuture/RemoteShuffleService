@@ -57,7 +57,7 @@ echo "Start Master"
 echo "sudo salt ${master_host} cmd.run \"${stepinto_workdir} && export USER=$(echo $USER)  && sh sbin/start-master.sh -p ${master_port}\""
 sudo salt ${master_host} cmd.run "${stepinto_workdir} && export USER=$(echo $USER)  && sh sbin/start-master.sh -p ${master_port}" runas=$(echo $USER)
 
-sleep 15
+sleep 3
 
 echo "Start Workers"
 echo "sudo salt -L ${worker_hosts} cmd.run \"${stepinto_workdir} && export USER=$(echo $USER)  && sh sbin/start-worker.sh ess://${master_host}:${master_port}\""
