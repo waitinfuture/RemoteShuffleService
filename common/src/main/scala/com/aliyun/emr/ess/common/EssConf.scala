@@ -582,5 +582,8 @@ object EssConf extends Logging {
   def essMasterPortMaxRetry(conf: EssConf): Int = {
     conf.getInt("ess.master.port.maxretry", 1)
   }
-}
 
+  def essPushDataRetryThreadNum(conf: EssConf): Int = {
+    conf.getInt("ess.pushdata.retry.thread.num", 8)
+  }
+}

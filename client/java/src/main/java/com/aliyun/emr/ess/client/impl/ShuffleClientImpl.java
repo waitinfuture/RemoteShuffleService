@@ -7,6 +7,7 @@ import com.aliyun.emr.ess.common.EssConf;
 import com.aliyun.emr.ess.common.rpc.RpcAddress;
 import com.aliyun.emr.ess.common.rpc.RpcEndpointRef;
 import com.aliyun.emr.ess.common.rpc.RpcEnv;
+import com.aliyun.emr.ess.common.util.ThreadUtils;
 import com.aliyun.emr.ess.common.util.Utils;
 import com.aliyun.emr.ess.protocol.PartitionLocation;
 import com.aliyun.emr.ess.protocol.RpcNameConstants;
@@ -32,6 +33,7 @@ import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
@@ -62,6 +64,9 @@ public class ShuffleClientImpl extends ShuffleClient {
     }
     // key: shuffleId-mapId-attemptId
     private final Map<String, PushState> pushStates = new ConcurrentHashMap<>();
+
+    private ExecutorService pushDataRetryPool;
+
     ThreadLocal<EssLz4Compressor> lz4CompressorThreadLocal = new ThreadLocal<EssLz4Compressor>() {
         @Override
         protected EssLz4Compressor initialValue() {
@@ -118,6 +123,36 @@ public class ShuffleClientImpl extends ShuffleClient {
             new TransportContext(dataTransportConf, new NoOpRpcHandler(), true);
         List<TransportClientBootstrap> bootstraps = Lists.newArrayList();
         dataClientFactory = context.createClientFactory(bootstraps);
+
+        int retryThreadNum = EssConf.essPushDataRetryThreadNum(conf);
+        pushDataRetryPool = ThreadUtils.newDaemonCachedThreadPool("Retry-Sender", retryThreadNum, 60);
+    }
+
+    private void submitRetryPushData(String applicationId,
+                                     int shuffleId,
+                                     byte[] body,
+                                     PartitionLocation loc,
+                                     RpcResponseCallback callback) {
+        int reduceId = loc.getReduceId();
+        if (!revive(applicationId, shuffleId, reduceId,
+            loc.getEpoch(), loc)) {
+            callback.onFailure(new IOException("Revive Failed"));
+        } else {
+            PartitionLocation newLoc = reducePartitionMap.get(shuffleId).get(reduceId);
+            logger.info("revive success " + newLoc);
+            try {
+                TransportClient client = dataClientFactory.createClient(
+                    newLoc.getHost(), newLoc.getPort(), reduceId);
+                NettyManagedBuffer newBuffer =
+                    new NettyManagedBuffer(Unpooled.wrappedBuffer(body));
+                String shuffleKey = Utils.makeShuffleKey(applicationId, shuffleId);
+                PushData newPushData =
+                    new PushData(MASTER_MODE, shuffleKey, newLoc.getUniqueId(), newBuffer);
+                client.pushData(newPushData, callback);
+            } catch (Exception ex) {
+                callback.onFailure(ex);
+            }
+        }
     }
 
     private ConcurrentHashMap<Integer, PartitionLocation> registerShuffle(
@@ -240,7 +275,8 @@ public class ShuffleClientImpl extends ShuffleClient {
                 return false;
             }
         } catch (Exception e) {
-            logger.error("revive exception: "+ shuffleId + "-" + reduceId + "-" + epoch , e);
+            logger.error("revive exception: "+ shuffleId + "-" + reduceId + "-" + epoch
+                + "," + e.toString());
             return false;
         }
     }
@@ -319,8 +355,8 @@ public class ShuffleClientImpl extends ShuffleClient {
 
             @Override
             public void onFailure(Throwable e) {
-                pushState.exception.compareAndSet(null, new IOException(e));
-                logger.error("Revived PushData failed!", e);
+                pushState.exception.compareAndSet(null,
+                    new IOException("Revived PushData failed!", e));
             }
         };
 
@@ -335,28 +371,10 @@ public class ShuffleClientImpl extends ShuffleClient {
                 if (pushState.exception.get() != null) {
                     return;
                 }
-                // revive and push again on failure
-                logger.warn("PushData exception", e);
-                if (revive(applicationId, shuffleId, reduceId, loc.getEpoch(), loc)) {
-                    PartitionLocation newLoc = reducePartitionMap.get(shuffleId).get(reduceId);
-                    logger.info("revive success " + newLoc);
-                    try {
-                        TransportClient client = dataClientFactory.createClient(
-                            newLoc.getHost(), newLoc.getPort(), reduceId);
-                        NettyManagedBuffer newBuffer =
-                            new NettyManagedBuffer(Unpooled.wrappedBuffer(body));
-                        PushData newPushData =
-                            new PushData(MASTER_MODE, shuffleKey, newLoc.getUniqueId(), newBuffer);
-                        client.pushData(newPushData, callback);
-                    } catch (Exception ex) {
-                        logger.error(ex);
-                        callback.onFailure(ex);
-                    }
-                } else {
-                    String msg = "Revive failed!";
-                    logger.error(msg);
-                    callback.onFailure(new IOException(msg));
-                }
+                // async retry pushdata
+                logger.warn("PushData exception, put into retry queue, " + e.toString());
+                pushDataRetryPool.submit(() ->
+                    submitRetryPushData(applicationId, shuffleId, body, loc, callback));
             }
         };
 
@@ -487,5 +505,6 @@ public class ShuffleClientImpl extends ShuffleClient {
         stopped = true;
         rpcEnv.shutdown();
         dataClientFactory.close();
+        pushDataRetryPool.shutdown();
     }
 }

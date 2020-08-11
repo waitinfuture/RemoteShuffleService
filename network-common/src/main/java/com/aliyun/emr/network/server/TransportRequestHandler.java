@@ -307,7 +307,8 @@ public class TransportRequestHandler extends MessageHandler<RequestMessage> {
 
         @Override
         public void onFailure(Throwable e) {
-          respond(new RpcFailure(req.requestId, Throwables.getStackTraceAsString(e)));
+          logger.error("Process pushData onFailure!", e);
+          respond(new RpcFailure(req.requestId, e.toString()));
         }
       });
     } catch (Exception e) {
