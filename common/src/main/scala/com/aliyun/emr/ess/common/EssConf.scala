@@ -464,7 +464,7 @@ object EssConf extends Logging {
   // Conf getters
 
   def essPushDataBufferSize(conf: EssConf): Long = {
-    conf.getSizeAsBytes("ess.push.data.buffer.size", "128k")
+    conf.getSizeAsBytes("ess.push.data.buffer.size", "64k")
   }
 
   def essPushDataQueueCapacity(conf: EssConf): Int = {
@@ -504,7 +504,7 @@ object EssConf extends Logging {
   }
 
   def essWorkerFlushBufferSize(conf: EssConf): Long = {
-    conf.getSizeAsBytes("ess.worker.flush.buffer.size", "512k")
+    conf.getSizeAsBytes("ess.worker.flush.buffer.size", "256k")
   }
 
   def essWorkerFlushQueueCapacity(conf: EssConf): Int = {
