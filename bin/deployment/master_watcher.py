@@ -2,13 +2,13 @@
 # 使用说明：
 # Master的watcher脚本，用过类crontab逻辑来管理，不添加long running逻辑
 # 输入的master和worker部署节点列表，需要是salt能识别的id，测试使用的是ip
-# 依赖python3
 
 import sys
 import random
-import subprocess
 import socket
 import time
+import gevent
+from gevent import subprocess, Timeout
 
 MASTER_ADDRESS_FILE = 'master_address'
 SUCCESS_FILE = '_SUCCESS'
@@ -19,20 +19,30 @@ BOOTSTRAP = 'bootstrap'
 
 
 def execute_command_with_timeout(command):
-    p = subprocess.Popen(command, stdout=subprocess.PIPE, shell=True)
+    t = Timeout(30)
     try:
-        p.wait(5)
-        return p
-    except subprocess.TimeoutExpired as e:
-        p.kill()
-        raise e
+        t.start()
+        gevent.sleep(0.01)
+        p = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE,
+                             stderr=subprocess.PIPE)
+        outstr, errstr = p.communicate()
+        return p.returncode, outstr, errstr
+    except Timeout as e:
+        try:
+            p.terminate()
+        except OSError as e:
+            print("process terminate failed.")
+        return 0x7f, '', 'Timeout'
+    finally:
+        t.cancel()
 
 
 # return master host
 def select_master_host(master_list):
     random.shuffle(master_list)
     for host in master_list:
-        if execute_command_with_timeout("ping -c 1 " + host).returncode == 0:
+        return_code, _, _ = execute_command_with_timeout("ping -c 1 " + host)
+        if return_code == 0:
             return host
     return ""
 
@@ -110,14 +120,13 @@ def main(argv):
             execute_command_with_timeout("hdfs dfs -mkdir {}".format(MASTER_CHECKER_PATH))
             restart_cluster(master_list, worker_list, "", port)
         else:
-            master_address_files = bytes.decode(
-                execute_command_with_timeout("hdfs dfs -ls {}".format(MASTER_CHECKER_PATH) +
-                                             "| awk '{print $8}' | awk -F'/' '{print $NF}'").stdout.read())
+            _, master_address_files, _ = execute_command_with_timeout("hdfs dfs -ls {}".format(MASTER_CHECKER_PATH) +
+                                                                "| awk '{print $8}' | awk -F'/' '{print $NF}'")
             has_success = False if SUCCESS_FILE not in master_address_files else True
             print("success file status {}".format(has_success))
             if has_success:
-                address = bytes.decode(execute_command_with_timeout(
-                    "hdfs dfs -cat {}/{}".format(MASTER_CHECKER_PATH, MASTER_ADDRESS_FILE)).stdout.read())
+                _, address, _ = execute_command_with_timeout("hdfs dfs -cat {}/{}".format(
+                    MASTER_CHECKER_PATH, MASTER_ADDRESS_FILE))
                 print("current master address {}".format(address))
                 if address == "":
                     raise ValueError('address can not be empty!')

@@ -3,8 +3,9 @@
 # 默认5min执行一次检查，如果刚好触发检查的时候再重启呢？目前是重试一定次数来获取
 # 这个脚本不支持rss本身的worker混部
 
-import subprocess
 import time
+import gevent
+from gevent import subprocess, Timeout
 
 MASTER_ADDRESS_FILE = 'master_address'
 MASTER_CHECKER_PATH = '/ess_master_address'
@@ -12,28 +13,35 @@ SUCCESS_FILE = '_SUCCESS'
 
 
 def execute_command_with_timeout(command):
-    p = subprocess.Popen(command, stdout=subprocess.PIPE, shell=True)
+    t = Timeout(30)
     try:
-        p.wait(5)
-        return p
-    except subprocess.TimeoutExpired as e:
-        p.kill()
-        raise e
+        t.start()
+        gevent.sleep(0.01)
+        p = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE,
+                             stderr=subprocess.PIPE)
+        outstr, errstr = p.communicate()
+        return p.returncode, outstr, errstr
+    except Timeout as e:
+        try:
+            p.terminate()
+        except OSError as e:
+            print("process terminate failed.")
+        return 0x7f, '', 'Timeout'
+    finally:
+        t.cancel()
 
 
 def get_master_address():
     print("begin to get master address from hdfs")
     for _ in range(3):
         try:
-            master_address_files = bytes.decode(
-                execute_command_with_timeout("hdfs dfs -ls {}".format(MASTER_CHECKER_PATH) +
-                                             "| awk '{print $8}' | awk -F'/' '{print $NF}'").stdout.read())
+            _, master_address_files, _ = execute_command_with_timeout("hdfs dfs -ls {}".format(MASTER_CHECKER_PATH) +
+                                                                      "| awk '{print $8}' | awk -F'/' '{print $NF}'")
             has_success = False if SUCCESS_FILE not in master_address_files else True
             print("success file status {}".format(has_success))
             if has_success:
-                address = bytes.decode(
-                    execute_command_with_timeout("hdfs dfs -cat {}/{}".format(MASTER_CHECKER_PATH,
-                                                                              MASTER_ADDRESS_FILE)).stdout.read())
+                _, address, _ = execute_command_with_timeout("hdfs dfs -cat {}/{}".format(
+                    MASTER_CHECKER_PATH, MASTER_ADDRESS_FILE))
                 print("current master address {}".format(address))
                 return address
         except Exception as ex:
@@ -45,9 +53,9 @@ def get_master_address():
 def check_worker_process():
     for _ in range(8):
         try:
-            worker_num = int(bytes.decode(
-                execute_command_with_timeout('ps aux | grep Worker | grep ess | wc -l').stdout.read()))
-            if worker_num > 0:
+            _, worker_num, _ = execute_command_with_timeout('ps aux | grep Worker | grep ess | wc -l')
+            # use gevent worker_num return value is begin from 1
+            if int(worker_num) > 1:
                 return True
         except Exception as ex:
             print(ex)
