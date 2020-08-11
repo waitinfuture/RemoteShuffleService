@@ -113,7 +113,7 @@ public class TransportConf {
 
   /** Number of concurrent connections between two nodes for fetching data. */
   public int numConnectionsPerPeer() {
-    return conf.getInt(ESS_NETWORK_IO_NUMCONNECTIONSPERPEER_KEY, 1);
+    return conf.getInt(ESS_NETWORK_IO_NUMCONNECTIONSPERPEER_KEY, 16);
   }
 
   /** Requested maximum length of the queue of incoming connections. Default -1 for no backlog. */
