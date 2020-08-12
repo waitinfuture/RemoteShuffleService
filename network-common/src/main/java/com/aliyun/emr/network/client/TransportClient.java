@@ -37,6 +37,7 @@ import com.google.common.base.Preconditions;
 import com.google.common.base.Throwables;
 import com.google.common.util.concurrent.SettableFuture;
 import io.netty.channel.Channel;
+import io.netty.channel.ChannelFuture;
 import io.netty.util.concurrent.Future;
 import io.netty.util.concurrent.GenericFutureListener;
 import org.slf4j.Logger;
@@ -200,7 +201,7 @@ public class TransportClient implements Closeable {
     return requestId;
   }
 
-  public long pushData(PushData pushData, RpcResponseCallback callback) {
+  public ChannelFuture pushData(PushData pushData, RpcResponseCallback callback) {
     if (logger.isTraceEnabled()) {
       logger.trace("Pushing data to {}", NettyUtils.getRemoteAddress(channel));
     }
@@ -211,9 +212,7 @@ public class TransportClient implements Closeable {
     pushData.requestId = requestId;
 
     RpcChannelListener listener = new RpcChannelListener(requestId, callback);
-    channel.writeAndFlush(pushData).addListener(listener);
-
-    return pushData.requestId;
+    return channel.writeAndFlush(pushData).addListener(listener);
   }
 
   /**

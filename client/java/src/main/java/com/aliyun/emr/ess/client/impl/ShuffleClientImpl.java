@@ -25,6 +25,7 @@ import com.aliyun.emr.network.server.NoOpRpcHandler;
 import com.aliyun.emr.network.util.TransportConf;
 import com.google.common.collect.Lists;
 import io.netty.buffer.Unpooled;
+import io.netty.channel.ChannelFuture;
 import io.netty.util.internal.ConcurrentSet;
 import org.apache.log4j.Logger;
 import scala.reflect.ClassTag$;
@@ -60,7 +61,25 @@ public class ShuffleClientImpl extends ShuffleClient {
     private static class PushState {
         final AtomicInteger batchId = new AtomicInteger();
         final ConcurrentSet<Integer> inFlightBatches = new ConcurrentSet<>();
+        final ConcurrentHashMap<Integer, ChannelFuture> futures = new ConcurrentHashMap<>();
         AtomicReference<IOException> exception = new AtomicReference<>();
+
+        public void addFuture(int batchId, ChannelFuture future) {
+            futures.put(batchId, future);
+        }
+
+        public void removeFuture(int batchId) {
+            futures.remove(batchId);
+        }
+
+        public void cancelFutures() {
+            Set<Integer> keys = new HashSet<>(futures.keySet());
+            logger.info("cancel futures, size " + keys.size());
+            for (Integer batchId : keys) {
+                ChannelFuture future = futures.remove(batchId);
+                future.cancel(true);
+            }
+        }
     }
     // key: shuffleId-mapId-attemptId
     private final Map<String, PushState> pushStates = new ConcurrentHashMap<>();
@@ -131,8 +150,10 @@ public class ShuffleClientImpl extends ShuffleClient {
     private void submitRetryPushData(String applicationId,
                                      int shuffleId,
                                      byte[] body,
+                                     int batchId,
                                      PartitionLocation loc,
-                                     RpcResponseCallback callback) {
+                                     RpcResponseCallback callback,
+                                     PushState pushState) {
         int reduceId = loc.getReduceId();
         if (!revive(applicationId, shuffleId, reduceId,
             loc.getEpoch(), loc)) {
@@ -148,7 +169,8 @@ public class ShuffleClientImpl extends ShuffleClient {
                 String shuffleKey = Utils.makeShuffleKey(applicationId, shuffleId);
                 PushData newPushData =
                     new PushData(MASTER_MODE, shuffleKey, newLoc.getUniqueId(), newBuffer);
-                client.pushData(newPushData, callback);
+                ChannelFuture future = client.pushData(newPushData, callback);
+                pushState.addFuture(batchId, future);
             } catch (Exception ex) {
                 callback.onFailure(ex);
             }
@@ -351,12 +373,14 @@ public class ShuffleClientImpl extends ShuffleClient {
             @Override
             public void onSuccess(ByteBuffer response) {
                 pushState.inFlightBatches.remove(nextBatchId);
+                pushState.removeFuture(nextBatchId);
             }
 
             @Override
             public void onFailure(Throwable e) {
                 pushState.exception.compareAndSet(null,
                     new IOException("Revived PushData failed!", e));
+                pushState.removeFuture(nextBatchId);
             }
         };
 
@@ -374,7 +398,8 @@ public class ShuffleClientImpl extends ShuffleClient {
                 // async retry pushdata
                 logger.warn("PushData exception, put into retry queue, " + e.toString());
                 pushDataRetryPool.submit(() ->
-                    submitRetryPushData(applicationId, shuffleId, body, loc, callback));
+                    submitRetryPushData(applicationId, shuffleId, body, nextBatchId,
+                        loc, callback, pushState));
             }
         };
 
@@ -382,7 +407,8 @@ public class ShuffleClientImpl extends ShuffleClient {
         try {
             TransportClient client =
                 dataClientFactory.createClient(loc.getHost(), loc.getPort(), reduceId);
-            client.pushData(pushData, wrappedCallback);
+            ChannelFuture future = client.pushData(pushData, wrappedCallback);
+            pushState.addFuture(nextBatchId, future);
         } catch (Exception e) {
             wrappedCallback.onFailure(e);
         }
@@ -420,7 +446,11 @@ public class ShuffleClientImpl extends ShuffleClient {
     @Override
     public void cleanup(String applicationId, int shuffleId, int mapId, int attemptId) {
         final String mapKey = Utils.makeMapKey(shuffleId, mapId, attemptId);
-        pushStates.remove(mapKey);
+        PushState pushState = pushStates.remove(mapKey);
+        if (pushState != null) {
+            pushState.exception.compareAndSet(null, new IOException("Cleaned Up"));
+            pushState.cancelFutures();
+        }
     }
 
     @Override
