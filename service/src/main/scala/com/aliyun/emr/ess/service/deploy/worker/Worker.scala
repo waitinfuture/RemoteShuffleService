@@ -86,8 +86,8 @@ private[deploy] class Worker(
     rpcEnv.setupEndpointRef(masterRpcAddress, RpcNameConstants.MASTER_EP)
 
   // worker info
-  private val workerInfo =
-    new WorkerInfo(host, port, fetchPort, EssConf.essWorkerNumSlots(conf), self)
+  private val workerInfo = new WorkerInfo(host, port, fetchPort,
+    EssConf.essWorkerNumSlots(conf, localStorageManager.numDisks), self)
 
   // Threads
   private val forwardMessageScheduler =

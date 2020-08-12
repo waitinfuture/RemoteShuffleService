@@ -515,12 +515,12 @@ object EssConf extends Logging {
     conf.getSizeAsBytes("ess.worker.fetch.chunk.size", "8m")
   }
 
-  def essWorkerNumSlots(conf: EssConf): Int = {
+  def essWorkerNumSlots(conf: EssConf, numDisks: Int): Int = {
     val userNumSlots = conf.getInt("ess.worker.numSlots", -1)
     if (userNumSlots > 0) {
       userNumSlots
     } else {
-      essWorkerFlushQueueCapacity(conf: EssConf) * essWorkerBaseDirNumber(conf) / 2
+      essWorkerFlushQueueCapacity(conf: EssConf) * numDisks / 2
     }
   }
 
