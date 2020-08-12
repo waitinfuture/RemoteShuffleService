@@ -9,8 +9,8 @@ import org.scalatest.junit.JUnitRunner
 @RunWith(classOf[JUnitRunner])
 class WorkerInfoSuite extends FunSuite {
   test("equals") {
-    val workerInfo1 = new WorkerInfo("localhost", 9097, 1024, null)
-    val workerInfo2 = new WorkerInfo("localhost", 9097, 1022, null)
+    val workerInfo1 = new WorkerInfo("localhost", 9097, 9197, 1024, null)
+    val workerInfo2 = new WorkerInfo("localhost", 9097, 9197, 1022, null)
     assert(workerInfo1.equals(workerInfo2))
     assert(workerInfo1 == workerInfo2)
 

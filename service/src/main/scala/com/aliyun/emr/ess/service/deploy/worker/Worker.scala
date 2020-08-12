@@ -43,24 +43,39 @@ private[deploy] class Worker(
     masterRpcAddress: RpcAddress,
     endpointName: String,
     val conf: EssConf)
-  extends RpcEndpoint with DataHandler with Logging {
+  extends RpcEndpoint with PushDataHandler with OpenStreamHandler with Logging {
 
-  private val (dataServer, dataClientFactory) = {
-    val transportConf = Utils.fromEssConf(conf, "data", conf.getInt("ess.data.io.threads", 0))
-    val rpcHandler = new DataRpcHandler(transportConf, this)
+  private val localStorageManager = new LocalStorageManager(conf)
+
+  private val (pushServer, pushClientFactory) = {
+    val numThreads = conf.getInt("ess.push.io.threads", localStorageManager.numDisks * 2)
+    val transportConf = Utils.fromEssConf(conf, "push", numThreads)
+    val rpcHandler = new PushDataRpcHandler(transportConf, this)
     val transportContext: TransportContext =
       new TransportContext(transportConf, rpcHandler, false)
     val serverBootstraps: Seq[TransportServerBootstrap] = Nil
     val clientBootstraps: Seq[TransportClientBootstrap] = Nil
-    (transportContext.createServer(EssConf.essDataServerPort(conf), serverBootstraps),
+    (transportContext.createServer(EssConf.essPushServerPort(conf), serverBootstraps),
       transportContext.createClientFactory(clientBootstraps))
   }
 
+  private val fetchServer = {
+    val numThreads = conf.getInt("ess.fetch.io.threads", localStorageManager.numDisks * 2)
+    val transportConf = Utils.fromEssConf(conf, "fetch", numThreads)
+    val rpcHandler = new ChunkFetchRpcHandler(transportConf, this)
+    val transportContext: TransportContext =
+      new TransportContext(transportConf, rpcHandler, false)
+    val serverBootstraps: Seq[TransportServerBootstrap] = Nil
+    transportContext.createServer(EssConf.essFetchServerPort(conf), serverBootstraps)
+  }
+
   private val host = rpcEnv.address.host
-  private val port = dataServer.getPort
+  private val port = pushServer.getPort
+  private val fetchPort = fetchServer.getPort
 
   Utils.checkHost(host)
   assert(port > 0)
+  assert(fetchPort > 0)
 
   // whether this Worker registered to Master succesfully
   private val registered = new AtomicBoolean(false)
@@ -71,9 +86,8 @@ private[deploy] class Worker(
     rpcEnv.setupEndpointRef(masterRpcAddress, RpcNameConstants.MASTER_EP)
 
   // worker info
-  private val workerInfo = new WorkerInfo(host, port, EssConf.essWorkerNumSlots(conf), self)
-
-  private val localStorageManager = new LocalStorageManager(conf)
+  private val workerInfo =
+    new WorkerInfo(host, port, fetchPort, EssConf.essWorkerNumSlots(conf), self)
 
   // Threads
   private val forwardMessageScheduler =
@@ -101,7 +115,7 @@ private[deploy] class Worker(
 
   override def onStop(): Unit = {
     forwardMessageScheduler.shutdownNow()
-    dataServer.close()
+    pushServer.close()
   }
 
   override def receive: PartialFunction[Any, Unit] = {
@@ -367,7 +381,7 @@ private[deploy] class Worker(
     if (EssConf.essReplicate(conf) && isMaster) {
       try {
         val peer = location.getPeer
-        val client = dataClientFactory.createClient(
+        val client = pushClientFactory.createClient(
           peer.getHost, peer.getPort, location.getReduceId)
         val newPushData = new PushData(PartitionLocation.Mode.Slave.mode(), shuffleKey,
           pushData.partitionUniqueId, pushData.body)
@@ -390,7 +404,8 @@ private[deploy] class Worker(
     }
   }
 
-  override def handleOpenStream(shuffleKey: String, fileName: String): DataHandler.FileInfo = {
+  override def handleOpenStream(
+      shuffleKey: String, fileName: String): OpenStreamHandler.FileInfo = {
     // find FileWriter responsible for the data
     val fileWriter = localStorageManager.getWriter(shuffleKey, fileName)
     if (fileWriter eq null) {
@@ -398,14 +413,14 @@ private[deploy] class Worker(
       logError(msg)
       return null
     }
-    new DataHandler.FileInfo(
+    new OpenStreamHandler.FileInfo(
       fileWriter.getFile, fileWriter.getChunkOffsets, fileWriter.getFileLength)
   }
 
   private def registerWithMaster() {
     logInfo("Trying to register with master")
     var res = masterEndpoint.askSync[RegisterWorkerResponse](
-      RegisterWorker(host, port, workerInfo.numSlots, self)
+      RegisterWorker(host, port, fetchPort, workerInfo.numSlots, self)
     )
     var registerTimeout = EssConf.essRegisterWorkerTimeoutMs(conf)
     val delta = 2000
@@ -415,7 +430,7 @@ private[deploy] class Worker(
       registerTimeout = registerTimeout - delta
       logInfo("Trying to re-register with master")
       res = masterEndpoint.askSync[RegisterWorkerResponse](
-        RegisterWorker(host, port, workerInfo.numSlots, self)
+        RegisterWorker(host, port, fetchPort, workerInfo.numSlots, self)
       )
     }
     logInfo("Registered worker successfully")

@@ -28,7 +28,7 @@ public class PartitionLocation implements Serializable
     private int reduceId;
     private int epoch;
     private String host;
-    private int port;
+    private int port; // push or fetch port for shuffle write/read
     private Mode mode;
     private PartitionLocation peer;
 

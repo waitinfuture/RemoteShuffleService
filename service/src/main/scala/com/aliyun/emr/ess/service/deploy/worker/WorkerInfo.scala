@@ -13,6 +13,7 @@ import com.aliyun.emr.ess.protocol.PartitionLocation
 private[ess] class WorkerInfo(
     val host: String,
     val port: Int,
+    val fetchPort: Int,
     val numSlots: Int,
     val endpoint: RpcEndpointRef)
   extends Serializable with Logging {
@@ -371,6 +372,7 @@ private[ess] class WorkerInfo(
     })
     s"""
        |Address: $hostPort
+       |FetchPort: $fetchPort
        |TotalSlots: $numSlots
        |SlotsUsed: $slotsUsed
        |SlotsAvailable: ${numSlots - slotsUsed}

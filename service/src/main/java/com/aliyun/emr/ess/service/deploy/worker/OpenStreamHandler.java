@@ -1,13 +1,9 @@
 package com.aliyun.emr.ess.service.deploy.worker;
 
 import java.io.File;
-import java.nio.ByteBuffer;
 import java.util.ArrayList;
 
-import com.aliyun.emr.network.protocol.PushData;
-import com.aliyun.emr.network.client.RpcResponseCallback;
-
-public interface DataHandler {
+public interface OpenStreamHandler {
     class FileInfo {
         final File file;
         final ArrayList<Long> chunkOffsets;
@@ -20,6 +16,5 @@ public interface DataHandler {
         }
     }
 
-    void handlePushData(PushData pushData, RpcResponseCallback callback);
     FileInfo handleOpenStream(String shuffleKey, String partitionId);
 }

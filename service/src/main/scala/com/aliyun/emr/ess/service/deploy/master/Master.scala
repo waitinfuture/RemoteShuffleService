@@ -165,9 +165,9 @@ private[deploy] class Master(
   }
 
   override def receiveAndReply(context: RpcCallContext): PartialFunction[Any, Unit] = {
-    case RegisterWorker(host, port, numSlots, worker) =>
+    case RegisterWorker(host, port, fetchPort, numSlots, worker) =>
       logInfo(s"received RegisterWorker request, $host:$port $numSlots")
-      handleRegisterWorker(context, host, port, numSlots, worker)
+      handleRegisterWorker(context, host, port, fetchPort, numSlots, worker)
 
     case RegisterShuffle(applicationId, shuffleId, numMappers, numPartitions) =>
       logDebug(s"received RegisterShuffle request, " +
@@ -319,6 +319,7 @@ private[deploy] class Master(
       context: RpcCallContext,
       host: String,
       port: Int,
+      fetchPort: Int,
       numSlots: Int,
       workerRef: RpcEndpointRef): Unit = {
     logInfo(s"Registering worker $host:$port with $numSlots slots")
@@ -336,7 +337,7 @@ private[deploy] class Master(
       logWarning("Receive RegisterWorker while worker in workerLostEvents")
       context.reply(RegisterWorkerResponse(false, "Worker in workerLostEvents"))
     } else {
-      val worker = new WorkerInfo(host, port, numSlots, workerRef)
+      val worker = new WorkerInfo(host, port, fetchPort, numSlots, workerRef)
       workers.synchronized {
         workers.add(worker)
       }
@@ -710,8 +711,18 @@ private[deploy] class Master(
       if (worker.containsShuffle(shuffleKey)) {
         val masterParts = worker.getAllMasterLocations(shuffleKey)
         val slaveParts = worker.getAllSlaveLocations(shuffleKey)
-        masterParts.foreach(p => masterPartMap.put(p.getUniqueId, p))
-        slaveParts.foreach(p => slavePartMap.put(p.getUniqueId, p))
+        masterParts.foreach { p =>
+          val partition = new PartitionLocation(p)
+          partition.setPort(worker.fetchPort)
+          partition.setPeer(null)
+          masterPartMap.put(partition.getUniqueId, partition)
+        }
+        slaveParts.foreach { p =>
+          val partition = new PartitionLocation(p)
+          partition.setPort(worker.fetchPort)
+          partition.setPeer(null)
+          slavePartMap.put(partition.getUniqueId, partition)
+        }
 
         val masterIds = masterParts.map(_.getUniqueId)
         val slaveIds = slaveParts.map(_.getUniqueId)
@@ -763,13 +774,10 @@ private[deploy] class Master(
     if (!dataLost) {
       val committedPartitions = new util.HashMap[String, PartitionLocation]
       committedMasterIds.foreach { id =>
-        val masterPartition = new PartitionLocation(masterPartMap.get(id))
-        masterPartition.setPeer(null)
-        committedPartitions.put(id, masterPartition)
+        committedPartitions.put(id, masterPartMap.get(id))
       }
       committedSlaveIds.foreach { id =>
-        val slavePartition = new PartitionLocation(slavePartMap.get(id))
-        slavePartition.setPeer(null)
+        val slavePartition = slavePartMap.get(id)
         val masterPartition = committedPartitions.get(id)
         if (masterPartition ne null) {
           masterPartition.setPeer(slavePartition)
@@ -954,7 +962,7 @@ private[deploy] class Master(
       case e: Exception =>
         logError(s"askSync GetWorkerInfos failed", e)
         val result = new util.ArrayList[WorkerInfo]
-        result.add(new WorkerInfo("unknown", -1, 0, null))
+        result.add(new WorkerInfo("unknown", -1, -1, 0, null))
         GetWorkerInfosResponse(StatusCode.Failed, result)
     }
   }

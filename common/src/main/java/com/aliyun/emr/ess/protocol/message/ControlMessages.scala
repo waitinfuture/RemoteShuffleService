@@ -23,13 +23,7 @@ object ControlMessages {
   case class RegisterWorker(
       host: String,
       port: Int,
-      numSlots: Int,
-      worker: RpcEndpointRef)
-    extends MasterMessage
-
-  case class ReregisterWorker(
-      host: String,
-      port: Int,
+      fetchPort: Int,
       numSlots: Int,
       worker: RpcEndpointRef)
     extends MasterMessage
@@ -168,22 +162,4 @@ object ControlMessages {
   case object ThreadDump extends Message
 
   case class ThreadDumpResponse(threadDump: String)
-}
-
-object DataMessages {
-/** ==========================================
- *             handled by master
- *  ==========================================
- */
-
-  /** ==========================================
-   *             handled by worker
-   *  ==========================================
-   */
-
-  /** ==========================================
-   *             handled by client
-   *  ==========================================
-   */
-  case class PushDataResponse(status: StatusCode) extends ClientMessage
 }

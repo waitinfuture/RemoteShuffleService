@@ -476,7 +476,7 @@ object EssConf extends Logging {
   }
 
   def essFetchChunkTimeoutMs(conf: EssConf): Long = {
-    conf.getTimeAsMs("ess.fetch.chunk.timeout", "30s")
+    conf.getTimeAsMs("ess.fetch.chunk.timeout", "120s")
   }
 
   def essFetchChunkMaxReqsInFlight(conf: EssConf): Int = {
@@ -571,8 +571,12 @@ object EssConf extends Logging {
     conf.getTimeAsMs("ess.limit.in.flight.sleep.delta", "50ms")
   }
 
-  def essDataServerPort(conf: EssConf): Int = {
-    conf.getInt("ess.dataserver.port", 0)
+  def essPushServerPort(conf: EssConf): Int = {
+    conf.getInt("ess.pushserver.port", 0)
+  }
+
+  def essFetchServerPort(conf: EssConf): Int = {
+    conf.getInt("ess.fetchserver.port", 0)
   }
 
   def essRegisterWorkerTimeoutMs(conf: EssConf): Long = {

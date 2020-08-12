@@ -362,7 +362,7 @@ object Utils
     customHostname.getOrElse(InetAddresses.toUriString(localIpAddress))
   }
 
-  private val MAX_DEFAULT_NETTY_THREADS = 8
+  private val MAX_DEFAULT_NETTY_THREADS = 64
 
   def fromEssConf(_conf: EssConf, module: String, numUsableCores: Int = 0): TransportConf = {
     val conf = _conf.clone

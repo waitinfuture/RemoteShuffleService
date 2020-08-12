@@ -8,7 +8,6 @@ import java.util.Iterator;
 
 import com.aliyun.emr.network.buffer.FileSegmentManagedBuffer;
 import com.aliyun.emr.network.buffer.ManagedBuffer;
-import com.aliyun.emr.network.protocol.PushData;
 import com.aliyun.emr.network.client.RpcResponseCallback;
 import com.aliyun.emr.network.client.TransportClient;
 import com.aliyun.emr.network.server.OneForOneStreamManager;
@@ -18,15 +17,15 @@ import com.aliyun.emr.network.util.TransportConf;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-public final class DataRpcHandler extends RpcHandler {
+public final class ChunkFetchRpcHandler extends RpcHandler {
 
-    private static final Logger logger = LoggerFactory.getLogger(DataRpcHandler.class);
+    private static final Logger logger = LoggerFactory.getLogger(ChunkFetchRpcHandler.class);
 
     private final TransportConf conf;
-    private final DataHandler handler;
+    private final OpenStreamHandler handler;
     private final OneForOneStreamManager streamManager;
 
-    public DataRpcHandler(TransportConf conf, DataHandler handler) {
+    public ChunkFetchRpcHandler(TransportConf conf, OpenStreamHandler handler) {
         this.conf = conf;
         this.handler = handler;
         streamManager = new OneForOneStreamManager();
@@ -43,7 +42,7 @@ public final class DataRpcHandler extends RpcHandler {
     public void receive(TransportClient client, ByteBuffer message, RpcResponseCallback callback) {
         String shuffleKey = readString(message);
         String fileName = readString(message);
-        DataHandler.FileInfo fileInfo = handler.handleOpenStream(shuffleKey, fileName);
+        OpenStreamHandler.FileInfo fileInfo = handler.handleOpenStream(shuffleKey, fileName);
         if (fileInfo != null) {
             long streamId = streamManager.registerStream(
                     client.getClientId(), new ManagedBufferIterator(fileInfo), client.getChannel());
@@ -56,12 +55,6 @@ public final class DataRpcHandler extends RpcHandler {
         } else {
             callback.onFailure(new FileNotFoundException());
         }
-    }
-
-    @Override
-    public void receivePushData(
-            TransportClient client, PushData pushData, RpcResponseCallback callback) {
-        handler.handlePushData(pushData, callback);
     }
 
     @Override
@@ -91,7 +84,7 @@ public final class DataRpcHandler extends RpcHandler {
 
         private int index;
 
-        ManagedBufferIterator(DataHandler.FileInfo fileInfo) {
+        ManagedBufferIterator(OpenStreamHandler.FileInfo fileInfo) {
             file = fileInfo.file;
             numChunks = fileInfo.chunkOffsets.size();
             offsets = new long[numChunks + 1];

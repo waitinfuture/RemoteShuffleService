@@ -122,6 +122,8 @@ private[worker] final class LocalStorageManager(conf: EssConf) extends Logging {
         new ConcurrentHashMap()
     }
 
+  def numDisks: Int = workingDirs.length
+
   @throws[IOException]
   def createWriter(appId: String, shuffleId: Int, location: PartitionLocation): FileWriter = {
     createWriter(appId, shuffleId, location.getReduceId, location.getEpoch, location.getMode)

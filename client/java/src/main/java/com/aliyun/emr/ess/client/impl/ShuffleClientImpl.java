@@ -137,7 +137,7 @@ public class ShuffleClientImpl extends ShuffleClient {
             , RpcNameConstants.MASTER_EP);
 
         TransportConf dataTransportConf = Utils.fromEssConf(conf, "data",
-            conf.getInt("ess.data.io.threads", 0));
+            conf.getInt("ess.data.io.threads", 8));
         TransportContext context =
             new TransportContext(dataTransportConf, new NoOpRpcHandler(), true);
         List<TransportClientBootstrap> bootstraps = Lists.newArrayList();
