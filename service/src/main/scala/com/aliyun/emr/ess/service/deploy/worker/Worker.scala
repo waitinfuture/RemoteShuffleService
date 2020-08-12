@@ -162,10 +162,15 @@ private[deploy] class Worker(
       masterLocations: util.List[PartitionLocation],
       slaveLocations: util.List[PartitionLocation]): Unit = {
     val masterPartitions = new util.ArrayList[PartitionLocation]()
-    for (ind <- 0 until masterLocations.size()) {
-      val location = masterLocations.get(ind)
-      val writer = localStorageManager.createWriter(applicationId, shuffleId, location)
-      masterPartitions.add(new WorkingPartition(location, writer))
+    try {
+      for (ind <- 0 until masterLocations.size()) {
+        val location = masterLocations.get(ind)
+        val writer = localStorageManager.createWriter(applicationId, shuffleId, location)
+        masterPartitions.add(new WorkingPartition(location, writer))
+      }
+    } catch {
+      case e: Exception =>
+        logError(s"createWriter for $applicationId-$shuffleId failed", e)
     }
     if (masterPartitions.size() < masterLocations.size()) {
       logInfo("not all master partition satisfied, destroy writers")
@@ -175,10 +180,15 @@ private[deploy] class Worker(
     }
 
     val slavePartitions = new util.ArrayList[PartitionLocation]()
-    for (ind <- 0 until slaveLocations.size()) {
-      val location = slaveLocations.get(ind)
-      val writer = localStorageManager.createWriter(applicationId, shuffleId, location)
-      slavePartitions.add(new WorkingPartition(slaveLocations.get(ind), writer))
+    try {
+      for (ind <- 0 until slaveLocations.size()) {
+        val location = slaveLocations.get(ind)
+        val writer = localStorageManager.createWriter(applicationId, shuffleId, location)
+        slavePartitions.add(new WorkingPartition(location, writer))
+      }
+    } catch {
+      case e: Exception =>
+        logError(s"createWriter for $applicationId-$shuffleId failed", e)
     }
     if (slavePartitions.size() < slaveLocations.size()) {
       logError("not all slave partition satisfied, destroy writers")
@@ -341,6 +351,7 @@ private[deploy] class Worker(
       logInfo("finished handle destroy")
       context.reply(DestroyResponse(StatusCode.Success, null, null))
     } else {
+      logWarning("finished handle destroy PartialSuccess")
       context.reply(DestroyResponse(StatusCode.PartialSuccess, failedMasters, failedSlaves))
     }
   }
