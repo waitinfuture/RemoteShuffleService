@@ -7,8 +7,7 @@ import sys
 import random
 import socket
 import time
-import gevent
-from gevent import subprocess, Timeout
+import subprocess, threading
 
 MASTER_ADDRESS_FILE = 'master_address'
 SUCCESS_FILE = '_SUCCESS'
@@ -18,41 +17,53 @@ CHECK = 'check'
 BOOTSTRAP = 'bootstrap'
 
 
+class Command(object):
+    def __init__(self, cmd):
+        self.cmd = cmd
+        self.process = None
+        self.outstr = ""
+        self.rc = None
+
+    def run(self, timeout):
+        def target():
+            print('Thread started')
+            self.process = subprocess.Popen(self.cmd, shell=True, stdout=subprocess.PIPE,
+                                            stderr=subprocess.PIPE)
+            output_str = list()
+            while True:
+                output = self.process.stdout.readline()
+                if output == '' and self.process.poll() is not None:
+                    break
+                if output:
+                    print(output.strip())
+                    output_str.append(output.strip())
+            self.rc = self.process.poll()
+            self.outstr = ''.join(output_str)
+            print('Thread finished')
+
+        thread = threading.Thread(target=target)
+        thread.start()
+
+        thread.join(timeout)
+        if thread.is_alive():
+            print('Command {} process timeout , terminating process'.format(self.cmd))
+            self.process.terminate()
+            thread.join()
+        return self.rc, self.outstr, ""
+
+
+def execute_command_with_timeout(command, timeout=15):
+    print("command: {}".format(command))
+    command = Command(command)
+    return Command.run(command, timeout)
+
+
 def read_worker_list_file(filename):
     f = open(filename)
     content = f.readlines()
     f.close()
     content = [x.strip() for x in content]
     return ','.join(content)
-
-
-def execute_command_with_timeout(command, timeout=300):
-    t = Timeout(timeout)
-    try:
-        t.start()
-        gevent.sleep(0.01)
-        print("command: {}".format(command))
-        p = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE,
-                             stderr=subprocess.PIPE)
-
-        output_str = list()
-        while True:
-            output = p.stdout.readline()
-            if output == '' and p.poll() is not None:
-                break
-            if output:
-                print(output.strip())
-                output_str.append(output.strip())
-        rc = p.poll()
-        return rc, ''.join(output_str), ''
-    except Timeout as e:
-        try:
-            p.terminate()
-        except OSError as e:
-            print("process terminate failed.")
-        return 0x7f, '', 'Timeout'
-    finally:
-        t.cancel()
 
 
 # return master host
@@ -78,7 +89,7 @@ def restart_cluster(master_list, worker_list, old_master, port):
         if master_node == "":
             raise ValueError('there is no alive master node to start master service!')
         execute_command_with_timeout(
-            'sh restart_cluster.sh {} {} {} {}'.format(master_node, port, worker_list, old_master_host))
+            'sh restart_cluster.sh {} {} {} {}'.format(master_node, port, worker_list, old_master_host), 300)
 
         if start_check("{}:{}".format(master_node, port)):
             # write master address
@@ -125,7 +136,8 @@ def main(argv):
                       metavar="OPERATION")
     parser.add_option("-m", "--masterList", dest="masterList", help="node list to deploy master", metavar="masterlist")
     parser.add_option("-p", "--port", dest="port", type="int", default=80, help="PORT for server", metavar="PORT")
-    parser.add_option("-f", "--workerListFile", dest="workerListFile", help="worker nodes file", metavar="workerListFile")
+    parser.add_option("-f", "--workerListFile", dest="workerListFile", help="worker nodes file",
+                      metavar="workerListFile")
 
     (options, args) = parser.parse_args()
     print('options %s ,args %s' % (options, args))

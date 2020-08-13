@@ -24,15 +24,19 @@ old_master_host=$1
 #    exit 1
 #fi
 
+echo "Make user directory"
+echo "sudo salt -L ${worker_hosts} cmd.run \"export USER=$(echo $USER) && mkdir /home/$(echo $USER)\""
+sudo salt -L ${worker_hosts} cmd.run "export USER=$(echo $USER) && mkdir /home/$(echo $USER)"
+
 echo "Copy ess package"
 # https://github.com/saltstack/salt/issues/16592
 # 低于2017的salt版本只能使用cp.get_dir，否则可以使用chunk模式 https://github.com/saltstack/salt/pull/41216
-#sudo tar -zxvf ess-1.0.0-release.tgz
 #sudo salt -L ${worker_hosts} cp.get_dir salt://ess-1.0.0-bin-release /home/$(echo $USER)/ess-1.0.0-bni-release
+echo "sudo salt -L ${worker_hosts} cp.get_file salt://ess-1.0.0-release.tgz /home/$(echo $USER)/ess-1.0.0-release.tgz"
 sudo salt -L ${worker_hosts} cp.get_file salt://ess-1.0.0-release.tgz /home/$(echo $USER)/ess-1.0.0-release.tgz
 
 echo "Make ess work directory"
-make_work_dir="cd /home/$(echo $USER) && tar -zxvf ess-1.0.0-release.tgz && cd ess-1.0.0-bin-release"
+make_work_dir="export USER=$(echo $USER) && cd /home/$(echo $USER) && su - $USER -c 'tar -zxvf ess-1.0.0-release.tgz' && cd ess-1.0.0-bin-release"
 echo "sudo salt ${old_master_host} cmd.run \"${make_work_dir}\""
 sudo salt -L ${worker_hosts} cmd.run "${make_work_dir}"
 

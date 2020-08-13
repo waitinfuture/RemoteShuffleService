@@ -5,41 +5,52 @@
 
 import socket
 import time
-import gevent
-from gevent import subprocess, Timeout
+import subprocess, threading
 
 MASTER_ADDRESS_FILE = 'master_address'
 SUCCESS_FILE = '_SUCCESS'
 MASTER_CHECKER_PATH = '/ess_master_address'
 
 
-def execute_command_with_timeout(command, timeout=300):
-    t = Timeout(timeout)
-    try:
-        t.start()
-        gevent.sleep(0.01)
-        print("command: {}".format(command))
-        p = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE,
-                             stderr=subprocess.PIPE)
+class Command(object):
+    def __init__(self, cmd):
+        self.cmd = cmd
+        self.process = None
+        self.outstr = ""
+        self.rc = None
 
-        output_str = list()
-        while True:
-            output = p.stdout.readline()
-            if output == '' and p.poll() is not None:
-                break
-            if output:
-                print(output.strip())
-                output_str.append(output.strip())
-        rc = p.poll()
-        return rc, ''.join(output_str), ''
-    except Timeout as e:
-        try:
-            p.terminate()
-        except OSError as e:
-            print("process terminate failed.")
-        return 0x7f, '', 'Timeout'
-    finally:
-        t.cancel()
+    def run(self, timeout):
+        def target():
+            print('Thread started')
+            self.process = subprocess.Popen(self.cmd, shell=True, stdout=subprocess.PIPE,
+                                            stderr=subprocess.PIPE)
+            output_str = list()
+            while True:
+                output = self.process.stdout.readline()
+                if output == '' and self.process.poll() is not None:
+                    break
+                if output:
+                    print(output.strip())
+                    output_str.append(output.strip())
+            self.rc = self.process.poll()
+            self.outstr = ''.join(output_str)
+            print('Thread finished')
+
+        thread = threading.Thread(target=target)
+        thread.start()
+
+        thread.join(timeout)
+        if thread.is_alive():
+            print('Command {} process timeout , terminating process'.format(self.cmd))
+            self.process.terminate()
+            thread.join()
+        return self.rc, self.outstr, ""
+
+
+def execute_command_with_timeout(command, timeout=15):
+    print("command: {}".format(command))
+    command = Command(command)
+    return Command.run(command, timeout)
 
 
 def start_check(address):
