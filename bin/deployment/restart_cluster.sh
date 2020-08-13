@@ -25,8 +25,8 @@ old_master_host=$1
 #fi
 
 echo "Make user directory"
-echo "sudo salt -L ${worker_hosts} cmd.run \"export USER=$(echo $USER) && mkdir /home/$(echo $USER)\""
-sudo salt -L ${worker_hosts} cmd.run "export USER=$(echo $USER) && mkdir /home/$(echo $USER)"
+echo "sudo salt -L ${worker_hosts} cmd.run \"export USER=$(echo $USER) && mkdir -p /home/$(echo $USER)\""
+sudo salt -L ${worker_hosts} cmd.run "export USER=$(echo $USER) && mkdir -p /home/$(echo $USER)"
 
 echo "Copy ess package"
 # https://github.com/saltstack/salt/issues/16592
@@ -37,6 +37,9 @@ sudo salt -L ${worker_hosts} cp.get_file salt://ess-1.0.0-release.tgz /home/$(ec
 
 echo "Make ess work directory"
 make_work_dir="export USER=$(echo $USER) && cd /home/$(echo $USER) && su - $USER -c 'tar -zxvf ess-1.0.0-release.tgz' && cd ess-1.0.0-bin-release"
+if [ "$USER" == "root" ];then
+  make_work_dir="export USER=$(echo $USER) && cd /home/$(echo $USER) && tar -zxvf ess-1.0.0-release.tgz && cd ess-1.0.0-bin-release"
+fi
 echo "sudo salt ${old_master_host} cmd.run \"${make_work_dir}\""
 sudo salt -L ${worker_hosts} cmd.run "${make_work_dir}"
 
