@@ -84,6 +84,11 @@ private[worker] final class LocalStorageManager(conf: EssConf) extends Logging {
 
   workingDirs.foreach { dir =>
     dir.mkdirs()
+    // since mkdirs do not throw any exception,
+    // we should check directory status by create a test file
+    val file = new File(dir, s"_SUCCESS_${System.currentTimeMillis()}")
+    file.createNewFile()
+    file.delete()
   }
 
   private val diskFlushers = {
