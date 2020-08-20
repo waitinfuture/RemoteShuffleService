@@ -10,7 +10,7 @@ public class EssLz4Compressor extends EssLz4CompressorTrait {
     private final int compressionLevel;
     private final LZ4Compressor compressor;
     private final Checksum checksum;
-    private final byte[] compressedBuffer;
+    private byte[] compressedBuffer;
     private int compressedTotalSize;
 
     public EssLz4Compressor() {
@@ -22,8 +22,12 @@ public class EssLz4Compressor extends EssLz4CompressorTrait {
         this.compressionLevel = Math.max(0, level);
         this.compressor = LZ4Factory.fastestInstance().fastCompressor();
         checksum = XXHashFactory.fastestInstance().newStreamingHash32(DEFAULT_SEED).asChecksum();
-        final int compressedBlockSize = HEADER_LENGTH + compressor.maxCompressedLength(blockSize);
-        this.compressedBuffer = new byte[compressedBlockSize];
+        initCompressBuffer(blockSize);
+    }
+
+    private void initCompressBuffer(int size) {
+        int compressedBlockSize = HEADER_LENGTH + compressor.maxCompressedLength(size);
+        compressedBuffer = new byte[compressedBlockSize];
         System.arraycopy(MAGIC, 0, compressedBuffer, 0, MAGIC_LENGTH);
     }
 
@@ -31,6 +35,9 @@ public class EssLz4Compressor extends EssLz4CompressorTrait {
         checksum.reset();
         checksum.update(data, offset, length);
         final int check = (int) checksum.getValue();
+        if (compressedBuffer.length - HEADER_LENGTH < length) {
+            initCompressBuffer(length);
+        }
         int compressedLength = compressor.compress(data, offset, length, compressedBuffer, HEADER_LENGTH);
         final int compressMethod;
         if (compressedLength >= length) {

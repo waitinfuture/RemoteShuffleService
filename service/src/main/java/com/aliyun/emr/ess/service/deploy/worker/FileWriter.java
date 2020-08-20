@@ -87,8 +87,15 @@ public final class FileWriter {
         flushBuffer.flip();
         notifier.numPendingFlushes.incrementAndGet();
         FlushTask task = new FlushTask(flushBuffer, channel, notifier);
-        flusher.addTask(task);
+        addTask(task);
         flushBuffer = null;
+    }
+
+    private void flush(ByteBuffer giantBatch) throws IOException {
+        notifier.checkException();
+        notifier.numPendingFlushes.incrementAndGet();
+        FlushTask task = new FlushTask(giantBatch, channel, notifier);
+        addTask(task);
     }
 
     /**
@@ -115,13 +122,18 @@ public final class FileWriter {
 
             final int numBytes = data.readableBytes();
 
-            if (flushBuffer.position() + numBytes >= flushBuffer.capacity()) {
-                flush();
-                takeBuffer();
-            }
+            if (flushBuffer.capacity() < numBytes) {
+                flush(data.nioBuffer());
+                logger.info("flush giant record, size " + numBytes);
+            } else {
+                if (flushBuffer.position() + numBytes >= flushBuffer.capacity()) {
+                    flush();
+                    takeBuffer();
+                }
 
-            flushBuffer.limit(flushBuffer.position() + numBytes);
-            data.getBytes(data.readerIndex(), flushBuffer);
+                flushBuffer.limit(flushBuffer.position() + numBytes);
+                data.getBytes(data.readerIndex(), flushBuffer);
+            }
 
             bytesWritten += numBytes;
             numPendingWrites.decrementAndGet();
@@ -193,6 +205,14 @@ public final class FileWriter {
         flushBuffer = flusher.takeBuffer(timeoutMs);
         if (flushBuffer == null) {
             IOException e = new IOException("take buffer timeout");
+            notifier.setException(e);
+            throw e;
+        }
+    }
+
+    private void addTask(FlushTask task) throws IOException {
+        if (!flusher.addTask(task, timeoutMs)) {
+            IOException e = new IOException("add flush task timeout");
             notifier.setException(e);
             throw e;
         }

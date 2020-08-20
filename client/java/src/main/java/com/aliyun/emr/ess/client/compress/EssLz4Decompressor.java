@@ -17,6 +17,10 @@ public class EssLz4Decompressor extends EssLz4CompressorTrait {
         checksum = XXHashFactory.fastestInstance().newStreamingHash32(DEFAULT_SEED).asChecksum();
     }
 
+    public int getOriginalLen(byte[] src) {
+        return readIntLE(src, MAGIC_LENGTH + 5);
+    }
+
     public int decompress(byte[] src, byte[] dst, int dstOff) {
         int token = src[MAGIC_LENGTH] & 0xFF;
         int compressionMethod = token & 0xF0;

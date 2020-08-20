@@ -43,7 +43,10 @@ private[worker] final class DiskFlusher(
           }
         }
 
-        returnBuffer(task.buffer)
+        // return pre-allocated buffer to bufferQueue
+        if (task.buffer.capacity() == bufferSize) {
+          returnBuffer(task.buffer)
+        }
         task.notifier.numPendingFlushes.decrementAndGet()
       }
     }
@@ -66,8 +69,8 @@ private[worker] final class DiskFlusher(
     bufferQueue.put(buffer)
   }
 
-  def addTask(task: FlushTask): Unit = {
-    workingQueue.put(task)
+  def addTask(task: FlushTask, timeoutMs: Long): Boolean = {
+    workingQueue.offer(task, timeoutMs, TimeUnit.MILLISECONDS)
   }
 
   def bufferQueueInfo(): String = s"${worker.getName} available buffers: ${bufferQueue.size()}"

@@ -310,17 +310,21 @@ public class EssShuffleWriter<K, V, C> extends ShuffleWriter<K, V> {
                 peakMemoryUsedBytes += SEND_BUFFER_SIZE;
             }
 
-            int offset = sendOffsets[partitionId];
-            if ((SEND_BUFFER_SIZE - offset) < serializedRecordSize) {
-                flushSendBuffer(partitionId, buffer, offset);
-                updateMapStatus();
-                offset = 0;
-            }
+            if (serializedRecordSize > SEND_BUFFER_SIZE) {
+                pushGiantRecord(partitionId);
+            } else {
+                int offset = sendOffsets[partitionId];
+                if ((SEND_BUFFER_SIZE - offset) < serializedRecordSize) {
+                    flushSendBuffer(partitionId, buffer, offset);
+                    updateMapStatus();
+                    offset = 0;
+                }
 
-            Platform.putInt(buffer, Platform.BYTE_ARRAY_OFFSET + offset, Integer.reverseBytes(rowSize));
-            Platform.copyMemory(row.getBaseObject(), row.getBaseOffset(),
-                buffer, Platform.BYTE_ARRAY_OFFSET + offset + 4, rowSize);
-            sendOffsets[partitionId] = offset + serializedRecordSize;
+                Platform.putInt(buffer, Platform.BYTE_ARRAY_OFFSET + offset, Integer.reverseBytes(rowSize));
+                Platform.copyMemory(row.getBaseObject(), row.getBaseOffset(),
+                    buffer, Platform.BYTE_ARRAY_OFFSET + offset + 4, rowSize);
+                sendOffsets[partitionId] = offset + serializedRecordSize;
+            }
             tmpLengths[partitionId] += serializedRecordSize;
             tmpRecords[partitionId] += 1;
         }
@@ -348,17 +352,41 @@ public class EssShuffleWriter<K, V, C> extends ShuffleWriter<K, V> {
                 peakMemoryUsedBytes += SEND_BUFFER_SIZE;
             }
 
-            int offset = sendOffsets[partitionId];
-            if ((SEND_BUFFER_SIZE - offset) < serializedRecordSize) {
-                flushSendBuffer(partitionId, buffer, offset);
-                updateMapStatus();
-                offset = 0;
+            if (serializedRecordSize > SEND_BUFFER_SIZE) {
+                pushGiantRecord(partitionId);
+            } else {
+                int offset = sendOffsets[partitionId];
+                if ((SEND_BUFFER_SIZE - offset) < serializedRecordSize) {
+                    flushSendBuffer(partitionId, buffer, offset);
+                    updateMapStatus();
+                    offset = 0;
+                }
+                System.arraycopy(serBuffer.getBuf(), 0, buffer, offset, serializedRecordSize);
+                sendOffsets[partitionId] = offset + serializedRecordSize;
             }
-            System.arraycopy(serBuffer.getBuf(), 0, buffer, offset, serializedRecordSize);
-            sendOffsets[partitionId] = offset + serializedRecordSize;
             tmpLengths[partitionId] += serializedRecordSize;
             tmpRecords[partitionId] += 1;
         }
+    }
+
+    private void pushGiantRecord(int partitionId) throws IOException {
+        int numBytes = serBuffer.size();
+        logger.info("push giant record, size " + numBytes);
+        long pushStartTime = System.nanoTime();
+        essShuffleClient.pushData(
+            appId,
+            shuffleId,
+            mapId,
+            taskContext.attemptNumber(),
+            partitionId,
+            serBuffer.getBuf(),
+            0,
+            numBytes,
+            numMappers,
+            numPartitions
+        );
+        writeMetrics.incBytesWritten(serBuffer.size());
+        writeMetrics.incWriteTime(System.nanoTime() - pushStartTime);
     }
 
     private void flushSendBuffer(int partitionId, byte[] buffer, int size) throws IOException {

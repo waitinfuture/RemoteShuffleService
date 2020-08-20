@@ -76,8 +76,8 @@ public abstract class EssInputStream extends InputStream {
 
         private final Map<Integer, Set<Integer>> batchesRead = new HashMap<>();
 
-        private final byte[] compressedBuf;
-        private final byte[] decompressedBuf;
+        private byte[] compressedBuf;
+        private byte[] decompressedBuf;
         private final EssLz4Decompressor decompressor;
 
         private ByteBuf currentChunk;
@@ -245,6 +245,9 @@ public abstract class EssInputStream extends InputStream {
                 int attemptId = Platform.getInt(sizeBuf, Platform.BYTE_ARRAY_OFFSET + 4);
                 int batchId = Platform.getInt(sizeBuf, Platform.BYTE_ARRAY_OFFSET + 8);
                 int size = Platform.getInt(sizeBuf, Platform.BYTE_ARRAY_OFFSET + 12);
+                if (size > compressedBuf.length) {
+                    compressedBuf = new byte[size];
+                }
 
                 currentChunk.readBytes(compressedBuf, 0, size);
 
@@ -261,6 +264,10 @@ public abstract class EssInputStream extends InputStream {
                             callback.incBytesWritten(size);
                         }
                         // decompress data
+                        int originalLength = decompressor.getOriginalLen(compressedBuf);
+                        if (decompressedBuf.length < originalLength) {
+                            decompressedBuf = new byte[originalLength];
+                        }
                         limit = decompressor.decompress(compressedBuf, decompressedBuf, 0);
                         position = 0;
                         hasData = true;
