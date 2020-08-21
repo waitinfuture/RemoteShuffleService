@@ -35,6 +35,7 @@ import scala.collection.Map
 import scala.util.Try
 import scala.util.control.{ControlThrowable, NonFatal}
 
+import com.aliyun.emr.ess.common.metrics.source.AbstractSource
 import com.aliyun.emr.network.util.{ConfigProvider, JavaUtils, TransportConf}
 
 object Utils

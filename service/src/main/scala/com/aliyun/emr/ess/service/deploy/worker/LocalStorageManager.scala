@@ -9,10 +9,10 @@ import java.util.concurrent.{ConcurrentHashMap, LinkedBlockingQueue, TimeUnit}
 import java.util.function.IntUnaryOperator
 
 import scala.collection.JavaConversions._
-
 import com.aliyun.emr.ess.common.EssConf
 import com.aliyun.emr.ess.common.internal.Logging
 import com.aliyun.emr.ess.common.util.{ThreadUtils, Utils}
+import com.aliyun.emr.ess.common.metrics.source.AbstractSource
 import com.aliyun.emr.ess.protocol.PartitionLocation
 
 private[worker] case class FlushTask(
@@ -21,7 +21,7 @@ private[worker] case class FlushTask(
     notifier: FileWriter.FlushNotifier)
 
 private[worker] final class DiskFlusher(
-    index: Int, queueCapacity: Int, bufferSize: Int) extends Logging {
+    index: Int, queueCapacity: Int, bufferSize: Int, workerSource: AbstractSource) extends Logging {
   private val workingQueue = new LinkedBlockingQueue[FlushTask](queueCapacity)
   private val bufferQueue = new LinkedBlockingQueue[ByteBuffer](queueCapacity)
   for (_ <- 0 until queueCapacity) {
@@ -33,21 +33,24 @@ private[worker] final class DiskFlusher(
       while (true) {
         val task = workingQueue.take()
 
-        if (!task.notifier.hasException) {
-          try {
-            task.fileChannel.write(task.buffer)
-          } catch {
-            case e: IOException =>
-              logError(s"[DiskFlusher] write failed ${e.getMessage}")
-              task.notifier.setException(e)
+        val key = s"DiskFlusher-$index"
+        workerSource.sample(WorkerSource.FLUSH_DATA_TIME, key) {
+          if (!task.notifier.hasException) {
+            try {
+              task.fileChannel.write(task.buffer)
+            } catch {
+              case e: IOException =>
+                logError(s"[DiskFlusher] write failed ${e.getMessage}")
+                task.notifier.setException(e)
+            }
           }
-        }
 
         // return pre-allocated buffer to bufferQueue
         if (task.buffer.capacity() == bufferSize) {
           returnBuffer(task.buffer)
         }
         task.notifier.numPendingFlushes.decrementAndGet()
+        }
       }
     }
   }
@@ -76,7 +79,7 @@ private[worker] final class DiskFlusher(
   def bufferQueueInfo(): String = s"${worker.getName} available buffers: ${bufferQueue.size()}"
 }
 
-private[worker] final class LocalStorageManager(conf: EssConf) extends Logging {
+private[worker] final class LocalStorageManager(conf: EssConf, workerSource: AbstractSource) extends Logging {
 
   import LocalStorageManager._
 
@@ -97,7 +100,7 @@ private[worker] final class LocalStorageManager(conf: EssConf) extends Logging {
   private val diskFlushers = {
     val queueCapacity = EssConf.essWorkerFlushQueueCapacity(conf)
     val flushBufferSize = EssConf.essWorkerFlushBufferSize(conf).toInt
-    (1 to workingDirs.length).map(i => new DiskFlusher(i, queueCapacity, flushBufferSize)).toArray
+    (1 to workingDirs.length).map(i => new DiskFlusher(i, queueCapacity, flushBufferSize, workerSource)).toArray
   }
 
   private val fetchChunkSize = EssConf.essWorkerFetchChunkSize(conf)

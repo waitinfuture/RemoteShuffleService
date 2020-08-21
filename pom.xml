@@ -51,6 +51,8 @@
         <CodeCacheSize>512m</CodeCacheSize>
         <scala.version>2.11.12</scala.version>
         <scala.binary.version>2.11</scala.binary.version>
+        <codahale.metrics.version>3.2.6</codahale.metrics.version>
+        <javaxservlet.version>3.1.0</javaxservlet.version>
     </properties>
 
     <repositories>
@@ -170,12 +172,6 @@
                 <scope>compile</scope>
             </dependency>
             <dependency>
-                <groupId>io.dropwizard.metrics</groupId>
-                <artifactId>metrics-core</artifactId>
-                <version>3.1.5</version>
-                <scope>compile</scope>
-            </dependency>
-            <dependency>
                 <groupId>com.google.code.findbugs</groupId>
                 <artifactId>jsr305</artifactId>
                 <version>1.3.9</version>
@@ -208,6 +204,11 @@
                         <groupId>org.objenesis</groupId>
                     </exclusion>
                 </exclusions>
+            </dependency>
+            <dependency>
+                <groupId>io.dropwizard.metrics</groupId>
+                <artifactId>metrics-core</artifactId>
+                <version>${codahale.metrics.version}</version>
             </dependency>
         </dependencies>
     </dependencyManagement>

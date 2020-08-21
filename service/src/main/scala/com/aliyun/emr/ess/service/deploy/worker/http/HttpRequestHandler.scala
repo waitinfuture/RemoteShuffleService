@@ -1,4 +1,4 @@
-package com.aliyun.emr.ess.service.deploy.master.http
+package com.aliyun.emr.ess.service.deploy.worker.http
 
 import com.aliyun.emr.ess.common.internal.Logging
 import com.aliyun.emr.ess.common.metrics.sink.PrometheusHttpRequestHandler
@@ -6,12 +6,11 @@ import com.aliyun.emr.ess.service.deploy.master.Master
 import io.netty.buffer.Unpooled
 import io.netty.channel.ChannelHandler.Sharable
 import io.netty.channel.{ChannelFutureListener, ChannelHandlerContext, SimpleChannelInboundHandler}
-import io.netty.handler.codec.http.{DefaultFullHttpResponse, FullHttpRequest, HttpHeaderNames, HttpResponseStatus, HttpVersion}
-import io.netty.util.{CharsetUtil, ReferenceCountUtil}
+import io.netty.handler.codec.http._
+import io.netty.util.CharsetUtil
 
 @Sharable
-class HttpRequestHandler(val master: Master,
-                         prometheusHttpRequestHandler: PrometheusHttpRequestHandler)
+class HttpRequestHandler(prometheusHttpRequestHandler: PrometheusHttpRequestHandler)
   extends SimpleChannelInboundHandler[FullHttpRequest] with Logging{
 
   private val INVALID = "invalid"
@@ -22,33 +21,14 @@ class HttpRequestHandler(val master: Master,
 
   override def channelRead0(ctx: ChannelHandlerContext, req: FullHttpRequest): Unit = {
     val uri = req.uri()
-    val msg = handleRequest(uri)
-    val response = msg match {
-      case INVALID =>
-        if (prometheusHttpRequestHandler != null) {
-          prometheusHttpRequestHandler.handleRequest(uri)
-        } else {
-          s"invalid uri ${uri}"
-        }
-      case _ => msg
-    }
+    val msg = prometheusHttpRequestHandler.handleRequest(uri)
 
     val res = new DefaultFullHttpResponse(
       HttpVersion.HTTP_1_1,
       HttpResponseStatus.OK,
-      Unpooled.copiedBuffer(response, CharsetUtil.UTF_8)
+      Unpooled.copiedBuffer(msg, CharsetUtil.UTF_8)
     )
     res.headers().set(HttpHeaderNames.CONTENT_TYPE, "text/html; charset=UTF-8");
     ctx.writeAndFlush(res).addListener(ChannelFutureListener.CLOSE);
-  }
-
-  def handleRequest(uri: String): String = {
-    uri match {
-      case "/workerInfo" =>
-        master.getWorkerInfos()
-      case "/threadDump" =>
-        master.getThreadDump()
-      case _ => INVALID
-    }
   }
 }

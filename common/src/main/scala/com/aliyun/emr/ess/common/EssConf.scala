@@ -590,4 +590,25 @@ object EssConf extends Logging {
   def essPushDataRetryThreadNum(conf: EssConf): Int = {
     conf.getInt("ess.pushdata.retry.thread.num", 8)
   }
+
+  def essMetricsSystemEnable(conf: EssConf): Boolean = {
+    conf.getBoolean("ess.metrics.system.enable", defaultValue = true)
+  }
+
+  def essMetricsTimerSlidingSize(conf: EssConf): Int = {
+    conf.getInt("ess.metrics.system.timer.sliding.size", 4000)
+  }
+
+  // 0 to 1.0
+  def essMetricsSampleRate(conf: EssConf): Double = {
+    conf.getDouble("ess.metrics.system.sample.rate", 1)
+  }
+
+  def essMetricsSlidingWindowSize(conf: EssConf): Int = {
+    conf.getInt("ess.metrics.system.sliding.window.size", 4096)
+  }
+
+  def essInnerMetricsSize(conf: EssConf): Int = {
+    conf.getInt("ess.inner.metrics.size", 4096)
+  }
 }

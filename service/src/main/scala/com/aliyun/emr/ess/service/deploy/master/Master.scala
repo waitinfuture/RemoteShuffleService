@@ -6,20 +6,25 @@ import java.util.concurrent.{ConcurrentHashMap, ScheduledFuture, TimeUnit}
 import scala.collection.JavaConversions._
 
 import com.aliyun.emr.ess.common.EssConf
+import com.aliyun.emr.ess.common.http.{HttpServer, HttpServerInitializer}
 import com.aliyun.emr.ess.common.internal.Logging
+import com.aliyun.emr.ess.common.metrics.MetricsSystem
+import com.aliyun.emr.ess.common.metrics.source.{GaugeSupplier, NamedGauge}
 import com.aliyun.emr.ess.common.rpc._
 import com.aliyun.emr.ess.common.util.{ThreadUtils, Utils}
 import com.aliyun.emr.ess.protocol.{PartitionLocation, RpcNameConstants}
 import com.aliyun.emr.ess.protocol.message.ControlMessages._
 import com.aliyun.emr.ess.protocol.message.StatusCode
-import com.aliyun.emr.ess.service.deploy.master.http.HttpServer
+import com.aliyun.emr.ess.service.deploy.master.http.HttpRequestHandler
 import com.aliyun.emr.ess.service.deploy.worker.WorkerInfo
+import com.codahale.metrics.MetricRegistry
 import io.netty.util.internal.ConcurrentSet
 
 private[deploy] class Master(
     override val rpcEnv: RpcEnv,
     address: RpcAddress,
-    val conf: EssConf)
+    val conf: EssConf,
+    val metricsSystem: MetricsSystem)
   extends RpcEndpoint with Logging {
 
   type WorkerResource = java.util.Map[WorkerInfo,
@@ -50,6 +55,15 @@ private[deploy] class Master(
   private val stageEndShuffleSet = new ConcurrentSet[String]()
   private val shuffleAllocatedWorkers = new ConcurrentHashMap[String, ConcurrentSet[WorkerInfo]]()
 
+  // init and register master metrics com.aliyun.emr.ess.common.metrics.source
+  private val masterSource = {
+    val source = new MasterSource(conf)
+    source.addGauge(MasterSource.REGISTERED_SHUFFLE_COUNT, _ => registeredShuffle.size())
+    source.addGauge(MasterSource.BLACKLISTED_WORKER_COUNT, _ => blacklist.size())
+    metricsSystem.registerSource(source)
+    source
+  }
+
   // revive request waiting for response
   // shuffleKey -> (partitionId -> set)
   private val reviving =
@@ -63,11 +77,6 @@ private[deploy] class Master(
 
   // workerLost events
   private val workerLostEvents = new ConcurrentSet[String]()
-
-  // http server
-  val httpServer = new HttpServer(9098, this)
-  httpServer.start()
-  logInfo("[Master] httpServer started")
 
   // start threads to check timeout for workers and applications
   override def onStart(): Unit = {
@@ -146,6 +155,7 @@ private[deploy] class Master(
     // add into blacklist
     if (failed != null) {
       failed.foreach(w => blacklist.add(w.hostPort))
+      masterSource.incCounter(MasterSource.BLACKLISTED_WORKER_COUNT, failed.size())
     }
 
     failed
@@ -173,11 +183,14 @@ private[deploy] class Master(
       logDebug(s"received RegisterShuffle request, " +
         s"$applicationId, $shuffleId, $numMappers, $numPartitions")
       handleRegisterShuffle(context, applicationId, shuffleId, numMappers, numPartitions)
+      masterSource.incCounter(MasterSource.REGISTERED_SHUFFLE_COUNT)
 
     case Revive(applicationId, shuffleId, reduceId, epoch, oldPartition) =>
-      logDebug(s"received Revive request, $applicationId, $shuffleId, " +
-        s"$reduceId-$epoch $oldPartition")
-      handleRevive(context, applicationId, shuffleId, reduceId, epoch, oldPartition)
+      val key = s"$applicationId, $shuffleId, $reduceId-$epoch"
+      logDebug(s"received Revive request, $key $oldPartition")
+      masterSource.sample(MasterSource.REVIVE_TIME, key) {
+        handleRevive(context, applicationId, shuffleId, reduceId, epoch, oldPartition)
+      }
 
     case MapperEnd(applicationId, shuffleId, mapId, attemptId, numMappers) =>
       logDebug(s"received MapperEnd request, $applicationId, $shuffleId, $mapId, $attemptId")
@@ -265,7 +278,9 @@ private[deploy] class Master(
     worker.synchronized {
       worker.lastHeartbeat = System.currentTimeMillis()
     }
-    blacklist.remove(host + ":" + port)
+    if (blacklist.remove(host + ":" + port)) {
+      masterSource.decCounter(MasterSource.BLACKLISTED_WORKER_COUNT)
+    }
 
     val expiredShuffleKeys = new util.HashSet[String]
     shuffleKeys.foreach { shuffleKey =>
@@ -291,7 +306,9 @@ private[deploy] class Master(
       workers.remove(worker)
     }
     // delete from blacklist
-    blacklist.remove(worker.hostPort)
+    if (blacklist.remove(worker.hostPort)) {
+      masterSource.decCounter(MasterSource.BLACKLISTED_WORKER_COUNT)
+    }
 
     logInfo("Finished to process WorkerLost!")
     workerLostEvents.remove(worker.hostPort)
@@ -477,6 +494,7 @@ private[deploy] class Master(
       if (worker != null && !worker.isActive()) {
         logWarning(s"add ${worker.hostPort} to blacklist")
         blacklist.add(hostPort)
+        masterSource.incCounter(MasterSource.BLACKLISTED_WORKER_COUNT)
       }
     }
 
@@ -925,12 +943,15 @@ private[deploy] class Master(
 
   private def requestReserveBuffers(
     endpoint: RpcEndpointRef, message: ReserveBuffers): ReserveBuffersResponse = {
-    try {
-      endpoint.askSync[ReserveBuffersResponse](message)
-    } catch {
-      case e: Exception =>
-        logError("askSync ReserveBuffers failed", e)
-        ReserveBuffersResponse(StatusCode.Failed)
+    val key = s"${message.applicationId} ${message.shuffleId}"
+    masterSource.sample(MasterSource.RESERVE_BUFFER_TIME, key) {
+      try {
+        endpoint.askSync[ReserveBuffersResponse](message)
+      } catch {
+        case e: Exception =>
+          logError("askSync ReserveBuffers failed", e)
+          ReserveBuffersResponse(StatusCode.Failed)
+      }
     }
   }
 
@@ -946,12 +967,14 @@ private[deploy] class Master(
 
   private def requestCommitFiles(
       endpoint: RpcEndpointRef, message: CommitFiles): CommitFilesResponse = {
-    try {
-      endpoint.askSync[CommitFilesResponse](message)
-    } catch {
-      case e: Exception =>
-        logError(s"askSync CommitFiles failed", e)
-        CommitFilesResponse(StatusCode.Failed, null, null, message.masterIds, message.slaveIds)
+    masterSource.sample(MasterSource.COMMIT_FILES_TIME, message.shuffleKey) {
+      try {
+        endpoint.askSync[CommitFilesResponse](message)
+      } catch {
+        case e: Exception =>
+          logError(s"askSync CommitFiles failed", e)
+          CommitFilesResponse(StatusCode.Failed, null, null, message.masterIds, message.slaveIds)
+      }
     }
   }
 
@@ -981,14 +1004,30 @@ private[deploy] class Master(
 private[deploy] object Master extends Logging {
   def main(args: Array[String]): Unit = {
     val conf = new EssConf()
+
+    val metricsSystem = MetricsSystem.createMetricsSystem("master", conf)
+
     val masterArgs = new MasterArguments(args, conf)
     val rpcEnv = RpcEnv.create(
       RpcNameConstants.MASTER_SYS,
       masterArgs.host,
       masterArgs.port,
       conf)
-    rpcEnv.setupEndpoint(RpcNameConstants.MASTER_EP,
-      new Master(rpcEnv, rpcEnv.address, conf))
+    val master = new Master(rpcEnv, rpcEnv.address, conf, metricsSystem)
+    rpcEnv.setupEndpoint(RpcNameConstants.MASTER_EP, master)
+
+    val handlers = if (EssConf.essMetricsSystemEnable(conf)) {
+      logInfo(s"Metrics system enabled!")
+      metricsSystem.start()
+      new HttpRequestHandler(master, metricsSystem.getPrometheusHandler)
+    } else {
+      new HttpRequestHandler(master, null)
+    }
+
+    val httpServer = new HttpServer(new HttpServerInitializer(handlers), 9098)
+    httpServer.start()
+    logInfo("[Master] httpServer started")
+
     rpcEnv.awaitTermination()
   }
 }

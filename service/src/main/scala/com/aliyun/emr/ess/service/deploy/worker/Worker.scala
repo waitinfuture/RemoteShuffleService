@@ -24,17 +24,21 @@ import java.util.concurrent.{Future, LinkedBlockingQueue, TimeUnit}
 import java.util.concurrent.atomic.AtomicBoolean
 
 import scala.collection.JavaConversions._
-
 import com.aliyun.emr.ess.common.EssConf
+import com.aliyun.emr.ess.common.http.{HttpServer, HttpServerInitializer}
 import com.aliyun.emr.ess.common.internal.Logging
+import com.aliyun.emr.ess.common.metrics.MetricsSystem
 import com.aliyun.emr.ess.common.rpc._
 import com.aliyun.emr.ess.common.util.{ThreadUtils, Utils}
+import com.aliyun.emr.ess.common.metrics.source. NetWorkSource
 import com.aliyun.emr.ess.protocol.{PartitionLocation, RpcNameConstants}
 import com.aliyun.emr.ess.protocol.message.ControlMessages._
 import com.aliyun.emr.ess.protocol.message.StatusCode
 import com.aliyun.emr.network.TransportContext
 import com.aliyun.emr.network.buffer.NettyManagedBuffer
 import com.aliyun.emr.network.client.{RpcResponseCallback, TransportClientBootstrap}
+import com.aliyun.emr.ess.common.metrics.source.NetWorkSource
+import com.aliyun.emr.ess.service.deploy.worker.http.HttpRequestHandler
 import com.aliyun.emr.network.protocol.PushData
 import com.aliyun.emr.network.server.TransportServerBootstrap
 
@@ -42,10 +46,19 @@ private[deploy] class Worker(
     override val rpcEnv: RpcEnv,
     masterRpcAddress: RpcAddress,
     endpointName: String,
-    val conf: EssConf)
+    val conf: EssConf,
+    val metricsSystem: MetricsSystem)
   extends RpcEndpoint with PushDataHandler with OpenStreamHandler with Logging {
 
-  private val localStorageManager = new LocalStorageManager(conf)
+  // init and register master metrics com.aliyun.emr.ess.common.metrics.source
+  private val workerSource = {
+    val source = new WorkerSource(conf)
+    metricsSystem.registerSource(source)
+    metricsSystem.registerSource(new NetWorkSource(conf))
+    source
+  }
+
+  private val localStorageManager = new LocalStorageManager(conf, workerSource)
 
   private val (pushServer, pushClientFactory) = {
     val numThreads = conf.getInt("ess.push.io.threads", localStorageManager.numDisks * 2)
@@ -89,6 +102,8 @@ private[deploy] class Worker(
   private val workerInfo = new WorkerInfo(host, port, fetchPort,
     EssConf.essWorkerNumSlots(conf, localStorageManager.numDisks), self)
 
+  workerSource.addGauge(WorkerSource.REGISTERED_SHUFFLE_COUNT, _ => workerInfo.shuffleKeySet().size())
+
   // Threads
   private val forwardMessageScheduler =
     ThreadUtils.newDaemonSingleThreadScheduledExecutor("worker-forward-message-scheduler")
@@ -130,17 +145,22 @@ private[deploy] class Worker(
 
   override def receiveAndReply(context: RpcCallContext): PartialFunction[Any, Unit] = {
     case ReserveBuffers(applicationId, shuffleId, masterLocations, slaveLocations) =>
-      logInfo(s"received ReserveBuffers request, $applicationId $shuffleId")
-      handleReserveBuffers(context, applicationId, shuffleId, masterLocations, slaveLocations)
+      val key = s"$applicationId $shuffleId"
+      workerSource.sample(WorkerSource.RESERVE_BUFFER_TIME, key) {
+        logInfo(s"received ReserveBuffers request, $key")
+        handleReserveBuffers(context, applicationId, shuffleId, masterLocations, slaveLocations)
+      }
 
     case CommitFiles(shuffleKey, masterIds, slaveIds) =>
-      logInfo(s"receive CommitFiles request, $shuffleKey, " +
-        s"master files ${masterIds.mkString(",")} slave files ${slaveIds.mkString(",")}")
-      val commitFilesTimeMs = Utils.timeIt({
-        handleCommitFiles(context, shuffleKey, masterIds, slaveIds)
-      })
-      logInfo(s"Done processed CommitFiles request with shuffleKey:$shuffleKey, in " +
-        s"${commitFilesTimeMs}ms")
+      workerSource.sample(WorkerSource.COMMIT_FILES_TIME, shuffleKey) {
+        logInfo(s"receive CommitFiles request, $shuffleKey, " +
+          s"master files ${masterIds.mkString(",")} slave files ${slaveIds.mkString(",")}")
+        val commitFilesTimeMs = Utils.timeIt({
+          handleCommitFiles(context, shuffleKey, masterIds, slaveIds)
+        })
+        logInfo(s"Done processed CommitFiles request with shuffleKey:$shuffleKey, in " +
+          s"${commitFilesTimeMs}ms")
+      }
 
     case GetWorkerInfos =>
       logInfo("received GetWorkerInfos request")
@@ -368,6 +388,20 @@ private[deploy] class Worker(
   }
 
   override def handlePushData(pushData: PushData, callback: RpcResponseCallback): Unit = {
+    val key = s"${pushData.requestId}"
+    workerSource.startTimer(WorkerSource.PUSH_DATA_TIME, key)
+    val wrappedCallback = new RpcResponseCallback() {
+      override def onSuccess(response: ByteBuffer): Unit = {
+        workerSource.stopTimer(WorkerSource.PUSH_DATA_TIME, key)
+        callback.onSuccess(response)
+      }
+
+      override def onFailure(e: Throwable): Unit = {
+        workerSource.stopTimer(WorkerSource.PUSH_DATA_TIME, key)
+        callback.onFailure(e)
+      }
+    }
+
     val shuffleKey = pushData.shuffleKey
     val mode = PartitionLocation.getMode(pushData.mode)
     val body = pushData.body.asInstanceOf[NettyManagedBuffer].getBuf
@@ -381,7 +415,7 @@ private[deploy] class Worker(
     if (location == null) {
       val msg = s"Partition Location not found!, ${pushData.partitionUniqueId}, $mode $shuffleKey"
       logError(msg)
-      callback.onFailure(new IOException(msg))
+      wrappedCallback.onFailure(new IOException(msg))
       return
     }
     val fileWriter = location.asInstanceOf[WorkingPartition].getFileWriter
@@ -397,13 +431,13 @@ private[deploy] class Worker(
         val newPushData = new PushData(PartitionLocation.Mode.Slave.mode(), shuffleKey,
           pushData.partitionUniqueId, pushData.body)
         pushData.body().retain()
-        client.pushData(newPushData, callback)
+        client.pushData(newPushData, wrappedCallback)
       } catch {
         case e: Exception =>
-          callback.onFailure(e)
+          wrappedCallback.onFailure(e)
       }
     } else {
-      callback.onSuccess(ByteBuffer.wrap(new Array[Byte](0)))
+      wrappedCallback.onSuccess(ByteBuffer.wrap(new Array[Byte](0)))
     }
 
     try {
@@ -492,6 +526,8 @@ private[deploy] object Worker extends Logging {
     val conf = new EssConf
     val workerArgs = new WorkerArguments(args, conf)
 
+    val metricsSystem = MetricsSystem.createMetricsSystem("worker", conf)
+
     val rpcEnv = RpcEnv.create(RpcNameConstants.WORKER_SYS,
       workerArgs.host,
       workerArgs.port,
@@ -499,7 +535,18 @@ private[deploy] object Worker extends Logging {
 
     val masterAddresses = RpcAddress.fromEssURL(workerArgs.master)
     rpcEnv.setupEndpoint(RpcNameConstants.WORKER_EP,
-      new Worker(rpcEnv, masterAddresses, RpcNameConstants.WORKER_EP, conf))
+      new Worker(rpcEnv, masterAddresses, RpcNameConstants.WORKER_EP, conf, metricsSystem))
+
+    if (EssConf.essMetricsSystemEnable(conf)) {
+      logInfo(s"Metrics system enabled!")
+      metricsSystem.start()
+
+      val httpServer = new HttpServer(
+        new HttpServerInitializer(new HttpRequestHandler(metricsSystem.getPrometheusHandler)), 9096)
+      httpServer.start()
+      logInfo("[Worker] httpServer started")
+    }
+
     rpcEnv.awaitTermination()
   }
 }
