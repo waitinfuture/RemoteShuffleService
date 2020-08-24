@@ -133,6 +133,9 @@ private[deploy] class Master(
     case StageEnd(applicationId, shuffleId) =>
       logInfo(s"received StageEnd request, $applicationId, $shuffleId")
       handleStageEnd(null, applicationId, shuffleId)
+    case UnregisterShuffle(appId, shuffleId) =>
+      logInfo(s"received UnregisterShuffle request, $appId-$shuffleId")
+      handleUnregisterShuffle(null, appId, shuffleId)
   }
 
   def reserveBuffers(
@@ -227,10 +230,6 @@ private[deploy] class Master(
     case MasterPartitionSuicide(shuffleKey, location) =>
       logInfo(s"received MasterPartitionSuicide request, $location")
       handleMasterPartitionSuicide(context, shuffleKey, location)
-
-    case UnregisterShuffle(appId, shuffleId) =>
-      logInfo(s"received UnregisterShuffle request, $appId-$shuffleId")
-      handleUnregisterShuffle(context, appId, shuffleId)
 
     case ApplicationLost(appId) =>
       logInfo(s"received ApplicationLost request, $appId")
