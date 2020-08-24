@@ -126,7 +126,6 @@ abstract class AbstractSource(essConf: EssConf)
   def recordGauge(ng: NamedGauge[_]): Unit = {
     val timestamp = System.currentTimeMillis()
     val sb = new StringBuilder
-    sb.append(s"${normalizeKey(ng.name)}Number$guagesLabel ${ng.gaurge.getValue} $timestamp\n")
     sb.append(s"${normalizeKey(ng.name)}Value$guagesLabel ${ng.gaurge.getValue} $timestamp\n")
 
     updateInnerMetrics(sb.toString())

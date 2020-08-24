@@ -9,7 +9,6 @@ import com.aliyun.emr.ess.common.EssConf
 import com.aliyun.emr.ess.common.http.{HttpServer, HttpServerInitializer}
 import com.aliyun.emr.ess.common.internal.Logging
 import com.aliyun.emr.ess.common.metrics.MetricsSystem
-import com.aliyun.emr.ess.common.metrics.source.{GaugeSupplier, NamedGauge}
 import com.aliyun.emr.ess.common.rpc._
 import com.aliyun.emr.ess.common.util.{ThreadUtils, Utils}
 import com.aliyun.emr.ess.protocol.{PartitionLocation, RpcNameConstants}
@@ -17,7 +16,6 @@ import com.aliyun.emr.ess.protocol.message.ControlMessages._
 import com.aliyun.emr.ess.protocol.message.StatusCode
 import com.aliyun.emr.ess.service.deploy.master.http.HttpRequestHandler
 import com.aliyun.emr.ess.service.deploy.worker.WorkerInfo
-import com.codahale.metrics.MetricRegistry
 import io.netty.util.internal.ConcurrentSet
 
 private[deploy] class Master(
@@ -35,16 +33,21 @@ private[deploy] class Master(
     ThreadUtils.newDaemonSingleThreadScheduledExecutor("master-forward-message-thread")
   private var checkForWorkerTimeOutTask: ScheduledFuture[_] = _
   private var checkForApplicationTimeOutTask: ScheduledFuture[_] = _
+  private var checkForShuffleRemoval: ScheduledFuture[_] = _
+  private val nonEagerHandler = ThreadUtils.newDaemonCachedThreadPool("master-noneager-handler", 64)
 
   // Configs
   private val WORKER_TIMEOUT_MS = EssConf.essWorkerTimeoutMs(conf)
   private val APPLICATION_TIMEOUT_MS = EssConf.essApplicationTimeoutMs(conf)
+  private val REMOVE_SHUFFLE_DELAY_MS = EssConf.essRemoveShuffleDelayMs(conf)
 
   // States
   private val workers = new util.ArrayList[WorkerInfo]()
   private def workersSnapShot = workers.synchronized(new util.ArrayList[WorkerInfo](workers))
 
   private val appHeartbeatTime = new util.HashMap[String, Long]()
+  private val unregisterShuffleTime = new ConcurrentHashMap[String, Long]()
+  private val hostnameSet = new ConcurrentSet[String]()
 
   // key: "appId_shuffleId"
   private val registeredShuffle = new ConcurrentSet[String]()
@@ -58,8 +61,9 @@ private[deploy] class Master(
   // init and register master metrics com.aliyun.emr.ess.common.metrics.source
   private val masterSource = {
     val source = new MasterSource(conf)
-    source.addGauge(MasterSource.REGISTERED_SHUFFLE_COUNT, _ => registeredShuffle.size())
+    source.addGauge(MasterSource.REGISTERED_SHUFFLE_COUNT, _ => registeredShuffle.size() - unregisterShuffleTime.size())
     source.addGauge(MasterSource.BLACKLISTED_WORKER_COUNT, _ => blacklist.size())
+    source.addGauge[String](MasterSource.SHUFFLE_MANAGER_HOSTNAME_LIST, _ => getHostnameList())
     metricsSystem.registerSource(source)
     source
   }
@@ -91,6 +95,12 @@ private[deploy] class Master(
         self.send(CheckForApplicationTimeOut)
       }
     }, 0, APPLICATION_TIMEOUT_MS / 2, TimeUnit.MILLISECONDS)
+    
+    checkForShuffleRemoval = forwardMessageThread.scheduleAtFixedRate(new Runnable {
+      override def run(): Unit = Utils.tryLogNonFatalError {
+        self.send(RemoveExpiredShuffle)
+      }
+    }, 0, REMOVE_SHUFFLE_DELAY_MS, TimeUnit.MILLISECONDS)
   }
 
   override def onStop(): Unit = {
@@ -113,6 +123,8 @@ private[deploy] class Master(
       timeoutDeadWorkers()
     case CheckForApplicationTimeOut =>
       timeoutDeadApplications()
+    case RemoveExpiredShuffle =>
+      removeExpiredShuffle()
     case WorkerLost(host, port) =>
       logInfo(s"received WorkerLost, $host:$port")
       handleWorkerLost(null, host, port)
@@ -179,10 +191,10 @@ private[deploy] class Master(
       logInfo(s"received RegisterWorker request, $host:$port $numSlots")
       handleRegisterWorker(context, host, port, fetchPort, numSlots, worker)
 
-    case RegisterShuffle(applicationId, shuffleId, numMappers, numPartitions) =>
+    case RegisterShuffle(applicationId, shuffleId, numMappers, numPartitions, hostname) =>
       logDebug(s"received RegisterShuffle request, " +
         s"$applicationId, $shuffleId, $numMappers, $numPartitions")
-      handleRegisterShuffle(context, applicationId, shuffleId, numMappers, numPartitions)
+      handleRegisterShuffle(context, applicationId, shuffleId, numMappers, numPartitions, hostname)
       masterSource.incCounter(MasterSource.REGISTERED_SHUFFLE_COUNT)
 
     case Revive(applicationId, shuffleId, reduceId, epoch, oldPartition) =>
@@ -260,6 +272,25 @@ private[deploy] class Master(
           logError("HandleApplicationLost failed more than 3 times!")
         }
         appHeartbeatTime.remove(key)
+      }
+    }
+  }
+  
+  private def removeExpiredShuffle(): Unit = {
+    logInfo("check for expired shuffle")
+    val currentTime = System.currentTimeMillis()
+    val keys = unregisterShuffleTime.keys().toList
+    keys.foreach { key =>
+      if (unregisterShuffleTime.get(key) < currentTime - REMOVE_SHUFFLE_DELAY_MS) {
+        logInfo(s"clear shuffle $key")
+        // clear for the shuffle
+        registeredShuffle.remove(key)
+        registerShuffleRequest.remove(key)
+        reducerFileGroupsMap.remove(key)
+        dataLostShuffleSet.remove(key)
+        shuffleAllocatedWorkers.remove(key)
+        stageEndShuffleSet.remove(key)
+        reviving.remove(key)
       }
     }
   }
@@ -368,8 +399,13 @@ private[deploy] class Master(
       applicationId: String,
       shuffleId: Int,
       numMappers: Int,
-      numPartitions: Int): Unit = {
+      numPartitions: Int,
+      hostname: String): Unit = {
     val shuffleKey = Utils.makeShuffleKey(applicationId, shuffleId)
+
+    if (hostname != null) {
+      hostnameSet.add(hostname)
+    }
 
     // check if same request already exists for the same shuffle.
     // If do, just register and return
@@ -448,9 +484,7 @@ private[deploy] class Master(
     shuffleAllocatedWorkers.put(shuffleKey, allocatedWorkers)
 
     // register shuffle success, update status
-    registeredShuffle.synchronized {
-      registeredShuffle.add(shuffleKey)
-    }
+    registeredShuffle.add(shuffleKey)
     val locations: List[PartitionLocation] = slots.flatMap(_._2._1).toList
     shuffleMapperAttempts.synchronized {
       if (!shuffleMapperAttempts.containsKey(shuffleKey)) {
@@ -689,9 +723,7 @@ private[deploy] class Master(
     if (!registeredShuffle.contains(shuffleKey)) {
       logInfo(s"[handleStageEnd] shuffle $shuffleKey not registered, maybe no shuffle data")
       // record in stageEndShuffleSet
-      stageEndShuffleSet.synchronized {
-        stageEndShuffleSet.add(shuffleKey)
-      }
+      stageEndShuffleSet.add(shuffleKey)
       if (context != null) {
         context.reply(StageEndResponse(StatusCode.ShuffleNotRegistered, null))
       }
@@ -844,7 +876,7 @@ private[deploy] class Master(
     // if StageEnd has not been handled, trigger StageEnd
     if (!stageEndShuffleSet.contains(shuffleKey)) {
       logInfo(s"Call StageEnd before Unregister Shuffle $shuffleKey")
-      self.send(StageEnd(appId, shuffleId))
+      handleStageEnd(null, appId, shuffleId)
     }
 
     if (partitionExists(shuffleKey)) {
@@ -860,34 +892,35 @@ private[deploy] class Master(
       logInfo(s"Remove from shuffleMapperAttempts, $shuffleKey")
       shuffleMapperAttempts.remove(shuffleKey)
     }
-    // clear for the shuffle
-    registeredShuffle.remove(shuffleKey)
-    registerShuffleRequest.remove(shuffleKey)
-    reducerFileGroupsMap.remove(shuffleKey)
-    dataLostShuffleSet.remove(shuffleKey)
-    shuffleAllocatedWorkers.remove(shuffleKey)
-    reviving.remove(shuffleKey)
+    // add shuffleKey to delay shuffle removal set
+    unregisterShuffleTime.put(shuffleKey, System.currentTimeMillis())
 
     logInfo("unregister success")
-    context.reply(UnregisterShuffleResponse(StatusCode.Success))
+    if (context != null) {
+      context.reply(UnregisterShuffleResponse(StatusCode.Success))
+    }
   }
 
   def handleApplicationLost(context: RpcCallContext, appId: String): Unit = {
-    val expiredShuffles = registeredShuffle.filter(_.startsWith(appId))
-    expiredShuffles.foreach { key =>
-      val splits = key.split("-")
-      val appId = splits.dropRight(1).mkString("-")
-      val shuffleId = splits.last.toInt
-      self.ask(UnregisterShuffle(appId, shuffleId))
-    }
+    nonEagerHandler.submit(new Runnable {
+      override def run(): Unit = {
+        val expiredShuffles = registeredShuffle.filter(_.startsWith(appId))
+        expiredShuffles.foreach { key =>
+          val splits = key.split("-")
+          val appId = splits.dropRight(1).mkString("-")
+          val shuffleId = splits.last.toInt
+          handleUnregisterShuffle(null, appId, shuffleId)
+        }
 
-    logInfo("Finished handling ApplicationLost")
-    context.reply(ApplicationLostResponse(StatusCode.Success))
+        logInfo("Finished handling ApplicationLost")
+        context.reply(ApplicationLostResponse(StatusCode.Success))
+      }
+    })
   }
 
   private def handleHeartBeatFromApplication(appId: String): Unit = {
     appHeartbeatTime.synchronized {
-      logInfo("heartbeat from application " + appId)
+      logInfo(s"heartbeat from application, appId $appId")
       appHeartbeatTime.put(appId, System.currentTimeMillis())
     }
   }
@@ -939,6 +972,10 @@ private[deploy] class Master(
     })
 
     sb.toString()
+  }
+
+  def getHostnameList(): String = {
+    hostnameSet.mkString(",")
   }
 
   private def requestReserveBuffers(

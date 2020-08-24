@@ -495,6 +495,10 @@ object EssConf extends Logging {
     conf.getTimeAsMs("ess.application.timeout", "120s")
   }
 
+  def essRemoveShuffleDelayMs(conf: EssConf): Long = {
+    conf.getTimeAsMs("ess.remove.shuffle.delay", "60s")
+  }
+
   def essMasterHost(conf: EssConf): String = {
     conf.get("ess.master.host", Utils.localHostName())
   }

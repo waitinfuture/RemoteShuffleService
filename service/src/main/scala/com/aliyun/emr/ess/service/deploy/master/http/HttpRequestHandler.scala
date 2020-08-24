@@ -48,6 +48,8 @@ class HttpRequestHandler(val master: Master,
         master.getWorkerInfos()
       case "/threadDump" =>
         master.getThreadDump()
+      case "/hostnames" =>
+        master.getHostnameList()
       case _ => INVALID
     }
   }

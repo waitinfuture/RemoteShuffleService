@@ -20,6 +20,8 @@ object ControlMessages {
 
   case object CheckForApplicationTimeOut
 
+  case object RemoveExpiredShuffle
+
   case class RegisterWorker(
       host: String,
       port: Int,
@@ -39,7 +41,8 @@ object ControlMessages {
       applicationId: String,
       shuffleId: Int,
       numMappers: Int,
-      numPartitions: Int)
+      numPartitions: Int,
+      hostname: String)
     extends MasterMessage
 
   case class RegisterShuffleResponse(

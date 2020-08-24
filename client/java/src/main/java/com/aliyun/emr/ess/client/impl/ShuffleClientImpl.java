@@ -31,6 +31,8 @@ import org.apache.log4j.Logger;
 import scala.reflect.ClassTag$;
 
 import java.io.IOException;
+import java.net.InetAddress;
+import java.net.UnknownHostException;
 import java.nio.ByteBuffer;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
@@ -53,6 +55,8 @@ public class ShuffleClientImpl extends ShuffleClient {
     private RpcEndpointRef master;
 
     private TransportClientFactory dataClientFactory;
+
+    private InetAddress ia = null;
 
     // key: shuffleId, value: (reduceId, PartitionLocation)
     private final Map<Integer, ConcurrentHashMap<Integer, PartitionLocation>> reducePartitionMap =
@@ -183,7 +187,7 @@ public class ShuffleClientImpl extends ShuffleClient {
         while (numRetries > 0) {
             try {
                 RegisterShuffleResponse response = master.askSync(
-                    new RegisterShuffle(applicationId, shuffleId, numMappers, numPartitions),
+                    new RegisterShuffle(applicationId, shuffleId, numMappers, numPartitions, getLocalHost()),
                     ClassTag$.MODULE$.apply(RegisterShuffleResponse.class)
                 );
 
@@ -455,15 +459,17 @@ public class ShuffleClientImpl extends ShuffleClient {
 
     @Override
     public boolean unregisterShuffle(String applicationId, int shuffleId) {
-        UnregisterShuffleResponse response = master.askSync(
-            new UnregisterShuffle(applicationId, shuffleId),
-            ClassTag$.MODULE$.apply(UnregisterShuffleResponse.class));
+        try {
+            master.send(new UnregisterShuffle(applicationId, shuffleId));
+        } catch (Exception e) {
+            logger.error("Send UnregisterShuffle failed, ignore", e);
+        }
 
         // clear status
         reducePartitionMap.remove(shuffleId);
         reduceFileGroupsMap.remove(shuffleId);
 
-        return response.status().equals(StatusCode.Success);
+        return true;
     }
 
     @Override
@@ -536,5 +542,17 @@ public class ShuffleClientImpl extends ShuffleClient {
         rpcEnv.shutdown();
         dataClientFactory.close();
         pushDataRetryPool.shutdown();
+    }
+
+    private synchronized String getLocalHost() {
+        if (ia == null) {
+            try {
+                ia = InetAddress.getLocalHost();
+            } catch (UnknownHostException e) {
+                logger.error("Unknown host", e);
+                return null;
+            }
+        }
+        return ia.getHostName();
     }
 }
