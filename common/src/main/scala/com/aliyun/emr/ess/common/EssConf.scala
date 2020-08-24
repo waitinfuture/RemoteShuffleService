@@ -615,4 +615,12 @@ object EssConf extends Logging {
   def essInnerMetricsSize(conf: EssConf): Int = {
     conf.getInt("ess.inner.metrics.size", 4096)
   }
+
+  def essMasterPrometheusMetricPort(conf: EssConf): Int = {
+    conf.getInt("ess.master.prometheus.metric.port", 9098)
+  }
+
+  def essWorkerPrometheusMetricPort(conf: EssConf): Int = {
+    conf.getInt("ess.worker.prometheus.metric.port", 9096)
+  }
 }

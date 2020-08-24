@@ -134,6 +134,8 @@ class MasterSource(essConf: EssConf) extends AbstractSource(essConf) with Loggin
 }
 
 object MasterSource {
+  val SERVLET_PATH = "/metrics/prometheus"
+
   val COMMIT_FILES_TIME = "COMMIT_FILES_TIME"
 
   val RESERVE_BUFFER_TIME = "RESERVE_BUFFER_TIME"

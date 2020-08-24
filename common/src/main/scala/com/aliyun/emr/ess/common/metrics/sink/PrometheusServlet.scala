@@ -12,12 +12,11 @@ import io.netty.channel.ChannelHandler.Sharable
 
 class PrometheusServlet(val property: Properties,
   val registry: MetricRegistry,
-  val sources: mutable.ArrayBuffer[Source]) extends Sink with Logging{
-
-  val SERVLET_PATH = "/metrics/prometheus"
+  val sources: mutable.ArrayBuffer[Source],
+  val servletPath: String) extends Sink with Logging{
 
   def getHandler(conf: EssConf): PrometheusHttpRequestHandler = {
-      new PrometheusHttpRequestHandler(SERVLET_PATH, this)
+      new PrometheusHttpRequestHandler(servletPath, this)
   }
 
   def getMetricsSnapshot(): String = {

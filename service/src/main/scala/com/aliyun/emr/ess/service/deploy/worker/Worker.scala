@@ -526,7 +526,7 @@ private[deploy] object Worker extends Logging {
     val conf = new EssConf
     val workerArgs = new WorkerArguments(args, conf)
 
-    val metricsSystem = MetricsSystem.createMetricsSystem("worker", conf)
+    val metricsSystem = MetricsSystem.createMetricsSystem("worker", conf, WorkerSource.SERVLET_PATH)
 
     val rpcEnv = RpcEnv.create(RpcNameConstants.WORKER_SYS,
       workerArgs.host,
@@ -542,7 +542,8 @@ private[deploy] object Worker extends Logging {
       metricsSystem.start()
 
       val httpServer = new HttpServer(
-        new HttpServerInitializer(new HttpRequestHandler(metricsSystem.getPrometheusHandler)), 9096)
+        new HttpServerInitializer(new HttpRequestHandler(metricsSystem.getPrometheusHandler)),
+        EssConf.essWorkerPrometheusMetricPort(conf))
       httpServer.start()
       logInfo("[Worker] httpServer started")
     }

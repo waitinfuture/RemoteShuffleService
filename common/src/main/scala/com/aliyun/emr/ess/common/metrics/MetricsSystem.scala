@@ -13,7 +13,7 @@ import com.aliyun.emr.ess.common.metrics.source.Source
 import com.aliyun.emr.ess.common.util.Utils
 import com.codahale.metrics.{Metric, MetricFilter, MetricRegistry}
 
-class MetricsSystem(val instance: String, conf: EssConf) extends Logging{
+class MetricsSystem(val instance: String, conf: EssConf, val servletPath: String) extends Logging{
   private[this] val metricsConfig = new MetricsConfig(conf)
 
   private val sinks = new mutable.ArrayBuffer[Sink]
@@ -106,8 +106,9 @@ class MetricsSystem(val instance: String, conf: EssConf) extends Logging{
           if (kv._1 == "prometheusServlet") {
             val servlet = Utils.classForName(classPath)
               .getConstructor(
-                classOf[Properties], classOf[MetricRegistry], classOf[ArrayBuffer[Source]])
-              .newInstance(kv._2, registry, sources)
+                classOf[Properties], classOf[MetricRegistry],
+                classOf[ArrayBuffer[Source]], classOf[String])
+              .newInstance(kv._2, registry, sources, servletPath)
             prometheusServlet = Some(servlet.asInstanceOf[PrometheusServlet])
           } else {
             val sink = Utils.classForName(classPath)
@@ -141,7 +142,7 @@ object MetricsSystem {
     }
   }
 
-  def createMetricsSystem(instance: String, conf: EssConf): MetricsSystem = {
-    new MetricsSystem(instance, conf)
+  def createMetricsSystem(instance: String, conf: EssConf, servletPath: String): MetricsSystem = {
+    new MetricsSystem(instance, conf, servletPath)
   }
 }

@@ -1041,7 +1041,7 @@ private[deploy] object Master extends Logging {
   def main(args: Array[String]): Unit = {
     val conf = new EssConf()
 
-    val metricsSystem = MetricsSystem.createMetricsSystem("master", conf)
+    val metricsSystem = MetricsSystem.createMetricsSystem("master", conf, MasterSource.SERVLET_PATH)
 
     val masterArgs = new MasterArguments(args, conf)
     val rpcEnv = RpcEnv.create(
@@ -1060,7 +1060,8 @@ private[deploy] object Master extends Logging {
       new HttpRequestHandler(master, null)
     }
 
-    val httpServer = new HttpServer(new HttpServerInitializer(handlers), 9098)
+    val httpServer = new HttpServer(new HttpServerInitializer(handlers),
+      EssConf.essMasterPrometheusMetricPort(conf))
     httpServer.start()
     logInfo("[Master] httpServer started")
 
