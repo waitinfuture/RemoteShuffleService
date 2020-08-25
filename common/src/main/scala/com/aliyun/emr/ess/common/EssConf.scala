@@ -499,12 +499,16 @@ object EssConf extends Logging {
     conf.getTimeAsMs("ess.remove.shuffle.delay", "60s")
   }
 
+  def essMasterAddress(conf: EssConf): String = {
+    conf.get("ess.master.address", Utils.localHostName() + ":" + 9099)
+  }
+
   def essMasterHost(conf: EssConf): String = {
-    conf.get("ess.master.host", Utils.localHostName())
+    conf.get("ess.master.host", essMasterAddress(conf).split(":")(0))
   }
 
   def essMasterPort(conf: EssConf): Int = {
-    conf.getInt("ess.master.port", 9099)
+    conf.getInt("ess.master.port", essMasterAddress(conf).split(":")(1).toInt)
   }
 
   def essWorkerFlushBufferSize(conf: EssConf): Long = {
