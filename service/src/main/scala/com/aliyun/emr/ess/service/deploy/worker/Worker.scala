@@ -20,7 +20,7 @@ package com.aliyun.emr.ess.service.deploy.worker
 import java.io.IOException
 import java.nio.ByteBuffer
 import java.util
-import java.util.concurrent.{Future, LinkedBlockingQueue, TimeUnit}
+import java.util.concurrent.{ConcurrentHashMap, Future, LinkedBlockingQueue, TimeUnit}
 import java.util.concurrent.atomic.AtomicBoolean
 
 import scala.collection.JavaConversions._
@@ -36,6 +36,7 @@ import com.aliyun.emr.ess.protocol.{PartitionLocation, RpcNameConstants}
 import com.aliyun.emr.ess.protocol.message.ControlMessages._
 import com.aliyun.emr.ess.protocol.message.StatusCode
 import com.aliyun.emr.ess.service.deploy.worker.http.HttpRequestHandler
+import com.aliyun.emr.ess.unsafe.Platform
 import com.aliyun.emr.network.TransportContext
 import com.aliyun.emr.network.buffer.NettyManagedBuffer
 import com.aliyun.emr.network.client.{RpcResponseCallback, TransportClientBootstrap}
@@ -93,6 +94,7 @@ private[deploy] class Worker(
   // whether this Worker registered to Master succesfully
   private val registered = new AtomicBoolean(false)
 
+  private val shuffleMapperAttempts = new ConcurrentHashMap[String, Array[Int]]()
 
   // master endpoint
   private val masterEndpoint: RpcEndpointRef =
@@ -147,16 +149,18 @@ private[deploy] class Worker(
     case ReserveBuffers(applicationId, shuffleId, masterLocations, slaveLocations) =>
       val key = s"$applicationId $shuffleId"
       workerSource.sample(WorkerSource.RESERVE_BUFFER_TIME, key) {
-        logInfo(s"received ReserveBuffers request, $key")
+        logInfo(s"received ReserveBuffers request,  key $key," +
+          s"master partitions ${masterLocations.map(_.getUniqueId).mkString(",")}, " +
+          s"slave partitions ${slaveLocations.map(_.getUniqueId).mkString(",")}")
         handleReserveBuffers(context, applicationId, shuffleId, masterLocations, slaveLocations)
       }
 
-    case CommitFiles(shuffleKey, masterIds, slaveIds) =>
+    case CommitFiles(shuffleKey, masterIds, slaveIds, mapAttempts) =>
       workerSource.sample(WorkerSource.COMMIT_FILES_TIME, shuffleKey) {
         logInfo(s"receive CommitFiles request, $shuffleKey, " +
           s"master files ${masterIds.mkString(",")} slave files ${slaveIds.mkString(",")}")
         val commitFilesTimeMs = Utils.timeIt({
-          handleCommitFiles(context, shuffleKey, masterIds, slaveIds)
+          handleCommitFiles(context, shuffleKey, masterIds, slaveIds, mapAttempts)
         })
         logInfo(s"Done processed CommitFiles request with shuffleKey:$shuffleKey, in " +
           s"${commitFilesTimeMs}ms")
@@ -224,11 +228,7 @@ private[deploy] class Worker(
     workerInfo.addMasterPartitions(shuffleKey, masterPartitions)
     workerInfo.addSlavePartitions(shuffleKey, slavePartitions)
 
-    logDebug(s"reserve buffer succeed!, $shuffleKey")
-    logDebug("masters========")
-    masterLocations.foreach(loc => logDebug(loc + ", peer " + loc.getPeer))
-    logDebug("slaves========")
-    slaveLocations.foreach(loc => logDebug(loc + ", peer " + loc.getPeer))
+    logInfo(s"reserve buffer succeed!")
 
     context.reply(ReserveBuffersResponse(StatusCode.Success))
   }
@@ -237,7 +237,8 @@ private[deploy] class Worker(
       context: RpcCallContext,
       shuffleKey: String,
       masterIds: util.List[String],
-      slaveIds: util.List[String]): Unit = {
+      slaveIds: util.List[String],
+      mapAttempts: Array[Int]): Unit = {
     // return null if shuffleKey does not exist
     if (!workerInfo.containsShuffle(shuffleKey)) {
       logError(s"shuffle $shuffleKey doesn't exist!")
@@ -245,6 +246,8 @@ private[deploy] class Worker(
         StatusCode.ShuffleNotRegistered, null, null, masterIds, slaveIds))
       return
     }
+
+    shuffleMapperAttempts.putIfAbsent(shuffleKey, mapAttempts)
 
     val committedMasterIds = new util.ArrayList[String]()
     val committedSlaveIds = new util.ArrayList[String]()
@@ -412,9 +415,23 @@ private[deploy] class Worker(
     } else {
       workerInfo.getSlaveLocation(shuffleKey, pushData.partitionUniqueId)
     }
+
     if (location == null) {
-      val msg = s"Partition Location not found!, ${pushData.partitionUniqueId}, $mode $shuffleKey"
-      logError(msg)
+      // header: mapId attemptId batchId compressedTotalSize
+      val header = new Array[Byte](8)
+      body.getBytes(body.readerIndex(), header)
+      val mapId = Platform.getInt(header, Platform.BYTE_ARRAY_OFFSET)
+      val attemptId = Platform.getInt(header, Platform.BYTE_ARRAY_OFFSET + 4)
+      var msg = ""
+      if (shuffleMapperAttempts.containsKey(shuffleKey)) {
+        msg = s"Maybe speculation task, ${pushData.partitionUniqueId}, $mode $shuffleKey," +
+          s"mapId $mapId, attemptId $attemptId, committed attemptId ${shuffleMapperAttempts.get(shuffleKey)(mapId)}"
+        logInfo(msg)
+      } else {
+        msg = s"Partition Location not found!, ${pushData.partitionUniqueId}, $mode $shuffleKey," +
+          s"mapId $mapId, attemptId $attemptId";
+        logWarning(msg)
+      }
       wrappedCallback.onFailure(new IOException(msg))
       return
     }
@@ -511,6 +528,7 @@ private[deploy] class Worker(
       }
       workerInfo.removeMasterPartitions(shuffleKey)
       workerInfo.removeSlavePartitions(shuffleKey)
+      shuffleMapperAttempts.remove(shuffleKey)
     }
 
     localStorageManager.cleanup(expiredShuffleKeys)

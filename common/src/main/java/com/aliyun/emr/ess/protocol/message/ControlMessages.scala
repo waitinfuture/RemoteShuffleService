@@ -129,7 +129,8 @@ object ControlMessages {
   case class CommitFiles(
     shuffleKey: String,
     masterIds: util.List[String],
-    slaveIds: util.List[String])
+    slaveIds: util.List[String],
+    mapAttempts: Array[Int])
     extends WorkerMessage
 
   case class CommitFilesResponse(

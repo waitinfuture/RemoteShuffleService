@@ -400,7 +400,9 @@ public class ShuffleClientImpl extends ShuffleClient {
                     return;
                 }
                 // async retry pushdata
-                logger.warn("PushData exception, put into retry queue, " + e.toString());
+                logger.warn("PushData failed, taskId " + mapId + ", attemptId " + attemptId +
+                    ",reduceId " + reduceId + ",batchId " + nextBatchId +
+                    ", put into retry queue, " + e.toString());
                 pushDataRetryPool.submit(() ->
                     submitRetryPushData(applicationId, shuffleId, body, nextBatchId,
                         loc, callback, pushState));

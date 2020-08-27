@@ -8,7 +8,7 @@ import io.netty.buffer.ByteBuf;
 public final class PushData extends AbstractMessage implements RequestMessage {
     public long requestId;
 
-    public long epoch;
+    public int epoch;
 
     // 0 for master, 1 for slave, see PartitionLocation.Mode
     public final byte mode;
@@ -17,14 +17,14 @@ public final class PushData extends AbstractMessage implements RequestMessage {
     public final String partitionUniqueId;
 
     public PushData(byte mode, String shuffleKey, String partitionId, ManagedBuffer body) {
-        this(0L, 0L, mode, shuffleKey, partitionId, body);
+        this(0L, 0, mode, shuffleKey, partitionId, body);
     }
 
-    public PushData(long epoch, byte mode, String shuffleKey, String partitionId, ManagedBuffer body) {
+    public PushData(int epoch, byte mode, String shuffleKey, String partitionId, ManagedBuffer body) {
         this(0L, epoch, mode, shuffleKey, partitionId, body);
     }
 
-    private PushData(long requestId, long epoch, byte mode, String shuffleKey, String partitionUniqueId,
+    private PushData(long requestId, int epoch, byte mode, String shuffleKey, String partitionUniqueId,
                      ManagedBuffer body) {
         super(body, true);
         this.requestId = requestId;
@@ -41,14 +41,14 @@ public final class PushData extends AbstractMessage implements RequestMessage {
 
     @Override
     public int encodedLength() {
-        return 8 + 8 + 1 + Encoders.Strings.encodedLength(shuffleKey) +
+        return 8 + 4 + 1 + Encoders.Strings.encodedLength(shuffleKey) +
                 Encoders.Strings.encodedLength(partitionUniqueId);
     }
 
     @Override
     public void encode(ByteBuf buf) {
         buf.writeLong(requestId);
-        buf.writeLong(epoch);
+        buf.writeInt(epoch);
         buf.writeByte(mode);
         Encoders.Strings.encode(buf, shuffleKey);
         Encoders.Strings.encode(buf, partitionUniqueId);
@@ -56,7 +56,7 @@ public final class PushData extends AbstractMessage implements RequestMessage {
 
     public static PushData decode(ByteBuf buf) {
         long requestId = buf.readLong();
-        long epoch = buf.readLong();
+        int epoch = buf.readInt();
         byte mode = buf.readByte();
         String shuffleKey = Encoders.Strings.decode(buf);
         String partitionId = Encoders.Strings.decode(buf);

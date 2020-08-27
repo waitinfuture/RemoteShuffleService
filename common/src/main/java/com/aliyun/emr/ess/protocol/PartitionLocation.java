@@ -132,7 +132,11 @@ public class PartitionLocation implements Serializable
 
     @Override
     public String toString() {
+        String peerAddr = "";
+        if (peer != null) {
+            peerAddr = peer.hostPort();
+        }
         return "PartitionLocation[" + reduceId + "-" + epoch + " " + host + ":" + port
-            + " Mode: " + mode + " HasPeer: " + (peer != null) + "]";
+            + " Mode: " + mode + " peer: " + peerAddr + "]";
     }
 }

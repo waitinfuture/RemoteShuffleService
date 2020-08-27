@@ -40,7 +40,7 @@ make_work_dir="export USER=$(echo $USER) && cd /home/$(echo $USER) && su - $USER
 if [ "$USER" == "root" ];then
   make_work_dir="export USER=$(echo $USER) && cd /home/$(echo $USER) && tar -zxvf ess-1.0.0-release.tgz && cd ess-1.0.0-bin-release"
 fi
-echo "sudo salt ${old_master_host} cmd.run \"${make_work_dir}\""
+echo "sudo salt ${worker_hosts} cmd.run \"${make_work_dir}\""
 sudo salt -L ${worker_hosts} cmd.run "${make_work_dir}"
 
 
@@ -64,7 +64,7 @@ echo "Start Master"
 echo "sudo salt ${master_host} cmd.run \"${stepinto_workdir} && export USER=$(echo $USER)  && sh sbin/start-master.sh -p ${master_port}\""
 sudo salt ${master_host} cmd.run "${stepinto_workdir} && export USER=$(echo $USER)  && sh sbin/start-master.sh -p ${master_port}" runas=$(echo $USER)
 
-sleep 3
+sleep 5
 
 echo "Start Workers"
 echo "sudo salt -L ${worker_hosts} cmd.run \"${stepinto_workdir} && export USER=$(echo $USER)  && sh sbin/start-worker.sh ess://${master_host}:${master_port}\""

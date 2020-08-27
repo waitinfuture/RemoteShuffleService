@@ -246,15 +246,17 @@ private[ess] class WorkerInfo(
     }
   }
 
-  def getAllMasterLocationsWithMaxEpoch(
-      shuffleKey: String): util.List[PartitionLocation] = this.synchronized {
+  def getAllMasterLocationsWithExtremeEpoch(
+    shuffleKey: String,
+    order: (Int, Int) => Boolean
+  ): util.List[PartitionLocation] = this.synchronized {
     if (masterPartitionLocations.containsKey(shuffleKey)) {
       masterPartitionLocations.get(shuffleKey)
         .values()
         .map { list =>
           var loc = list(0)
           1 until list.size() foreach (ind => {
-            if (list(ind).getEpoch > loc.getEpoch) {
+            if (order(list(ind).getEpoch, loc.getEpoch)) {
               loc = list(ind)
             }
           })
@@ -263,6 +265,16 @@ private[ess] class WorkerInfo(
     } else {
       new util.ArrayList[PartitionLocation]()
     }
+  }
+
+  def getAllMasterLocationsWithMaxEpoch(
+      shuffleKey: String): util.List[PartitionLocation] = this.synchronized {
+    getAllMasterLocationsWithExtremeEpoch(shuffleKey, (a, b) => a > b)
+  }
+
+  def getAllMasterLocationsWithMinEpoch(
+    shuffleKey: String): util.List[PartitionLocation] = this.synchronized {
+    getAllMasterLocationsWithExtremeEpoch(shuffleKey, (a, b) => a < b)
   }
 
   def getAllSlaveLocations(shuffleKey: String): util.List[PartitionLocation] = this.synchronized {

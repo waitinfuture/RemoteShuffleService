@@ -15,7 +15,7 @@ import com.aliyun.emr.ess.protocol.{PartitionLocation, RpcNameConstants}
 import com.aliyun.emr.ess.protocol.message.ControlMessages._
 import com.aliyun.emr.ess.protocol.message.StatusCode
 import com.aliyun.emr.ess.service.deploy.master.http.HttpRequestHandler
-import com.aliyun.emr.ess.service.deploy.worker.WorkerInfo
+import com.aliyun.emr.ess.service.deploy.worker.{FileWriter, WorkerInfo}
 import io.netty.util.internal.ConcurrentSet
 
 private[deploy] class Master(
@@ -71,7 +71,7 @@ private[deploy] class Master(
   // revive request waiting for response
   // shuffleKey -> (partitionId -> set)
   private val reviving =
-    new util.HashMap[String, util.HashMap[String, util.Set[RpcCallContext]]]()
+    new ConcurrentHashMap[String, ConcurrentHashMap[Integer, util.Set[RpcCallContext]]]()
 
   // register shuffle request waiting for response
   private val registerShuffleRequest = new ConcurrentHashMap[String, util.Set[RpcCallContext]]()
@@ -202,7 +202,7 @@ private[deploy] class Master(
 
     case Revive(applicationId, shuffleId, reduceId, epoch, oldPartition) =>
       val key = s"$applicationId, $shuffleId, $reduceId-$epoch"
-      logDebug(s"received Revive request, $key $oldPartition")
+      logInfo(s"received Revive request, key: $key oldPartition: $oldPartition")
       masterSource.sample(MasterSource.REVIVE_TIME, key) {
         handleRevive(context, applicationId, shuffleId, reduceId, epoch, oldPartition)
       }
@@ -416,13 +416,15 @@ private[deploy] class Master(
       } else {
         // check if shuffle is registered
         if (registeredShuffle.contains(shuffleKey)) {
-          val locs = workersSnapShot.flatMap(w => w.getAllMasterLocationsWithMaxEpoch(shuffleKey))
+          val initialLocs = workersSnapShot
+            .flatMap(w => w.getAllMasterLocationsWithMinEpoch(shuffleKey))
+            .filter(_.getEpoch == 0)
           logDebug(s"shuffle $shuffleKey already registered, just return")
-          if (locs.size != numPartitions) {
-            logWarning(s"shuffle $shuffleKey location size ${locs.size} not equal to " +
+          if (initialLocs.size != numPartitions) {
+            logWarning(s"shuffle $shuffleKey location size ${initialLocs.size} not equal to " +
               s"numPartitions: $numPartitions!")
           }
-          context.reply(RegisterShuffleResponse(StatusCode.Success, locs))
+          context.reply(RegisterShuffleResponse(StatusCode.Success, initialLocs))
           return
         }
         logInfo(s"new shuffle request, shuffleKey $shuffleKey")
@@ -542,17 +544,17 @@ private[deploy] class Master(
       workersNotBlacklisted()
     }
 
-    val oldPartitionId = s"$reduceId-$oldEpoch"
-
     // check if there exists request for the partition, if do just register
-    reviving.synchronized {
-      reviving.putIfAbsent(shuffleKey, new util.HashMap[String, util.Set[RpcCallContext]])
-    }
-    val shuffleReviving = reviving.get(shuffleKey)
+    val newMapFunc =
+      new java.util.function.Function[String, ConcurrentHashMap[Integer, util.Set[RpcCallContext]]]() {
+        override def apply(s: String): ConcurrentHashMap[Integer, util.Set[RpcCallContext]] =
+          new ConcurrentHashMap()
+      }
+    val shuffleReviving = reviving.computeIfAbsent(shuffleKey, newMapFunc)
     shuffleReviving.synchronized {
-      if (shuffleReviving.containsKey(oldPartitionId)) {
-        shuffleReviving.get(oldPartitionId).add(context)
-        logInfo(s"$shuffleKey same partition $oldPartitionId is reviving, register context")
+      if (shuffleReviving.containsKey(reduceId)) {
+        shuffleReviving.get(reduceId).add(context)
+        logInfo(s"$shuffleKey same partition $reduceId-$oldEpoch is reviving, register context")
         return
       } else {
         // check if new slot for the partition has allocated
@@ -568,13 +570,13 @@ private[deploy] class Master(
         // exists newer partition, just return it
         if (currentEpoch > oldEpoch) {
           context.reply(ReviveResponse(StatusCode.Success, currentLocation))
-          logInfo(s"new partition found, return it $shuffleKey " + currentLocation)
+          logInfo(s"new partition found, old partition $reduceId-$oldEpoch return it $shuffleKey " + currentLocation)
           return
         }
         // no newer partition, register and allocate
         val set = new util.HashSet[RpcCallContext]()
         set.add(context)
-        shuffleReviving.put(oldPartitionId, set)
+        shuffleReviving.put(reduceId, set)
       }
     }
 
@@ -591,13 +593,12 @@ private[deploy] class Master(
     if (slots == null || slots.isEmpty()) {
       logError("[handleRevive] offerSlot failed!")
       shuffleReviving.synchronized {
-        val set = shuffleReviving.get(oldPartitionId)
+        val set = shuffleReviving.get(reduceId)
         set.foreach(_.reply(ReviveResponse(StatusCode.SlotNotAvailable, null)))
-        shuffleReviving.remove(oldPartitionId)
+        shuffleReviving.remove(reduceId)
       }
       return
     }
-    logInfo("revive offered slots success")
     // reserve buffer
     val failed = reserveBuffersWithRetry(applicationId, shuffleId, slots)
     // reserve buffers failed, clear allocated resources
@@ -611,9 +612,9 @@ private[deploy] class Master(
       }
       logError("revive fail to reserve buffers")
       shuffleReviving.synchronized {
-        val set = shuffleReviving.get(oldPartitionId)
+        val set = shuffleReviving.get(reduceId)
         set.foreach(_.reply(ReviveResponse(StatusCode.ReserveBufferFailed, null)))
-        shuffleReviving.remove(oldPartitionId)
+        shuffleReviving.remove(reduceId)
       }
       return
     }
@@ -629,10 +630,10 @@ private[deploy] class Master(
     }
     logInfo(s"revive reserve buffer success $shuffleKey $location")
     shuffleReviving.synchronized {
-      val set = shuffleReviving.get(oldPartitionId)
+      val set = shuffleReviving.get(reduceId)
       set.foreach(_.reply(ReviveResponse(StatusCode.Success, location)))
-      shuffleReviving.remove(oldPartitionId)
-      logInfo(s"reply and remove $shuffleKey $oldPartitionId partition success")
+      shuffleReviving.remove(reduceId)
+      logInfo(s"reply and remove $shuffleKey $reduceId partition success")
     }
   }
 
@@ -777,7 +778,8 @@ private[deploy] class Master(
         val slaveIds = slaveParts.map(_.getUniqueId)
 
         val start = System.currentTimeMillis()
-        val res = requestCommitFiles(worker.endpoint, CommitFiles(shuffleKey, masterIds, slaveIds))
+        val res = requestCommitFiles(worker.endpoint, CommitFiles(shuffleKey, masterIds, slaveIds,
+          shuffleMapperAttempts.get(shuffleKey)))
 
         // record committed partitionIds
         if (res.committedMasterIds != null) {
