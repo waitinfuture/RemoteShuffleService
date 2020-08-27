@@ -63,7 +63,8 @@ private[deploy] class Master(
     val source = new MasterSource(conf)
     source.addGauge(MasterSource.REGISTERED_SHUFFLE_COUNT, _ => registeredShuffle.size() - unregisterShuffleTime.size())
     source.addGauge(MasterSource.BLACKLISTED_WORKER_COUNT, _ => blacklist.size())
-    source.addGauge[String](MasterSource.SHUFFLE_MANAGER_HOSTNAME_LIST, _ => getHostnameList())
+    // TODO look into the error  err="strconv.ParseFloat: parsing..."
+//    source.addGauge[String](MasterSource.SHUFFLE_MANAGER_HOSTNAME_LIST, _ => getHostnameList())
     metricsSystem.registerSource(source)
     source
   }
