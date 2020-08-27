@@ -55,7 +55,7 @@ private[deploy] class Worker(
   private val workerSource = {
     val source = new WorkerSource(conf)
     metricsSystem.registerSource(source)
-    metricsSystem.registerSource(new NetWorkSource(conf))
+    metricsSystem.registerSource(new NetWorkSource(conf, MetricsSystem.ROLE_WOKRER))
     source
   }
 
@@ -105,6 +105,9 @@ private[deploy] class Worker(
     EssConf.essWorkerNumSlots(conf, localStorageManager.numDisks), self)
 
   workerSource.addGauge(WorkerSource.REGISTERED_SHUFFLE_COUNT, _ => workerInfo.shuffleKeySet().size())
+  workerSource.addGauge(WorkerSource.TOTAL_SLOTS, _ => workerInfo.totalSlots())
+  workerSource.addGauge(WorkerSource.SLOTS_USED, _ => workerInfo.usedSlots())
+  workerSource.addGauge(WorkerSource.SLOTS_AVAILABLE, _ => workerInfo.freeSlots())
 
   // Threads
   private val forwardMessageScheduler =

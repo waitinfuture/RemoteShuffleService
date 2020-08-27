@@ -5,10 +5,11 @@ import java.util.concurrent.{ConcurrentHashMap, TimeUnit}
 import com.aliyun.emr.ess.common.EssConf
 import com.aliyun.emr.ess.common.internal.Logging
 import com.aliyun.emr.ess.common.metrics.source.{AbstractSource, NamedCounter, NamedTimer}
+import com.aliyun.emr.ess.common.metrics.MetricsSystem
 import com.aliyun.emr.ess.common.util.ThreadUtils
 import com.codahale.metrics.MetricRegistry
 
-class WorkerSource(essConf: EssConf) extends AbstractSource(essConf) with Logging {
+class WorkerSource(essConf: EssConf) extends AbstractSource(essConf, MetricsSystem.ROLE_WOKRER) with Logging {
   override val metricRegistry = new MetricRegistry()
   override val sourceName = s"worker"
 
@@ -159,4 +160,8 @@ object WorkerSource {
   val RPC_FAILURE_COUNTER = "RPC_FAILURE_COUNTER"
 
   val REGISTERED_SHUFFLE_COUNT = "REGISTERED_SHUFFLE_COUNTER"
+
+  val TOTAL_SLOTS = "TOTAL_SLOTS"
+  val SLOTS_USED = "SLOTS_USED"
+  val SLOTS_AVAILABLE = "SLOTS_AVAILABLE"
 }

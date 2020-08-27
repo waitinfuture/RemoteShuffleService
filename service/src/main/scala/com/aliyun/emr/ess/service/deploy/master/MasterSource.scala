@@ -5,10 +5,11 @@ import java.util.concurrent.{ConcurrentHashMap, TimeUnit}
 import com.aliyun.emr.ess.common.EssConf
 import com.aliyun.emr.ess.common.internal.Logging
 import com.aliyun.emr.ess.common.metrics.source.{AbstractSource, NamedCounter, NamedTimer}
+import com.aliyun.emr.ess.common.metrics.MetricsSystem
 import com.aliyun.emr.ess.common.util.ThreadUtils
 import com.codahale.metrics.MetricRegistry
 
-class MasterSource(essConf: EssConf) extends AbstractSource(essConf) with Logging{
+class MasterSource(essConf: EssConf) extends AbstractSource(essConf, MetricsSystem.ROLE_MASTER) with Logging{
   override val metricRegistry = new MetricRegistry()
   override val sourceName = s"master"
 

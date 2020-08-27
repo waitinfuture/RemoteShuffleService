@@ -290,6 +290,7 @@ private[deploy] class Master(
         shuffleAllocatedWorkers.remove(key)
         stageEndShuffleSet.remove(key)
         reviving.remove(key)
+        unregisterShuffleTime.remove(key)
       }
     }
   }

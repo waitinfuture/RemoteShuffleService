@@ -1,6 +1,6 @@
 package com.aliyun.emr.ess.common.metrics.source
 
-import com.codahale.metrics.{Histogram, MetricRegistry, Timer}
+import com.codahale.metrics.MetricRegistry
 
 trait Source {
   def sourceName: String

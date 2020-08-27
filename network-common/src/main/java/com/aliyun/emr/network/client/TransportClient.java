@@ -354,7 +354,7 @@ public class TransportClient implements Closeable {
       } else {
         String errorMsg = String.format("Failed to send RPC %s to %s: %s", requestId,
             NettyUtils.getRemoteAddress(channel), future.cause());
-        logger.error(errorMsg);
+        logger.warn(errorMsg);
         channel.close();
         try {
           handleFailure(errorMsg, future.cause());

@@ -37,8 +37,15 @@ private[ess] class WorkerInfo(
     endpoint.asInstanceOf[NettyRpcEndpointRef].client.isActive
   }
 
-  // only exposed for test
-  def freeSlots(): Long = this.synchronized {
+  def totalSlots(): Int = this.synchronized {
+    numSlots
+  }
+
+  def usedSlots(): Int = this.synchronized {
+    slotsUsed
+  }
+
+  def freeSlots(): Int = this.synchronized {
     numSlots - slotsUsed
   }
 

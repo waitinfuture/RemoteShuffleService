@@ -19,7 +19,7 @@ case class NamedHistogram(name: String, histogram: Histogram)
 
 case class NamedTimer(name: String, timer: Timer)
 
-abstract class AbstractSource(essConf: EssConf)
+abstract class AbstractSource(essConf: EssConf, role: String)
   extends Source with Logging {
   val slidingWindowSize: Int = EssConf.essMetricsSlidingWindowSize(essConf)
 
@@ -118,7 +118,7 @@ abstract class AbstractSource(essConf: EssConf)
   def recordCounter(nc: NamedCounter): Unit = {
     val timestamp = System.currentTimeMillis()
     val sb = new StringBuilder
-    sb.append(s"${normalizeKey(nc.name)}Count$countersLabel ${nc.counter.getCount} $timestamp\n")
+    sb.append(s"${normalizeKey(nc.name)}Count$label ${nc.counter.getCount} $timestamp\n")
 
     updateInnerMetrics(sb.toString())
   }
@@ -126,7 +126,7 @@ abstract class AbstractSource(essConf: EssConf)
   def recordGauge(ng: NamedGauge[_]): Unit = {
     val timestamp = System.currentTimeMillis()
     val sb = new StringBuilder
-    sb.append(s"${normalizeKey(ng.name)}Value$guagesLabel ${ng.gaurge.getValue} $timestamp\n")
+    sb.append(s"${normalizeKey(ng.name)}Value$label ${ng.gaurge.getValue} $timestamp\n")
 
     updateInnerMetrics(sb.toString())
   }
@@ -138,16 +138,16 @@ abstract class AbstractSource(essConf: EssConf)
     val h = nh.histogram
     val snapshot = h.getSnapshot
     val prefix = normalizeKey(metricName)
-    sb.append(s"${prefix}Count$histogramslabels ${h.getCount} $timestamp\n")
-    sb.append(s"${prefix}Max$histogramslabels ${reportNanosAsMills(snapshot.getMax)} $timestamp\n")
-    sb.append(s"${prefix}Mean$histogramslabels ${reportNanosAsMills(snapshot.getMean)} $timestamp\n")
-    sb.append(s"${prefix}Min$histogramslabels ${reportNanosAsMills(snapshot.getMin)} $timestamp\n")
-    sb.append(s"${prefix}50thPercentile$histogramslabels ${reportNanosAsMills(snapshot.getMedian)} $timestamp\n")
-    sb.append(s"${prefix}75thPercentile$histogramslabels ${reportNanosAsMills(snapshot.get75thPercentile)} $timestamp\n")
-    sb.append(s"${prefix}95thPercentile$histogramslabels ${reportNanosAsMills(snapshot.get95thPercentile)} $timestamp\n")
-    sb.append(s"${prefix}98thPercentile$histogramslabels ${reportNanosAsMills(snapshot.get98thPercentile)} $timestamp\n")
-    sb.append(s"${prefix}99thPercentile$histogramslabels ${reportNanosAsMills(snapshot.get99thPercentile)} $timestamp\n")
-    sb.append(s"${prefix}999thPercentile$histogramslabels ${reportNanosAsMills(snapshot.get999thPercentile)} $timestamp\n")
+    sb.append(s"${prefix}Count$label ${h.getCount} $timestamp\n")
+    sb.append(s"${prefix}Max$label ${reportNanosAsMills(snapshot.getMax)} $timestamp\n")
+    sb.append(s"${prefix}Mean$label ${reportNanosAsMills(snapshot.getMean)} $timestamp\n")
+    sb.append(s"${prefix}Min$label ${reportNanosAsMills(snapshot.getMin)} $timestamp\n")
+    sb.append(s"${prefix}50thPercentile$label ${reportNanosAsMills(snapshot.getMedian)} $timestamp\n")
+    sb.append(s"${prefix}75thPercentile$label ${reportNanosAsMills(snapshot.get75thPercentile)} $timestamp\n")
+    sb.append(s"${prefix}95thPercentile$label ${reportNanosAsMills(snapshot.get95thPercentile)} $timestamp\n")
+    sb.append(s"${prefix}98thPercentile$label ${reportNanosAsMills(snapshot.get98thPercentile)} $timestamp\n")
+    sb.append(s"${prefix}99thPercentile$label ${reportNanosAsMills(snapshot.get99thPercentile)} $timestamp\n")
+    sb.append(s"${prefix}999thPercentile$label ${reportNanosAsMills(snapshot.get999thPercentile)} $timestamp\n")
 
     updateInnerMetrics(sb.toString())
   }
@@ -157,16 +157,16 @@ abstract class AbstractSource(essConf: EssConf)
     val sb = new StringBuilder
     val snapshot = nt.timer.getSnapshot
     val prefix = normalizeKey(nt.name)
-    sb.append(s"${prefix}Count$timersLabels ${nt.timer.getCount} $timestamp\n")
-    sb.append(s"${prefix}Max$histogramslabels ${reportNanosAsMills(snapshot.getMax)} $timestamp\n")
-    sb.append(s"${prefix}Mean$histogramslabels ${reportNanosAsMills(snapshot.getMean)} $timestamp\n")
-    sb.append(s"${prefix}Min$histogramslabels ${reportNanosAsMills(snapshot.getMin)} $timestamp\n")
-    sb.append(s"${prefix}50thPercentile$histogramslabels ${reportNanosAsMills(snapshot.getMedian)} $timestamp\n")
-    sb.append(s"${prefix}75thPercentile$histogramslabels ${reportNanosAsMills(snapshot.get75thPercentile)} $timestamp\n")
-    sb.append(s"${prefix}95thPercentile$histogramslabels ${reportNanosAsMills(snapshot.get95thPercentile)} $timestamp\n")
-    sb.append(s"${prefix}98thPercentile$histogramslabels ${reportNanosAsMills(snapshot.get98thPercentile)} $timestamp\n")
-    sb.append(s"${prefix}99thPercentile$histogramslabels ${reportNanosAsMills(snapshot.get99thPercentile)} $timestamp\n")
-    sb.append(s"${prefix}999thPercentile$histogramslabels ${reportNanosAsMills(snapshot.get999thPercentile)} $timestamp\n")
+    sb.append(s"${prefix}Count$label ${nt.timer.getCount} $timestamp\n")
+    sb.append(s"${prefix}Max$label ${reportNanosAsMills(snapshot.getMax)} $timestamp\n")
+    sb.append(s"${prefix}Mean$label ${reportNanosAsMills(snapshot.getMean)} $timestamp\n")
+    sb.append(s"${prefix}Min$label ${reportNanosAsMills(snapshot.getMin)} $timestamp\n")
+    sb.append(s"${prefix}50thPercentile$label ${reportNanosAsMills(snapshot.getMedian)} $timestamp\n")
+    sb.append(s"${prefix}75thPercentile$label ${reportNanosAsMills(snapshot.get75thPercentile)} $timestamp\n")
+    sb.append(s"${prefix}95thPercentile$label ${reportNanosAsMills(snapshot.get95thPercentile)} $timestamp\n")
+    sb.append(s"${prefix}98thPercentile$label ${reportNanosAsMills(snapshot.get98thPercentile)} $timestamp\n")
+    sb.append(s"${prefix}99thPercentile$label ${reportNanosAsMills(snapshot.get99thPercentile)} $timestamp\n")
+    sb.append(s"${prefix}999thPercentile$label ${reportNanosAsMills(snapshot.get999thPercentile)} $timestamp\n")
 
     updateInnerMetrics(sb.toString())
   }
@@ -201,12 +201,8 @@ abstract class AbstractSource(essConf: EssConf)
   protected def reportNanosAsMills(value: Double): Double = {
     BigDecimal(value / 1000000).setScale(2, BigDecimal.RoundingMode.HALF_UP).toDouble
   }
-
-  val guagesLabel = """{type="gauges"}"""
-  val countersLabel = """{type="counters"}"""
-  val metersLabel = countersLabel
-  val histogramslabels = """{type="histograms"}"""
-  val timersLabels = """{type="timers"}"""
+  
+  val label = s"""{role="$role"}"""
 }
 
 class TimerSupplier(val slidingWindowSize: Int)

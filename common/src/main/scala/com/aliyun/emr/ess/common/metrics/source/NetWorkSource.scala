@@ -3,7 +3,7 @@ package com.aliyun.emr.ess.common.metrics.source
 import com.aliyun.emr.ess.common.EssConf
 import com.codahale.metrics.MetricRegistry
 
-class NetWorkSource(essConf: EssConf) extends AbstractSource(essConf) {
+class NetWorkSource(essConf: EssConf, role: String) extends AbstractSource(essConf, role) {
   override val metricRegistry = new MetricRegistry()
   override val sourceName = s"network"
 
