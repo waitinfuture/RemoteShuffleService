@@ -3,7 +3,9 @@
 # 上层脚本如果看到输出为空，就fall back
 # 不存在success或者是检测失败就返回空，方便上层提交脚本判断
 
+import os
 import socket
+import sys
 import time
 import subprocess, threading
 
@@ -89,5 +91,14 @@ def get_master_address():
     return ""
 
 
+def main(argv):
+    master_address=get_master_address()
+    if master_address == '':
+        print("run spark without ESS")
+        os.system('spark-submit ' + ' '.join(argv[1:]))
+    else:
+        print("run spark with ESS")
+        os.system('spark-submit --conf spark.shuffle.manager=org.apache.spark.shuffle.ess.EssShuffleManager --conf spark.ess.master.address=' + master_address + ' ' + ' '.join(argv[1:]))
+
 if __name__ == "__main__":
-    print(get_master_address())
+    main(sys.argv)

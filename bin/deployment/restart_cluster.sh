@@ -48,13 +48,9 @@ stepinto_workdir="cd /home/$(echo $USER)/ess-1.0.0-bin-release"
 echo "Copy ess conf"
 sudo salt -L ${worker_hosts} cp.get_dir salt://conf /home/$(echo $USER)/ess-1.0.0-bin-release/
 
-echo "Stop old Master" + ${old_master_host}
-echo "sudo salt ${old_master_host} cmd.run \"${stepinto_workdir} && export USER=$(echo $USER) && sh sbin/stop-master.sh\""
-sudo salt ${old_master_host} cmd.run "${stepinto_workdir} && export USER=$(echo $USER)  && sh sbin/stop-master.sh" runas=$(echo $USER)
-
-echo "Stop current Master if alive" + ${master_host}
-echo "sudo salt ${master_host} cmd.run \"${stepinto_workdir} && export USER=$(echo $USER)  && sh sbin/stop-master.sh\""
-sudo salt ${master_host} cmd.run "${stepinto_workdir} && export USER=$(echo $USER)  && sh sbin/stop-master.sh" runas=$(echo $USER)
+echo "Try to stop old Master" ${old_master_host}
+echo "sudo salt -L ${old_master_host} cmd.run \"${stepinto_workdir} && export USER=$(echo $USER) && sh sbin/stop-master.sh\""
+sudo salt -L ${old_master_host} cmd.run "${stepinto_workdir} && export USER=$(echo $USER)  && sh sbin/stop-master.sh" runas=$(echo $USER)
 
 echo "Stop Workers"
 echo "sudo salt -L ${worker_hosts} cmd.run \"${stepinto_workdir} && export USER=$(echo $USER)  && sh sbin/stop-worker.sh\""
