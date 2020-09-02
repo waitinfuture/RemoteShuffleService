@@ -13,7 +13,7 @@ public class MasterUtil {
 
     private static final Random rand = new Random();
 
-    public static void releaseSlots(String shuffleKey, Map<WorkerInfo,
+    private static void releaseSlots(String shuffleKey, Map<WorkerInfo,
         Tuple2<List<PartitionLocation>, List<PartitionLocation>>> slots) {
         Iterator<WorkerInfo> workers = slots.keySet().iterator();
         while (workers.hasNext()) {
@@ -37,10 +37,11 @@ public class MasterUtil {
         Tuple2<List<PartitionLocation>, List<PartitionLocation>>> offerSlots(
         String shuffleKey,
         List<WorkerInfo> workers,
-        List<Integer> reduceIds) {
+        List<Integer> reduceIds,
+        boolean shouldReplicate) {
         int[] oldEpochs = new int[reduceIds.size()];
         Arrays.fill(oldEpochs, -1);
-        return offerSlots(shuffleKey, workers, reduceIds, oldEpochs);
+        return offerSlots(shuffleKey, workers, reduceIds, oldEpochs, shouldReplicate);
     }
 
     public static Map<WorkerInfo,
@@ -48,7 +49,8 @@ public class MasterUtil {
             String shuffleKey,
             List<WorkerInfo> workers,
             List<Integer> reduceIds,
-            int[] oldEpochs) {
+            int[] oldEpochs,
+            boolean shouldReplicate) {
         logger.info("inside offerSlots, reduceId num " + reduceIds.size());
 
         if (workers.size() < 2) {
@@ -72,22 +74,25 @@ public class MasterUtil {
                     return null;
                 }
             }
-            // try to find slot for slave partition
-            int nextSlaveInd = (nextMasterInd + 1) % workers.size();
-            while (!workers.get(nextSlaveInd).slotAvailable()) {
-                nextSlaveInd = (nextSlaveInd + 1) % workers.size();
+            int nextSlaveInd = 0;
+            if (shouldReplicate) {
+                // try to find slot for slave partition
+                nextSlaveInd = (nextMasterInd + 1) % workers.size();
+                while (!workers.get(nextSlaveInd).slotAvailable()) {
+                    nextSlaveInd = (nextSlaveInd + 1) % workers.size();
+                    if (nextSlaveInd == nextMasterInd) {
+                        // no available slot, release allocated resource
+                        releaseSlots(shuffleKey, slots);
+                        logger.error("No available slot for slave #0");
+                        return null;
+                    }
+                }
                 if (nextSlaveInd == nextMasterInd) {
                     // no available slot, release allocated resource
                     releaseSlots(shuffleKey, slots);
-                    logger.error("No available slot for slave #0");
+                    logger.error("No available slot for slave #1");
                     return null;
                 }
-            }
-            if (nextSlaveInd == nextMasterInd) {
-                // no available slot, release allocated resource
-                releaseSlots(shuffleKey, slots);
-                logger.error("No available slot for slave #1");
-                return null;
             }
             // now nextMasterInd/nextSlaveInd point to
             // available master/slave partition respectively
@@ -98,14 +103,18 @@ public class MasterUtil {
                     new Tuple2<>(new ArrayList<>(), new ArrayList<>()));
             Tuple2<List<PartitionLocation>, List<PartitionLocation>> locations =
                     slots.get(workers.get(nextMasterInd));
-            PartitionLocation slaveLocation = new PartitionLocation(
-                reduceIds.get(idx),
-                newEpoch,
-                workers.get(nextSlaveInd).host(),
-                workers.get(nextSlaveInd).port(),
-                PartitionLocation.Mode.Slave
-            );
-            PartitionLocation masterLocation = new PartitionLocation(
+            PartitionLocation slaveLocation = null;
+            PartitionLocation masterLocation = null;
+            if (shouldReplicate) {
+                slaveLocation = new PartitionLocation(
+                    reduceIds.get(idx),
+                    newEpoch,
+                    workers.get(nextSlaveInd).host(),
+                    workers.get(nextSlaveInd).port(),
+                    PartitionLocation.Mode.Slave
+                );
+            }
+            masterLocation = new PartitionLocation(
                 reduceIds.get(idx),
                 newEpoch,
                 workers.get(nextMasterInd).host(),
@@ -113,49 +122,29 @@ public class MasterUtil {
                 PartitionLocation.Mode.Master,
                 slaveLocation
             );
-            slaveLocation.setPeer(masterLocation);
+            if (shouldReplicate) {
+                slaveLocation.setPeer(masterLocation);
+            }
 
             // add master location to WorkerInfo
             WorkerInfo worker = workers.get(nextMasterInd);
             worker.addMasterPartition(shuffleKey, masterLocation);
             locations._1.add(masterLocation);
 
-            // add slave location to WorkerInfo
-            slots.putIfAbsent(workers.get(nextSlaveInd),
+            if (shouldReplicate) {
+                // add slave location to WorkerInfo
+                slots.putIfAbsent(workers.get(nextSlaveInd),
                     new Tuple2<>(new ArrayList<>(), new ArrayList<>()));
-            locations = slots.get(workers.get(nextSlaveInd));
-            worker = workers.get(nextSlaveInd);
-            worker.addSlavePartition(shuffleKey, slaveLocation);
-            locations._2.add(slaveLocation);
+                locations = slots.get(workers.get(nextSlaveInd));
+                worker = workers.get(nextSlaveInd);
+                worker.addSlavePartition(shuffleKey, slaveLocation);
+                locations._2.add(slaveLocation);
+            }
 
             // update index
             masterInd = (nextMasterInd + 1) % workers.size();
         }
 
         return slots;
-    }
-
-    public static Tuple2<WorkerInfo, PartitionLocation> offerSlaveSlot(
-        PartitionLocation masterLocation, List<WorkerInfo> workers) {
-        int startInd = rand.nextInt(workers.size());
-        if (workers.get(startInd).hostPort().equals(masterLocation.hostPort())) {
-            startInd = (startInd + 1) % workers.size();
-        }
-        int curInd;
-        for (int i = 0; i < workers.size() - 1; i++) {
-            curInd = (startInd + i) % workers.size();
-            if (workers.get(curInd).slotAvailable()) {
-                PartitionLocation location = new PartitionLocation(
-                    masterLocation.getReduceId(),
-                    masterLocation.getEpoch(),
-                    workers.get(curInd).host(),
-                    workers.get(curInd).port(),
-                    PartitionLocation.Mode.Slave,
-                    masterLocation
-                );
-                return new Tuple2<>(workers.get(curInd), location);
-            }
-        }
-        return null;
     }
 }

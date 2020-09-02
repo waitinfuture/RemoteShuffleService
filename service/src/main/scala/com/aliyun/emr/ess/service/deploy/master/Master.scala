@@ -36,10 +36,11 @@ private[deploy] class Master(
   private var checkForShuffleRemoval: ScheduledFuture[_] = _
   private val nonEagerHandler = ThreadUtils.newDaemonCachedThreadPool("master-noneager-handler", 64)
 
-  // Configs
-  private val WORKER_TIMEOUT_MS = EssConf.essWorkerTimeoutMs(conf)
-  private val APPLICATION_TIMEOUT_MS = EssConf.essApplicationTimeoutMs(conf)
-  private val REMOVE_SHUFFLE_DELAY_MS = EssConf.essRemoveShuffleDelayMs(conf)
+  // Config constants
+  private val WorkerTimeoutMs = EssConf.essWorkerTimeoutMs(conf)
+  private val ApplicationTimeoutMs = EssConf.essApplicationTimeoutMs(conf)
+  private val RemoveShuffleDelayMs = EssConf.essRemoveShuffleDelayMs(conf)
+  private val ShouldReplicate = EssConf.essReplicate(conf)
 
   // States
   private val workers = new util.ArrayList[WorkerInfo]()
@@ -89,19 +90,19 @@ private[deploy] class Master(
       override def run(): Unit = Utils.tryLogNonFatalError {
         self.send(CheckForWorkerTimeOut)
       }
-    }, 0, WORKER_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+    }, 0, WorkerTimeoutMs, TimeUnit.MILLISECONDS)
 
     checkForApplicationTimeOutTask = forwardMessageThread.scheduleAtFixedRate(new Runnable {
       override def run(): Unit = Utils.tryLogNonFatalError {
         self.send(CheckForApplicationTimeOut)
       }
-    }, 0, APPLICATION_TIMEOUT_MS / 2, TimeUnit.MILLISECONDS)
+    }, 0, ApplicationTimeoutMs / 2, TimeUnit.MILLISECONDS)
     
     checkForShuffleRemoval = forwardMessageThread.scheduleAtFixedRate(new Runnable {
       override def run(): Unit = Utils.tryLogNonFatalError {
         self.send(RemoveExpiredShuffle)
       }
-    }, 0, REMOVE_SHUFFLE_DELAY_MS, TimeUnit.MILLISECONDS)
+    }, 0, RemoveShuffleDelayMs, TimeUnit.MILLISECONDS)
   }
 
   override def onStop(): Unit = {
@@ -244,7 +245,7 @@ private[deploy] class Master(
     val currentTime = System.currentTimeMillis()
     var ind = 0
     workersSnapShot.foreach { worker =>
-      if (worker.lastHeartbeat < currentTime - WORKER_TIMEOUT_MS
+      if (worker.lastHeartbeat < currentTime - WorkerTimeoutMs
         && !workerLostEvents.contains(worker.hostPort)) {
         logInfo(s"Worker ${worker} timeout! Trigger WorkerLost event")
         // trigger WorkerLost event
@@ -260,8 +261,8 @@ private[deploy] class Master(
     val currentTime = System.currentTimeMillis()
     val keys = appHeartbeatTime.keySet().toList
     keys.foreach { key =>
-      if (appHeartbeatTime.get(key) < currentTime - APPLICATION_TIMEOUT_MS) {
-        logError(s"Application $key timeout! Trigger ApplicationLost event")
+      if (appHeartbeatTime.get(key) < currentTime - ApplicationTimeoutMs) {
+        logWarning(s"Application $key timeout! Trigger ApplicationLost event")
         var res = self.askSync[ApplicationLostResponse](ApplicationLost(key))
         var retry = 1
         while (res.status != StatusCode.Success && retry <= 3) {
@@ -281,7 +282,7 @@ private[deploy] class Master(
     val currentTime = System.currentTimeMillis()
     val keys = unregisterShuffleTime.keys().toList
     keys.foreach { key =>
-      if (unregisterShuffleTime.get(key) < currentTime - REMOVE_SHUFFLE_DELAY_MS) {
+      if (unregisterShuffleTime.get(key) < currentTime - RemoveShuffleDelayMs) {
         logInfo(s"clear shuffle $key")
         // clear for the shuffle
         registeredShuffle.remove(key)
@@ -437,7 +438,8 @@ private[deploy] class Master(
       MasterUtil.offerSlots(
         shuffleKey,
         workersNotBlacklisted(),
-        (0 until numPartitions).map(new Integer(_)).toList
+        (0 until numPartitions).map(new Integer(_)).toList,
+        ShouldReplicate
       )
     }
 
@@ -534,10 +536,14 @@ private[deploy] class Master(
     val candidateWorkers = if (oldPartition != null) {
       // check to see if partition can be reached. if not, add into blacklist
       val hostPort = oldPartition.hostPort()
-      val peerHostPort = oldPartition.getPeer.hostPort()
       checkAndBlacklist(hostPort)
-      checkAndBlacklist(peerHostPort)
-      workersNotBlacklisted(Set(hostPort, peerHostPort))
+      if (oldPartition.getPeer != null) {
+        val peerHostPort = oldPartition.getPeer.hostPort()
+        checkAndBlacklist(peerHostPort)
+        workersNotBlacklisted(Set(hostPort, peerHostPort))
+      } else {
+        workersNotBlacklisted(Set(hostPort))
+      }
     } else {
       workersNotBlacklisted()
     }
@@ -584,7 +590,8 @@ private[deploy] class Master(
         // avoid offer slots on the same host of oldPartition
         candidateWorkers,
         Seq(new Integer(reduceId)),
-        Array(oldEpoch)
+        Array(oldEpoch),
+        ShouldReplicate
       )
     }
     // reply false if offer slots failed
@@ -809,6 +816,9 @@ private[deploy] class Master(
     }
 
     def hasCommonFailedIds(): Boolean = {
+      if (!ShouldReplicate && failedMasterIds.nonEmpty) {
+        return true
+      }
       for (id <- failedMasterIds) {
         if(failedSlaveIds.contains(id)) {
           logError(s"shuffle $shuffleKey partition $id: data lost")
