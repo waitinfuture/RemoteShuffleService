@@ -104,10 +104,10 @@ private[deploy] class Worker(
   private val workerInfo = new WorkerInfo(host, port, fetchPort,
     EssConf.essWorkerNumSlots(conf, localStorageManager.numDisks), self)
 
-  workerSource.addGauge(WorkerSource.REGISTERED_SHUFFLE_COUNT, _ => workerInfo.shuffleKeySet().size())
-  workerSource.addGauge(WorkerSource.TOTAL_SLOTS, _ => workerInfo.totalSlots())
-  workerSource.addGauge(WorkerSource.SLOTS_USED, _ => workerInfo.usedSlots())
-  workerSource.addGauge(WorkerSource.SLOTS_AVAILABLE, _ => workerInfo.freeSlots())
+  workerSource.addGauge(WorkerSource.RegisteredShuffleCount, _ => workerInfo.shuffleKeySet().size())
+  workerSource.addGauge(WorkerSource.TotalSlots, _ => workerInfo.totalSlots())
+  workerSource.addGauge(WorkerSource.SlotsUsed, _ => workerInfo.usedSlots())
+  workerSource.addGauge(WorkerSource.SlotsAvailable, _ => workerInfo.freeSlots())
 
   // Threads
   private val forwardMessageScheduler =
@@ -151,7 +151,7 @@ private[deploy] class Worker(
   override def receiveAndReply(context: RpcCallContext): PartialFunction[Any, Unit] = {
     case ReserveBuffers(applicationId, shuffleId, masterLocations, slaveLocations) =>
       val key = s"$applicationId $shuffleId"
-      workerSource.sample(WorkerSource.RESERVE_BUFFER_TIME, key) {
+      workerSource.sample(WorkerSource.ReserveBufferTime, key) {
         logInfo(s"received ReserveBuffers request,  key $key," +
           s"master partitions ${masterLocations.map(_.getUniqueId).mkString(",")}, " +
           s"slave partitions ${slaveLocations.map(_.getUniqueId).mkString(",")}")
@@ -159,7 +159,7 @@ private[deploy] class Worker(
       }
 
     case CommitFiles(shuffleKey, masterIds, slaveIds, mapAttempts) =>
-      workerSource.sample(WorkerSource.COMMIT_FILES_TIME, shuffleKey) {
+      workerSource.sample(WorkerSource.CommitFilesTime, shuffleKey) {
         logInfo(s"receive CommitFiles request, $shuffleKey, " +
           s"master files ${masterIds.mkString(",")} slave files ${slaveIds.mkString(",")}")
         val commitFilesTimeMs = Utils.timeIt({
@@ -394,23 +394,33 @@ private[deploy] class Worker(
   }
 
   override def handlePushData(pushData: PushData, callback: RpcResponseCallback): Unit = {
+    val shuffleKey = pushData.shuffleKey
+    val mode = PartitionLocation.getMode(pushData.mode)
+    val body = pushData.body.asInstanceOf[NettyManagedBuffer].getBuf
+    val isMaster = mode == PartitionLocation.Mode.Master
+
     val key = s"${pushData.requestId}"
-    workerSource.startTimer(WorkerSource.PUSH_DATA_TIME, key)
+    if (isMaster) {
+      workerSource.startTimer(WorkerSource.MasterPushDataTime, key)
+    } else {
+      workerSource.startTimer(WorkerSource.SlavePushDataTime, key)
+    }
+
     val wrappedCallback = new RpcResponseCallback() {
       override def onSuccess(response: ByteBuffer): Unit = {
-        workerSource.stopTimer(WorkerSource.PUSH_DATA_TIME, key)
+        if (isMaster) {
+          workerSource.stopTimer(WorkerSource.MasterPushDataTime, key)
+        } else {
+          workerSource.stopTimer(WorkerSource.SlavePushDataTime, key)
+        }
         callback.onSuccess(response)
       }
 
       override def onFailure(e: Throwable): Unit = {
-        workerSource.stopTimer(WorkerSource.PUSH_DATA_TIME, key)
+        workerSource.incCounter(WorkerSource.PushDataFailCount)
         callback.onFailure(e)
       }
     }
-
-    val shuffleKey = pushData.shuffleKey
-    val mode = PartitionLocation.getMode(pushData.mode)
-    val body = pushData.body.asInstanceOf[NettyManagedBuffer].getBuf
 
     // find FileWriter responsible for the data
     val location = if (mode == PartitionLocation.Mode.Master) {
@@ -432,7 +442,7 @@ private[deploy] class Worker(
         logInfo(msg)
       } else {
         msg = s"Partition Location not found!, ${pushData.partitionUniqueId}, $mode $shuffleKey," +
-          s"mapId $mapId, attemptId $attemptId";
+          s"mapId $mapId, attemptId $attemptId"
         logWarning(msg)
       }
       wrappedCallback.onFailure(new IOException(msg))
@@ -441,7 +451,6 @@ private[deploy] class Worker(
     val fileWriter = location.asInstanceOf[WorkingPartition].getFileWriter
     fileWriter.incrementPendingWrites()
 
-    val isMaster = mode == PartitionLocation.Mode.Master
     // for master, send data to slave
     if (EssConf.essReplicate(conf) && isMaster) {
       try {
@@ -461,12 +470,15 @@ private[deploy] class Worker(
     }
 
     try {
-      fileWriter.write(body)
+      workerSource.sample(WorkerSource.PushDataWriteTime, key) {
+        fileWriter.write(body)
+      }
     } catch {
       case e: Exception =>
         val msg = "append data failed!"
-        logError(s"msg ${e.getMessage}")
+        logError(s"$msg ${e.getMessage}")
     }
+
   }
 
   override def handleOpenStream(
@@ -547,7 +559,7 @@ private[deploy] object Worker extends Logging {
     val conf = new EssConf
     val workerArgs = new WorkerArguments(args, conf)
 
-    val metricsSystem = MetricsSystem.createMetricsSystem("worker", conf, WorkerSource.SERVLET_PATH)
+    val metricsSystem = MetricsSystem.createMetricsSystem("worker", conf, WorkerSource.ServletPath)
 
     val rpcEnv = RpcEnv.create(RpcNameConstants.WORKER_SYS,
       workerArgs.host,

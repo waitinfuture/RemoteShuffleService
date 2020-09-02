@@ -1,13 +1,14 @@
 package com.aliyun.emr.ess.common.metrics.source
 
 import java.util
-import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.concurrent.{ConcurrentHashMap, ConcurrentLinkedQueue, TimeUnit}
 
 import scala.util.Random
 import scala.collection.JavaConversions._
 
 import com.aliyun.emr.ess.common.EssConf
 import com.aliyun.emr.ess.common.internal.Logging
+import com.aliyun.emr.ess.common.util.ThreadUtils
 import com.aliyun.emr.ess.metrics.{EssHistogram, EssTimer, ResettableSlidingWindowReservoir}
 import com.codahale.metrics._
 
@@ -21,6 +22,8 @@ case class NamedTimer(name: String, timer: Timer)
 
 abstract class AbstractSource(essConf: EssConf, role: String)
   extends Source with Logging {
+  override val metricRegistry = new MetricRegistry()
+
   val slidingWindowSize: Int = EssConf.essMetricsSlidingWindowSize(essConf)
 
   val sampleRate: Double = EssConf.essMetricsSampleRate(essConf)
@@ -30,7 +33,9 @@ abstract class AbstractSource(essConf: EssConf, role: String)
 
   val timerSupplier = new TimerSupplier(slidingWindowSize)
 
-  private val namedGauges: java.util.List[NamedGauge[_]] = new util.ArrayList[NamedGauge[_]]()
+  val metricsClear = ThreadUtils.newDaemonSingleThreadExecutor(s"worker-metrics-clearer")
+
+  protected val namedGauges: java.util.List[NamedGauge[_]] = new util.ArrayList[NamedGauge[_]]()
 
   def addGauge[T](name: String, f: Unit => T): Unit = {
     val supplier: MetricRegistry.MetricSupplier[Gauge[_]] = new GaugeSupplier[T](f)
@@ -38,8 +43,23 @@ abstract class AbstractSource(essConf: EssConf, role: String)
     namedGauges.add(NamedGauge(name, gauge))
   }
 
+  protected val namedTimers: ConcurrentHashMap[String, (NamedTimer, ConcurrentHashMap[String, Long])] =
+    new ConcurrentHashMap[String, (NamedTimer, ConcurrentHashMap[String, Long])]()
+
+  def addTimer(name: String): Unit = {
+    val namedTimer = NamedTimer(name, metricRegistry.timer(name, timerSupplier))
+    namedTimers.putIfAbsent(name, (namedTimer, new ConcurrentHashMap[String, Long]()))
+  }
+
+  protected val namedCounters: ConcurrentHashMap[String, NamedCounter] =
+    new ConcurrentHashMap[String, NamedCounter]()
+
+  def addCounter(name: String): Unit = {
+    namedCounters.put(name, NamedCounter(name, metricRegistry.counter(name)))
+  }
+
   protected def counters(): List[NamedCounter] = {
-    List.empty[NamedCounter]
+    namedCounters.values().toList
   }
 
   def gauges(): List[NamedGauge[_]] = {
@@ -51,7 +71,7 @@ abstract class AbstractSource(essConf: EssConf, role: String)
   }
 
   protected def timers(): List[NamedTimer] = {
-    List.empty[NamedTimer]
+    namedTimers.values().map(_._1).toList
   }
 
   def needSample(): Boolean = {
@@ -90,20 +110,66 @@ abstract class AbstractSource(essConf: EssConf, role: String)
     doStopTimer(metricsName, key)
   }
 
-  protected def doStartTimer(metricsName: String, key: String): Unit = {
-    throw new UnsupportedOperationException()
+  def doStartTimer(metricsName: String, key: String): Unit = {
+    val pair = namedTimers.get(metricsName)
+    if (pair != null) {
+      pair._2.put(key, System.nanoTime())
+    } else {
+      logWarning(s"Metric $metricsName Not Found!")
+    }
   }
 
   protected def doStopTimer(metricsName: String, key: String): Unit = {
-    throw new UnsupportedOperationException()
+    val (namedTimer, map) = namedTimers.get(metricsName)
+    val startTime = Option(map.remove(key))
+    startTime match {
+      case Some(t) =>
+        namedTimer.timer.update(System.nanoTime() - t, TimeUnit.NANOSECONDS)
+        if (namedTimer.timer.getCount % slidingWindowSize == 0) {
+          recordTimer(namedTimer)
+        }
+      case None =>
+    }
   }
 
   override def incCounter(metricsName: String, incV: Long = 1): Unit = {
-    throw new UnsupportedOperationException("updateCounter has not been implemented!")
+    val counter = namedCounters.get(metricsName)
+    if (counter != null) {
+      counter.counter.inc(incV)
+    } else {
+      logWarning(s"Metric $metricsName Not Found!")
+    }
   }
 
-  override def decCounter(metricsName: String, decV: Long = 1): Unit = {
-    throw new UnsupportedOperationException("updateCounter has not been implemented!")
+  private def clearOldValues(map: ConcurrentHashMap[String, Long]): Unit = {
+    if (map.size > 5000) {
+      // remove values has existed more than 15 min
+      // 50000 values may be 1MB more or less
+      val threshTime = System.nanoTime() - 900000000000L
+      val it = map.entrySet().iterator
+      while (it.hasNext) {
+        val entry = it.next()
+        if (entry.getValue < threshTime) {
+          it.remove()
+        }
+      }
+    }
+  }
+
+  protected def startCleaner(): Unit = {
+    metricsClear.submit(new Runnable {
+      override def run(): Unit = {
+        while (true) {
+          try {
+            namedTimers.values().map(_._2).foreach(map => clearOldValues(map))
+          } catch {
+            case t: Throwable => logError(s"clearer quit with $t")
+          } finally {
+            Thread.sleep(600000 /** 10min **/)
+          }
+        }
+      }
+    })
   }
 
   private def updateInnerMetrics(str: String): Unit = {

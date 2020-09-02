@@ -1,8 +1,11 @@
 package com.aliyun.emr.ess.service.deploy.worker;
 
+import com.aliyun.emr.ess.common.metrics.source.AbstractSource;
 import io.netty.buffer.ByteBuf;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import scala.Function0;
+import scala.runtime.AbstractFunction0;
 
 import java.io.File;
 import java.io.FileOutputStream;
@@ -34,6 +37,8 @@ public final class FileWriter {
     private final long chunkSize;
     private final long timeoutMs;
 
+    private final AbstractSource workerSource;
+
     static class FlushNotifier {
         final AtomicInteger numPendingFlushes = new AtomicInteger();
         final AtomicReference<IOException> exception = new AtomicReference<>();
@@ -57,13 +62,30 @@ public final class FileWriter {
     private final FlushNotifier notifier = new FlushNotifier();
 
     public FileWriter(
-        File file, DiskFlusher flusher, long chunkSize, long timeoutMs) throws IOException {
+        File file, DiskFlusher flusher, long chunkSize, long timeoutMs,
+        AbstractSource workerSource) throws IOException {
         this.file = file;
         this.flusher = flusher;
         this.chunkSize = chunkSize;
         this.timeoutMs = timeoutMs;
+        this.workerSource = workerSource;
         channel = new FileOutputStream(file).getChannel();
-        takeBuffer();
+        AbstractFunction0<IOException> takeBufferFunc = new AbstractFunction0<IOException>() {
+            @Override
+            public IOException apply() {
+                try {
+                    takeBuffer();
+                } catch (IOException e) {
+                    return e;
+                }
+                return null;
+            }
+        };
+        IOException e = workerSource.sample(WorkerSource.FileWriterInitTakeBufferTime(),
+            file.getAbsolutePath(), takeBufferFunc);
+        if (e != null) {
+            throw e;
+        }
     }
 
     public File getFile() {
@@ -173,7 +195,7 @@ public final class FileWriter {
             returnBuffer();
             try {
                 channel.close();
-            } catch(IOException e) {
+            } catch (IOException e) {
                 logger.warn("close channel failed: " + file);
             }
         }

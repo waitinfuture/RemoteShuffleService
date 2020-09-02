@@ -34,7 +34,7 @@ private[worker] final class DiskFlusher(
         val task = workingQueue.take()
 
         val key = s"DiskFlusher-$index"
-        workerSource.sample(WorkerSource.FLUSH_DATA_TIME, key) {
+        workerSource.sample(WorkerSource.FlushDataTime, key) {
           if (!task.notifier.hasException) {
             try {
               task.fileChannel.write(task.buffer)
@@ -153,7 +153,7 @@ private[worker] final class LocalStorageManager(conf: EssConf, workerSource: Abs
     val file = new File(shuffleDir, fileName)
     shuffleDir.mkdirs()
     file.createNewFile()
-    val writer = new FileWriter(file, diskFlushers(index), fetchChunkSize, timeoutMs)
+    val writer = new FileWriter(file, diskFlushers(index), fetchChunkSize, timeoutMs, workerSource)
 
     val shuffleKey = Utils.makeShuffleKey(appId, shuffleId)
     val shuffleMap = writers.computeIfAbsent(shuffleKey, newMapFunc)
