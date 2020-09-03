@@ -34,7 +34,7 @@ import com.aliyun.emr.ess.common.rpc._
 import com.aliyun.emr.ess.common.util.{ThreadUtils, Utils}
 import com.aliyun.emr.ess.protocol.{PartitionLocation, RpcNameConstants}
 import com.aliyun.emr.ess.protocol.message.ControlMessages._
-import com.aliyun.emr.ess.protocol.message.StatusCode
+import com.aliyun.emr.ess.protocol.message.{PushDataStatusCode, StatusCode}
 import com.aliyun.emr.ess.service.deploy.worker.http.HttpRequestHandler
 import com.aliyun.emr.ess.unsafe.Platform
 import com.aliyun.emr.network.TransportContext
@@ -112,6 +112,8 @@ private[deploy] class Worker(
   // Threads
   private val forwardMessageScheduler =
     ThreadUtils.newDaemonSingleThreadScheduledExecutor("worker-forward-message-scheduler")
+  private val replicateThreadPool = ThreadUtils.newDaemonCachedThreadPool(
+    "worker-replicate-data", 64)
 
   // Configs
   private val HEARTBEAT_MILLIS = EssConf.essWorkerTimeoutMs(conf) / 4
@@ -436,10 +438,12 @@ private[deploy] class Worker(
       val mapId = Platform.getInt(header, Platform.BYTE_ARRAY_OFFSET)
       val attemptId = Platform.getInt(header, Platform.BYTE_ARRAY_OFFSET + 4)
       var msg = ""
-      if (shuffleMapperAttempts.containsKey(shuffleKey)) {
-        msg = s"Maybe speculation task, ${pushData.partitionUniqueId}, $mode $shuffleKey," +
+      if (shuffleMapperAttempts.containsKey(shuffleKey) && attemptId != shuffleMapperAttempts.get(shuffleKey)(mapId)) {
+        msg = s"Speculation task, ${pushData.partitionUniqueId}, $mode $shuffleKey," +
           s"mapId $mapId, attemptId $attemptId, committed attemptId ${shuffleMapperAttempts.get(shuffleKey)(mapId)}"
         logInfo(msg)
+        wrappedCallback.onSuccess(ByteBuffer.wrap(Array[Byte](PushDataStatusCode.StageEnded)))
+        return
       } else {
         msg = s"Partition Location not found!, ${pushData.partitionUniqueId}, $mode $shuffleKey," +
           s"mapId $mapId, attemptId $attemptId"
@@ -453,20 +457,24 @@ private[deploy] class Worker(
 
     // for master, send data to slave
     if (EssConf.essReplicate(conf) && isMaster) {
-      try {
-        val peer = location.getPeer
-        val client = pushClientFactory.createClient(
-          peer.getHost, peer.getPort, location.getReduceId)
-        val newPushData = new PushData(PartitionLocation.Mode.Slave.mode(), shuffleKey,
-          pushData.partitionUniqueId, pushData.body)
-        pushData.body().retain()
-        client.pushData(newPushData, wrappedCallback)
-      } catch {
-        case e: Exception =>
-          wrappedCallback.onFailure(e)
-      }
+      pushData.body().retain()
+      replicateThreadPool.submit(new Runnable {
+        override def run(): Unit = {
+          try {
+            val peer = location.getPeer
+            val client = pushClientFactory.createClient(
+              peer.getHost, peer.getPort, location.getReduceId)
+            val newPushData = new PushData(PartitionLocation.Mode.Slave.mode(), shuffleKey,
+              pushData.partitionUniqueId, pushData.body)
+            client.pushData(newPushData, wrappedCallback)
+          } catch {
+            case e: Exception =>
+              wrappedCallback.onFailure(e)
+          }
+        }
+      })
     } else {
-      wrappedCallback.onSuccess(ByteBuffer.wrap(new Array[Byte](0)))
+      wrappedCallback.onSuccess(ByteBuffer.wrap(Array[Byte](PushDataStatusCode.Success)))
     }
 
     try {

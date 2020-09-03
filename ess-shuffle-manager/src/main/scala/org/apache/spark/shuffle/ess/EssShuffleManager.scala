@@ -59,11 +59,8 @@ class EssShuffleManager(conf: SparkConf)
   }
 
   override def unregisterShuffle(shuffleId: Int): Boolean = {
-    if (SparkEnv.get.executorId == SparkContext.DRIVER_IDENTIFIER) {
-      essShuffleClient.unregisterShuffle(conf.getAppId, shuffleId)
-    } else {
-      true
-    }
+    essShuffleClient.unregisterShuffle(conf.getAppId, shuffleId,
+      SparkEnv.get.executorId == SparkContext.DRIVER_IDENTIFIER)
   }
 
   override def shuffleBlockResolver: ShuffleBlockResolver = null

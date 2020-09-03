@@ -12,6 +12,7 @@ import com.aliyun.emr.ess.common.util.Utils;
 import com.aliyun.emr.ess.protocol.PartitionLocation;
 import com.aliyun.emr.ess.protocol.RpcNameConstants;
 import com.aliyun.emr.ess.protocol.message.ControlMessages.*;
+import com.aliyun.emr.ess.protocol.message.PushDataStatusCode;
 import com.aliyun.emr.ess.protocol.message.StatusCode;
 import com.aliyun.emr.ess.unsafe.Platform;
 import com.aliyun.emr.network.TransportContext;
@@ -62,6 +63,8 @@ public class ShuffleClientImpl extends ShuffleClient {
     private final Map<Integer, ConcurrentHashMap<Integer, PartitionLocation>> reducePartitionMap =
             new ConcurrentHashMap<>();
 
+    private final ConcurrentSet<Integer> stageEndShuffleSet = new ConcurrentSet<>();
+
     private static class PushState {
         final AtomicInteger batchId = new AtomicInteger();
         final ConcurrentSet<Integer> inFlightBatches = new ConcurrentSet<>();
@@ -76,12 +79,14 @@ public class ShuffleClientImpl extends ShuffleClient {
             futures.remove(batchId);
         }
 
-        public void cancelFutures() {
-            Set<Integer> keys = new HashSet<>(futures.keySet());
-            logger.info("cancel futures, size " + keys.size());
-            for (Integer batchId : keys) {
-                ChannelFuture future = futures.remove(batchId);
-                future.cancel(true);
+        public synchronized void cancelFutures() {
+            if (!futures.isEmpty()) {
+                Set<Integer> keys = new HashSet<>(futures.keySet());
+                logger.info("cancel futures, size " + keys.size());
+                for (Integer batchId : keys) {
+                    ChannelFuture future = futures.remove(batchId);
+                    future.cancel(true);
+                }
             }
         }
     }
@@ -319,6 +324,16 @@ public class ShuffleClientImpl extends ShuffleClient {
         int length,
         int numMappers,
         int numPartitions) throws IOException {
+        // mapKey
+        final String mapKey = Utils.makeMapKey(shuffleId, mapId, attemptId);
+        // return if shuffle stage already ended
+        if (stageEndShuffleSet.contains(shuffleId)) {
+            PushState pushState = pushStates.get(mapKey);
+            if (pushState != null) {
+                pushState.cancelFutures();
+            }
+            return 0;
+        }
         // register shuffle if not registered
         final ConcurrentHashMap<Integer, PartitionLocation> map =
             reducePartitionMap.computeIfAbsent(shuffleId, (id) ->
@@ -343,7 +358,6 @@ public class ShuffleClientImpl extends ShuffleClient {
             throw new IOException(msg);
         }
 
-        final String mapKey = Utils.makeMapKey(shuffleId, mapId, attemptId);
         PushState pushState = pushStates.computeIfAbsent(mapKey, (s) -> new PushState());
         limitMaxInFlight(mapKey, pushState, maxInFlight);
 
@@ -377,6 +391,10 @@ public class ShuffleClientImpl extends ShuffleClient {
             @Override
             public void onSuccess(ByteBuffer response) {
                 pushState.inFlightBatches.remove(nextBatchId);
+                if (response.getChar() == PushDataStatusCode.StageEnded()) {
+                    logger.info("already StageEnd, update status");
+                    stageEndShuffleSet.add(shuffleId);
+                }
                 pushState.removeFuture(nextBatchId);
             }
 
@@ -460,27 +478,21 @@ public class ShuffleClientImpl extends ShuffleClient {
     }
 
     @Override
-    public boolean unregisterShuffle(String applicationId, int shuffleId) {
-        try {
-            master.send(new UnregisterShuffle(applicationId, shuffleId));
-        } catch (Exception e) {
-            logger.error("Send UnregisterShuffle failed, ignore", e);
+    public boolean unregisterShuffle(String applicationId, int shuffleId, boolean isDriver) {
+        if (isDriver) {
+            try {
+                master.send(new UnregisterShuffle(applicationId, shuffleId));
+            } catch (Exception e) {
+                logger.error("Send UnregisterShuffle failed, ignore", e);
+            }
         }
 
         // clear status
         reducePartitionMap.remove(shuffleId);
         reduceFileGroupsMap.remove(shuffleId);
+        stageEndShuffleSet.remove(shuffleId);
 
         return true;
-    }
-
-    @Override
-    public boolean stageEnd(String appId, int shuffleId) {
-        StageEndResponse response = master.askSync(
-            new StageEnd(appId, shuffleId),
-            ClassTag$.MODULE$.apply(StageEndResponse.class)
-        );
-        return response.status() == StatusCode.Success;
     }
 
     @Override

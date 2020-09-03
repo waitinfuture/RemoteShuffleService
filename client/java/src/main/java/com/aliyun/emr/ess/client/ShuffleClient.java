@@ -78,14 +78,6 @@ public abstract class ShuffleClient implements Cloneable
     public abstract void cleanup(String applicationId, int shuffleId, int mapId, int attemptId);
 
     /**
-     * commit files, update status
-     * @param appId
-     * @param shuffleId
-     * @return
-     */
-    public abstract boolean stageEnd(String appId, int shuffleId);
-
-    /**
      * reduce端分区读取
      * 按照 mapperId+mapperAttemptNum+batchId 去重
      * batchId是隐藏在实现里的发送时序自增变量
@@ -106,7 +98,8 @@ public abstract class ShuffleClient implements Cloneable
      * @param shuffleId
      * @return
      */
-    public abstract boolean unregisterShuffle(String applicationId, int shuffleId);
+    public abstract boolean unregisterShuffle(String applicationId, int shuffleId,
+                                              boolean isDriver);
 
     public abstract void startHeartbeat(String applicationId);
 

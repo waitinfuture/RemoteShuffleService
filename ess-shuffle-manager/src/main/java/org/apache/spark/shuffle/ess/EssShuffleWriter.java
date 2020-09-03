@@ -445,6 +445,7 @@ public class EssShuffleWriter<K, V, C> extends ShuffleWriter<K, V> {
                     if (mapStatus == null) {
                         throw new IllegalStateException("Cannot call stop(true) without having called write()");
                     }
+                    logger.info("mapStatus " + mapStatus.getSizeForBlock(0) + ", " + mapStatus.getRecordForBlock(0));
                     return Option.apply(mapStatus);
                 } else {
                     return Option.apply(null);
