@@ -85,7 +85,9 @@ public class ShuffleClientImpl extends ShuffleClient {
                 logger.info("cancel futures, size " + keys.size());
                 for (Integer batchId : keys) {
                     ChannelFuture future = futures.remove(batchId);
-                    future.cancel(true);
+                    if (future != null) {
+                        future.cancel(true);
+                    }
                 }
             }
         }
@@ -391,8 +393,8 @@ public class ShuffleClientImpl extends ShuffleClient {
             @Override
             public void onSuccess(ByteBuffer response) {
                 pushState.inFlightBatches.remove(nextBatchId);
-                if (response.getChar() == PushDataStatusCode.StageEnded()) {
-                    logger.info("already StageEnd, update status");
+                if (response.remaining() > 0 &&
+                    response.get() == PushDataStatusCode.StageEnded()) {
                     stageEndShuffleSet.add(shuffleId);
                 }
                 pushState.removeFuture(nextBatchId);
@@ -418,12 +420,14 @@ public class ShuffleClientImpl extends ShuffleClient {
                     return;
                 }
                 // async retry pushdata
-                logger.warn("PushData failed, taskId " + mapId + ", attemptId " + attemptId +
-                    ",reduceId " + reduceId + ",batchId " + nextBatchId +
-                    ", put into retry queue, " + e.toString());
-                pushDataRetryPool.submit(() ->
-                    submitRetryPushData(applicationId, shuffleId, body, nextBatchId,
-                        loc, callback, pushState));
+                if (!stageEndShuffleSet.contains(shuffleId)) {
+                    logger.warn("PushData failed, taskId " + mapId + ", attemptId " + attemptId +
+                        ",reduceId " + reduceId + ",batchId " + nextBatchId +
+                        ", put into retry queue, " + e.toString());
+                    pushDataRetryPool.submit(() ->
+                        submitRetryPushData(applicationId, shuffleId, body, nextBatchId,
+                            loc, callback, pushState));
+                }
             }
         };
 

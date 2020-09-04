@@ -412,10 +412,18 @@ private[deploy] class Worker(
       override def onSuccess(response: ByteBuffer): Unit = {
         if (isMaster) {
           workerSource.stopTimer(WorkerSource.MasterPushDataTime, key)
+          if (response.remaining() > 0) {
+            val resp = ByteBuffer.allocate(response.remaining())
+            resp.put(response)
+            resp.flip()
+            callback.onSuccess(resp)
+          } else {
+            callback.onSuccess(response)
+          }
         } else {
           workerSource.stopTimer(WorkerSource.SlavePushDataTime, key)
+          callback.onSuccess(response)
         }
-        callback.onSuccess(response)
       }
 
       override def onFailure(e: Throwable): Unit = {
@@ -474,7 +482,7 @@ private[deploy] class Worker(
         }
       })
     } else {
-      wrappedCallback.onSuccess(ByteBuffer.wrap(Array[Byte](PushDataStatusCode.Success)))
+      wrappedCallback.onSuccess(ByteBuffer.wrap(Array[Byte]()))
     }
 
     try {

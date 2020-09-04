@@ -200,7 +200,6 @@ private[deploy] class Master(
       logDebug(s"received RegisterShuffle request, " +
         s"$applicationId, $shuffleId, $numMappers, $numPartitions")
       handleRegisterShuffle(context, applicationId, shuffleId, numMappers, numPartitions, hostname)
-      masterSource.incCounter(MasterSource.RegisteredShuffleCount)
 
     case Revive(applicationId, shuffleId, reduceId, epoch, oldPartition) =>
       val key = s"$applicationId, $shuffleId, $reduceId-$epoch"
