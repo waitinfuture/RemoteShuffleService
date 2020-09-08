@@ -53,7 +53,7 @@ public class MasterUtil {
             boolean shouldReplicate) {
         logger.info("inside offerSlots, reduceId num " + reduceIds.size());
 
-        if (workers.size() < 2) {
+        if (workers.size() < 2 && shouldReplicate) {
             logger.error("offerSlots failed: require at least 2 active workers");
             return null;
         }
