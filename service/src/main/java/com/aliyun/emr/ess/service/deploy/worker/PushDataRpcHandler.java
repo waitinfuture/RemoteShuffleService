@@ -2,6 +2,7 @@ package com.aliyun.emr.ess.service.deploy.worker;
 
 import java.nio.ByteBuffer;
 
+import com.aliyun.emr.network.protocol.PushMergedData;
 import com.aliyun.emr.network.protocol.PushData;
 import com.aliyun.emr.network.client.RpcResponseCallback;
 import com.aliyun.emr.network.client.TransportClient;
@@ -35,6 +36,12 @@ public final class PushDataRpcHandler extends RpcHandler {
     public void receivePushData(
             TransportClient client, PushData pushData, RpcResponseCallback callback) {
         handler.handlePushData(pushData, callback);
+    }
+
+    @Override
+    public void receivePushMergedData(
+        TransportClient client, PushMergedData pushMergedData, RpcResponseCallback callback) {
+        handler.handlePushMergedData(pushMergedData, callback);
     }
 
     @Override

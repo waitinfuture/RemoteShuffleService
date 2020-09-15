@@ -54,6 +54,25 @@ public abstract class ShuffleClient implements Cloneable
         int numMappers,
         int numPartitions) throws IOException;
 
+    public abstract int mergeData(
+        String applicationId,
+        int shuffleId,
+        int mapId,
+        int attemptId,
+        int reduceId,
+        byte[] data,
+        int offset,
+        int length,
+        int numMappers,
+        int numPartitions) throws IOException;
+
+    public abstract void pushMergedData(
+        String applicationId,
+        int shuffleId,
+        int mapId,
+        int attemptId
+    ) throws IOException;
+
     /**
      * report partitionlocations written by the completed map task
      * @param applicationId

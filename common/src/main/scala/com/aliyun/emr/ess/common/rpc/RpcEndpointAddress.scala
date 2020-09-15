@@ -17,7 +17,7 @@
 
 package com.aliyun.emr.ess.common.rpc
 
-import com.aliyun.emr.ess.common.EssException
+import com.aliyun.emr.ess.common.exception.EssException
 
 /**
  * An address identifier for an RPC endpoint.

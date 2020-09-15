@@ -63,6 +63,29 @@ public class Encoders {
     }
   }
 
+  /** Int arrays are encoded with their length followed by ints. */
+  public static class IntArrays {
+    public static int encodedLength(int[] ints) {
+      return 4 + 4 * ints.length;
+    }
+
+    public static void encode(ByteBuf buf, int[] ints) {
+      buf.writeInt(ints.length);
+      for (int i : ints) {
+        buf.writeInt(i);
+      }
+    }
+
+    public static int[] decode(ByteBuf buf) {
+      int length = buf.readInt();
+      int[] ints = new int[length];
+      for (int i = 0; i < ints.length; i ++) {
+        ints[i] = buf.readInt();
+      }
+      return ints;
+    }
+  }
+
   /** String arrays are encoded with the number of strings followed by per-String encoding. */
   public static class StringArrays {
     public static int encodedLength(String[] strings) {

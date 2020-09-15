@@ -53,6 +53,8 @@ object ControlMessages {
   case class Revive(
       applicationId: String,
       shuffleId: Int,
+      mapId: Int,
+      attemptId: Int,
       reduceId: Int,
       epoch: Int,
       oldPartition: PartitionLocation)

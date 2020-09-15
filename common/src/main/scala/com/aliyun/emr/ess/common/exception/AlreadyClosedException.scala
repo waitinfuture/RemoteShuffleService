@@ -15,10 +15,12 @@
  * limitations under the License.
  */
 
-package com.aliyun.emr.ess.common
+package com.aliyun.emr.ess.common.exception
 
-class EssException(message: String, cause: Throwable)
-  extends Exception(message, cause) {
+import java.io.IOException
 
-  def this(message: String) = this(message, null)
-}
+class AlreadyClosedException(message: String, cause: Throwable)
+  extends IOException(message, cause) {
+
+    def this(message: String) = this(message, null)
+  }

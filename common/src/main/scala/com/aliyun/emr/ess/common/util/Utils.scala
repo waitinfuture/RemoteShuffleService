@@ -25,7 +25,7 @@ import java.nio.charset.StandardCharsets
 import java.text.SimpleDateFormat
 import java.util.{Locale, Properties}
 
-import com.aliyun.emr.ess.common.{EssConf, EssException}
+import com.aliyun.emr.ess.common.EssConf
 import com.aliyun.emr.ess.common.internal.Logging
 import com.google.common.net.InetAddresses
 import io.netty.channel.unix.Errors.NativeIoException
@@ -35,6 +35,7 @@ import scala.collection.Map
 import scala.util.Try
 import scala.util.control.{ControlThrowable, NonFatal}
 
+import com.aliyun.emr.ess.common.exception.EssException
 import com.aliyun.emr.ess.common.metrics.source.AbstractSource
 import com.aliyun.emr.network.util.{ConfigProvider, JavaUtils, TransportConf}
 

@@ -19,9 +19,7 @@ package com.aliyun.emr.ess.common.util
 
 import java.util.concurrent._
 
-import com.aliyun.emr.ess.common.EssException
 import com.google.common.util.concurrent.{MoreExecutors, ThreadFactoryBuilder}
-
 import scala.collection.TraversableLike
 import scala.collection.generic.CanBuildFrom
 import scala.concurrent.duration.{Duration, FiniteDuration}
@@ -29,6 +27,8 @@ import scala.concurrent.forkjoin.{ForkJoinPool => SForkJoinPool, ForkJoinWorkerT
 import scala.concurrent.{Awaitable, ExecutionContext, ExecutionContextExecutor, Future}
 import scala.language.higherKinds
 import scala.util.control.NonFatal
+
+import com.aliyun.emr.ess.common.exception.EssException
 
 object ThreadUtils {
 

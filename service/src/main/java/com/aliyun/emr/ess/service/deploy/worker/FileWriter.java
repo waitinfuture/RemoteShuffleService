@@ -1,5 +1,6 @@
 package com.aliyun.emr.ess.service.deploy.worker;
 
+import com.aliyun.emr.ess.common.exception.AlreadyClosedException;
 import com.aliyun.emr.ess.common.metrics.source.AbstractSource;
 import io.netty.buffer.ByteBuf;
 import org.slf4j.Logger;
@@ -104,6 +105,10 @@ public final class FileWriter {
         numPendingWrites.incrementAndGet();
     }
 
+    public void decrementPendingWrites() {
+        numPendingWrites.decrementAndGet();
+    }
+
     private void flush() throws IOException {
         notifier.checkException();
         flushBuffer.flip();
@@ -127,9 +132,9 @@ public final class FileWriter {
      */
     public void write(ByteBuf data) throws IOException {
         if (closed) {
-            String msg = "already closed!";
-            logger.error(msg);
-            throw new IOException(msg);
+            String msg = "[write] already closed!, fileName " + file.getAbsolutePath();
+            logger.warn(msg);
+            throw new AlreadyClosedException(msg);
         }
 
         if (notifier.hasException()) {
@@ -164,9 +169,9 @@ public final class FileWriter {
 
     public long close() throws IOException {
         if (closed) {
-            String msg = "already closed!";
+            String msg = "[close] already closed! fileName " + file.getAbsolutePath();
             logger.error(msg);
-            throw new IOException(msg);
+            throw new AlreadyClosedException(msg);
         }
 
         try {

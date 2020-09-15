@@ -22,7 +22,7 @@ import java.util.concurrent.Callable
 
 import scala.util.control.NonFatal
 
-import com.aliyun.emr.ess.common.EssException
+import com.aliyun.emr.ess.common.exception.EssException
 import com.aliyun.emr.ess.common.internal.Logging
 import com.aliyun.emr.ess.common.rpc.{RpcAddress, RpcEnvStoppedException}
 import com.aliyun.emr.network.client.{RpcResponseCallback, TransportClient}
@@ -112,7 +112,7 @@ private[ess] class Outbox(nettyEnv: NettyRpcEnv, val address: RpcAddress) {
 
   /**
    * Send a message. If there is no active connection, cache it and launch a new connection. If
-   * [[Outbox]] is stopped, the sender will be notified with a [[com.aliyun.emr.ess.common.EssException]].
+   * [[Outbox]] is stopped, the sender will be notified with a [[EssException]].
    */
   def send(message: OutboxMessage): Unit = {
     val dropped = synchronized {
@@ -250,7 +250,7 @@ private[ess] class Outbox(nettyEnv: NettyRpcEnv, val address: RpcAddress) {
 
   /**
    * Stop [[Outbox]]. The remaining messages in the [[Outbox]] will be notified with a
-   * [[com.aliyun.emr.ess.common.EssException]].
+   * [[EssException]].
    */
   def stop(): Unit = {
     synchronized {

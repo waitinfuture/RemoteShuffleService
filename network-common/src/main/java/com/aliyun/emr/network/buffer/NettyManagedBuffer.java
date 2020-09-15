@@ -36,7 +36,7 @@ public class NettyManagedBuffer extends ManagedBuffer {
   }
 
   public ByteBuf getBuf() {
-    return buf;
+    return buf.duplicate();
   }
 
   @Override

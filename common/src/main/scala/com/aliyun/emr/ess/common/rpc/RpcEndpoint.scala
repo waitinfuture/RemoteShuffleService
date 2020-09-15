@@ -17,7 +17,7 @@
 
 package com.aliyun.emr.ess.common.rpc
 
-import com.aliyun.emr.ess.common.EssException
+import com.aliyun.emr.ess.common.exception.EssException
 
 /**
  * A factory class to create the [[RpcEnv]]. It must have an empty constructor so that it can be

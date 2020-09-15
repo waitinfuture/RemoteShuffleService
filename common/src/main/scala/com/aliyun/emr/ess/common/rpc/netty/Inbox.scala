@@ -19,7 +19,7 @@ package com.aliyun.emr.ess.common.rpc.netty
 
 import scala.util.control.NonFatal
 
-import com.aliyun.emr.ess.common.EssException
+import com.aliyun.emr.ess.common.exception.EssException
 import com.aliyun.emr.ess.common.internal.Logging
 import com.aliyun.emr.ess.common.rpc.{RpcAddress, RpcEndpoint, ThreadSafeRpcEndpoint}
 import javax.annotation.concurrent.GuardedBy

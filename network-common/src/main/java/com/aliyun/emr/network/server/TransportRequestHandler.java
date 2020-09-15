@@ -119,6 +119,10 @@ public class TransportRequestHandler extends MessageHandler<RequestMessage> {
       if (checkRegistered(request)) {
         processPushData((PushData) request);
       }
+    } else if (request instanceof PushMergedData) {
+      if (checkRegistered(request)) {
+        processPushMergedData((PushMergedData) request);
+      }
     } else {
       throw new IllegalArgumentException("Unknown request type: " + request);
     }
@@ -313,6 +317,28 @@ public class TransportRequestHandler extends MessageHandler<RequestMessage> {
       });
     } catch (Exception e) {
       logger.error("Error while invoking RpcHandler#receive() on PushData " + req, e);
+      channel.writeAndFlush(e);
+    } finally {
+      req.body().release();
+    }
+  }
+
+  private void processPushMergedData(PushMergedData req) {
+    try {
+      rpcHandler.receivePushMergedData(reverseClient, req, new RpcResponseCallback() {
+        @Override
+        public void onSuccess(ByteBuffer response) {
+          respond(new RpcResponse(req.requestId, new NioManagedBuffer(response)));
+        }
+
+        @Override
+        public void onFailure(Throwable e) {
+          logger.error("Process PushMergedData onFailure!", e);
+          respond(new RpcFailure(req.requestId, e.toString()));
+        }
+      });
+    } catch (Exception e) {
+      logger.error("Error while invoking RpcHandler#receive() on PushMergedData " + req, e);
       channel.writeAndFlush(e);
     } finally {
       req.body().release();

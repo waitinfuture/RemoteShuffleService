@@ -3,6 +3,7 @@ package org.apache.spark.shuffle.ess;
 import com.aliyun.emr.ess.client.ShuffleClient;
 import com.aliyun.emr.ess.common.EssConf;
 
+import com.aliyun.emr.ess.common.util.Utils;
 import org.apache.spark.*;
 import org.apache.spark.annotation.Private;
 import org.apache.spark.executor.ShuffleWriteMetrics;
@@ -396,15 +397,30 @@ public class EssShuffleWriter<K, V, C> extends ShuffleWriter<K, V> {
     }
 
     private void close() throws IOException {
-        // flush
+        // merge and push residual data
         for (int i = 0; i < sendBuffers.length; i++) {
             final int size = sendOffsets[i];
             if (size > 0) {
-                flushSendBuffer(i, sendBuffers[i], size);
+                int bytesWritten = essShuffleClient.mergeData(
+                    appId,
+                    shuffleId,
+                    mapId,
+                    taskContext.attemptNumber(),
+                    i,
+                    sendBuffers[i],
+                    0,
+                    size,
+                    numMappers,
+                    numPartitions
+                );
+                // free buffer
+                sendBuffers[i] = null;
+                writeMetrics.incBytesWritten(bytesWritten);
             }
         }
-        dataPusher.waitOnTermination();
+        essShuffleClient.pushMergedData(appId, shuffleId, mapId, taskContext.attemptNumber());
 
+        dataPusher.waitOnTermination();
         updateMapStatus();
 
         sendBuffers = null;

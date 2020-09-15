@@ -312,6 +312,9 @@ public abstract class EssInputStream extends InputStream {
                 }
                 streamId = response.getLong();
                 numChunks = response.getInt();
+                if (numChunks <= 0) {
+                    throw new IOException("numChunks is " + numChunks);
+                }
 
                 results = new LinkedBlockingQueue<>();
                 callback = new ChunkReceivedCallback() {

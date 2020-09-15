@@ -572,7 +572,7 @@ object EssConf extends Logging {
   }
 
   def essLimitInFlightTimeoutMs(conf: EssConf): Long = {
-    conf.getTimeAsMs("ess.limit.in.flight.timeout", "60s")
+    conf.getTimeAsMs("ess.limit.in.flight.timeout", "120s")
   }
 
   def essLimitInFlightSleepDeltaMs(conf: EssConf): Long = {
@@ -626,5 +626,9 @@ object EssConf extends Logging {
 
   def essWorkerPrometheusMetricPort(conf: EssConf): Int = {
     conf.getInt("ess.worker.prometheus.metric.port", 9096)
+  }
+
+  def essMergePushDataThreshold(conf: EssConf): Int = {
+    conf.getSizeAsBytes("ess.merge.push.data.threshold", "1m").toInt
   }
 }

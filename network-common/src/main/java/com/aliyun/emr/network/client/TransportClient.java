@@ -27,7 +27,6 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import javax.annotation.Nullable;
 
-import com.aliyun.emr.network.buffer.NettyManagedBuffer;
 import com.aliyun.emr.network.buffer.NioManagedBuffer;
 import com.aliyun.emr.network.protocol.*;
 import com.aliyun.emr.network.util.NettyUtils;
@@ -213,6 +212,47 @@ public class TransportClient implements Closeable {
 
     RpcChannelListener listener = new RpcChannelListener(requestId, callback);
     return channel.writeAndFlush(pushData).addListener(listener);
+  }
+
+  public ChannelFuture pushMergedData(PushMergedData pushMergedData, RpcResponseCallback callback) {
+    if (logger.isTraceEnabled()) {
+      logger.trace("Pushing merged data to {}", NettyUtils.getRemoteAddress(channel));
+    }
+
+    long requestId = dataRequestId();
+    handler.addRpcRequest(requestId, callback);
+
+    pushMergedData.requestId = requestId;
+
+    RpcChannelListener listener = new RpcChannelListener(requestId, callback);
+    return channel.writeAndFlush(pushMergedData).addListener(listener);
+  }
+
+  public ByteBuffer pushMergedDataSync(PushMergedData pushMergedData, long timeoutMs) {
+    final SettableFuture<ByteBuffer> result = SettableFuture.create();
+
+    pushMergedData(pushMergedData, new RpcResponseCallback() {
+      @Override
+      public void onSuccess(ByteBuffer response) {
+        ByteBuffer copy = ByteBuffer.allocate(response.remaining());
+        copy.put(response);
+        copy.flip();
+        result.set(copy);
+      }
+
+      @Override
+      public void onFailure(Throwable e) {
+        result.setException(e);
+      }
+    });
+
+    try {
+      return result.get(timeoutMs, TimeUnit.MILLISECONDS);
+    } catch (ExecutionException e) {
+      throw Throwables.propagate(e.getCause());
+    } catch (Exception e) {
+      throw Throwables.propagate(e);
+    }
   }
 
   /**

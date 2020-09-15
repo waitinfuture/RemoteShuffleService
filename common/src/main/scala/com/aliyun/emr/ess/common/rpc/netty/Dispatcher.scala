@@ -19,13 +19,13 @@ package com.aliyun.emr.ess.common.rpc.netty
 
 import java.util.concurrent._
 
-import com.aliyun.emr.ess.common.EssException
 import com.aliyun.emr.ess.common.internal.Logging
 import javax.annotation.concurrent.GuardedBy
 import scala.collection.JavaConverters._
 import scala.concurrent.Promise
 import scala.util.control.NonFatal
 
+import com.aliyun.emr.ess.common.exception.EssException
 import com.aliyun.emr.ess.common.rpc._
 import com.aliyun.emr.ess.common.util.ThreadUtils
 import com.aliyun.emr.network.client.RpcResponseCallback

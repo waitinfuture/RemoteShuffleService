@@ -50,6 +50,9 @@ public final class ChunkFetchRpcHandler extends RpcHandler {
             ByteBuffer response = ByteBuffer.allocate(8 + 4);
             response.putLong(streamId);
             response.putInt(fileInfo.chunkOffsets.size());
+            if (fileInfo.chunkOffsets.size() == 0) {
+                logger.error("ChunkOffsets size is 0! fileName " + fileName);
+            }
             response.flip();
             callback.onSuccess(response);
         } else {

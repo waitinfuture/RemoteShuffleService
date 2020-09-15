@@ -201,11 +201,12 @@ private[deploy] class Master(
         s"$applicationId, $shuffleId, $numMappers, $numPartitions")
       handleRegisterShuffle(context, applicationId, shuffleId, numMappers, numPartitions, hostname)
 
-    case Revive(applicationId, shuffleId, reduceId, epoch, oldPartition) =>
-      val key = s"$applicationId, $shuffleId, $reduceId-$epoch"
+    case Revive(applicationId, shuffleId, mapId, attemptId, reduceId, epoch, oldPartition) =>
+      val key = s"$applicationId, $shuffleId, $mapId-$attemptId-$reduceId-$epoch"
       logInfo(s"received Revive request, key: $key oldPartition: $oldPartition")
       masterSource.sample(MasterSource.ReviveTime, key) {
-        handleRevive(context, applicationId, shuffleId, reduceId, epoch, oldPartition)
+        handleRevive(context, applicationId, shuffleId, mapId, attemptId,
+          reduceId, epoch, oldPartition)
       }
 
     case MapperEnd(applicationId, shuffleId, mapId, attemptId, numMappers) =>
@@ -289,6 +290,7 @@ private[deploy] class Master(
         reducerFileGroupsMap.remove(key)
         dataLostShuffleSet.remove(key)
         shuffleAllocatedWorkers.remove(key)
+        shuffleMapperAttempts.remove(key)
         stageEndShuffleSet.remove(key)
         reviving.remove(key)
         unregisterShuffleTime.remove(key)
@@ -512,6 +514,8 @@ private[deploy] class Master(
       context: RpcCallContext,
       applicationId: String,
       shuffleId: Int,
+      mapId: Int,
+      attemptId: Int,
       reduceId: Int,
       oldEpoch: Int,
       oldPartition: PartitionLocation): Unit = {
@@ -520,6 +524,13 @@ private[deploy] class Master(
     if (!registeredShuffle.contains(shuffleKey)) {
       logError(s"[handleRevive] shuffle $shuffleKey not registered!")
       context.reply(ReviveResponse(StatusCode.ShuffleNotRegistered, null))
+      return
+    }
+    if (shuffleMapperAttempts.containsKey(shuffleKey)
+      && shuffleMapperAttempts.get(shuffleKey)(mapId) != -1) {
+      logWarning(s"[handleRevive] Mapper ended, mapId $mapId, current attemptId $attemptId, " +
+        s"ended attemptId ${shuffleMapperAttempts.get(shuffleKey)(mapId)}, shuffleKey $shuffleKey")
+      context.reply(ReviveResponse(StatusCode.MapEnded, null))
       return
     }
 
@@ -895,11 +906,7 @@ private[deploy] class Master(
         worker.removeSlavePartitions(shuffleKey)
       }
     }
-    // clear shuffle attempts for the shuffle
-    shuffleMapperAttempts.synchronized {
-      logInfo(s"Remove from shuffleMapperAttempts, $shuffleKey")
-      shuffleMapperAttempts.remove(shuffleKey)
-    }
+
     // add shuffleKey to delay shuffle removal set
     unregisterShuffleTime.put(shuffleKey, System.currentTimeMillis())
 

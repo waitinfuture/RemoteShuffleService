@@ -16,12 +16,12 @@ public final class PushData extends AbstractMessage implements RequestMessage {
     public final String shuffleKey;
     public final String partitionUniqueId;
 
-    public PushData(byte mode, String shuffleKey, String partitionId, ManagedBuffer body) {
-        this(0L, 0, mode, shuffleKey, partitionId, body);
+    public PushData(byte mode, String shuffleKey, String partitionUniqueId, ManagedBuffer body) {
+        this(0L, 0, mode, shuffleKey, partitionUniqueId, body);
     }
 
-    public PushData(int epoch, byte mode, String shuffleKey, String partitionId, ManagedBuffer body) {
-        this(0L, epoch, mode, shuffleKey, partitionId, body);
+    public PushData(int epoch, byte mode, String shuffleKey, String partitionUniqueId, ManagedBuffer body) {
+        this(0L, epoch, mode, shuffleKey, partitionUniqueId, body);
     }
 
     private PushData(long requestId, int epoch, byte mode, String shuffleKey, String partitionUniqueId,
@@ -59,8 +59,8 @@ public final class PushData extends AbstractMessage implements RequestMessage {
         int epoch = buf.readInt();
         byte mode = buf.readByte();
         String shuffleKey = Encoders.Strings.decode(buf);
-        String partitionId = Encoders.Strings.decode(buf);
-        return new PushData(requestId, epoch, mode, shuffleKey, partitionId,
+        String partitionUniqueId = Encoders.Strings.decode(buf);
+        return new PushData(requestId, epoch, mode, shuffleKey, partitionUniqueId,
                 new NettyManagedBuffer(buf.retain()));
     }
 
@@ -86,7 +86,7 @@ public final class PushData extends AbstractMessage implements RequestMessage {
                 .add("requestId", requestId)
                 .add("mode", mode)
                 .add("shuffleKey", shuffleKey)
-                .add("partitionId", partitionUniqueId)
+                .add("partitionUniqueId", partitionUniqueId)
                 .add("body size", body().size())
                 .toString();
     }

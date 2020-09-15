@@ -14,9 +14,11 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package com.aliyun.emr.ess.common.rpc
 
-import com.aliyun.emr.ess.common.exception.EssException
+package com.aliyun.emr.ess.common.exception
 
-private[ess] class RpcEndpointNotFoundException(uri: String)
-  extends EssException(s"Cannot find endpoint: $uri")
+class EssException(message: String, cause: Throwable)
+  extends Exception(message, cause) {
+
+  def this(message: String) = this(message, null)
+}

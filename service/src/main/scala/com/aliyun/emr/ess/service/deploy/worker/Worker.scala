@@ -26,6 +26,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 import scala.collection.JavaConversions._
 
 import com.aliyun.emr.ess.common.EssConf
+import com.aliyun.emr.ess.common.exception.AlreadyClosedException
 import com.aliyun.emr.ess.common.http.{HttpServer, HttpServerInitializer}
 import com.aliyun.emr.ess.common.internal.Logging
 import com.aliyun.emr.ess.common.metrics.MetricsSystem
@@ -34,14 +35,15 @@ import com.aliyun.emr.ess.common.rpc._
 import com.aliyun.emr.ess.common.util.{ThreadUtils, Utils}
 import com.aliyun.emr.ess.protocol.{PartitionLocation, RpcNameConstants}
 import com.aliyun.emr.ess.protocol.message.ControlMessages._
-import com.aliyun.emr.ess.protocol.message.{PushDataStatusCode, StatusCode}
+import com.aliyun.emr.ess.protocol.message.StatusCode
 import com.aliyun.emr.ess.service.deploy.worker.http.HttpRequestHandler
 import com.aliyun.emr.ess.unsafe.Platform
 import com.aliyun.emr.network.TransportContext
 import com.aliyun.emr.network.buffer.NettyManagedBuffer
 import com.aliyun.emr.network.client.{RpcResponseCallback, TransportClientBootstrap}
-import com.aliyun.emr.network.protocol.PushData
+import com.aliyun.emr.network.protocol.{PushData, PushMergedData}
 import com.aliyun.emr.network.server.TransportServerBootstrap
+import io.netty.buffer.ByteBuf
 
 private[deploy] class Worker(
     override val rpcEnv: RpcEnv,
@@ -180,7 +182,7 @@ private[deploy] class Worker(
       handleThreadDump(context)
 
     case Destroy(shuffleKey, masterLocations, slaveLocations) =>
-      logInfo("receive Destroy request")
+      logInfo(s"receive Destroy request, $shuffleKey")
       handleDestroy(context, shuffleKey, masterLocations, slaveLocations)
   }
 
@@ -270,12 +272,14 @@ private[deploy] class Worker(
               try {
                 val bytes = target.asInstanceOf[WorkingPartition].getFileWriter.close()
                 if (bytes > 0L) {
+                  logInfo(s"fileName ${target.asInstanceOf[WorkingPartition].getFileWriter.getFile.getAbsoluteFile}, size $bytes")
                   committedMasterIds.synchronized {
                     committedMasterIds.add(id)
                   }
                 }
               } catch {
-                case _: IOException =>
+                case e: IOException =>
+                  logError("[handleCommitFiles] IOException encountered", e)
                   failedMasterIds.synchronized {
                     failedMasterIds.add(id)
                   }
@@ -395,6 +399,15 @@ private[deploy] class Worker(
     context.reply(ThreadDumpResponse(threadDump))
   }
 
+  private def getMapAttempt(body: ByteBuf): (Int, Int) = {
+    // header: mapId attemptId batchId compressedTotalSize
+    val header = new Array[Byte](8)
+    body.getBytes(body.readerIndex(), header)
+    val mapId = Platform.getInt(header, Platform.BYTE_ARRAY_OFFSET)
+    val attemptId = Platform.getInt(header, Platform.BYTE_ARRAY_OFFSET + 4)
+    (mapId, attemptId)
+  }
+
   override def handlePushData(pushData: PushData, callback: RpcResponseCallback): Unit = {
     val shuffleKey = pushData.shuffleKey
     val mode = PartitionLocation.getMode(pushData.mode)
@@ -440,20 +453,16 @@ private[deploy] class Worker(
     }
 
     if (location == null) {
-      // header: mapId attemptId batchId compressedTotalSize
-      val header = new Array[Byte](8)
-      body.getBytes(body.readerIndex(), header)
-      val mapId = Platform.getInt(header, Platform.BYTE_ARRAY_OFFSET)
-      val attemptId = Platform.getInt(header, Platform.BYTE_ARRAY_OFFSET + 4)
+      val (mapId, attemptId) = getMapAttempt(body)
       var msg = ""
       if (shuffleMapperAttempts.containsKey(shuffleKey) && attemptId != shuffleMapperAttempts.get(shuffleKey)(mapId)) {
-        msg = s"Speculation task, ${pushData.partitionUniqueId}, $mode $shuffleKey," +
+        msg = s"[handlePushData] Speculation task, ${pushData.partitionUniqueId}, $mode $shuffleKey," +
           s"mapId $mapId, attemptId $attemptId, committed attemptId ${shuffleMapperAttempts.get(shuffleKey)(mapId)}"
         logInfo(msg)
-        wrappedCallback.onSuccess(ByteBuffer.wrap(Array[Byte](PushDataStatusCode.StageEnded)))
+        wrappedCallback.onSuccess(ByteBuffer.wrap(Array[Byte](StatusCode.StageEnded.getValue)))
         return
       } else {
-        msg = s"Partition Location not found!, ${pushData.partitionUniqueId}, $mode $shuffleKey," +
+        msg = s"[handlePushData] Partition Location not found!, ${pushData.partitionUniqueId}, $mode $shuffleKey," +
           s"mapId $mapId, attemptId $attemptId"
         logWarning(msg)
       }
@@ -490,11 +499,147 @@ private[deploy] class Worker(
         fileWriter.write(body)
       }
     } catch {
-      case e: Exception =>
-        val msg = "append data failed!"
-        logError(s"$msg ${e.getMessage}")
+      case e: AlreadyClosedException =>
+        fileWriter.decrementPendingWrites()
+        val (mapId, attemptId) = getMapAttempt(body)
+        val endedAttempt = if (shuffleMapperAttempts.containsKey(shuffleKey)) {
+          shuffleMapperAttempts.get(shuffleKey)(mapId)
+        } else -1
+        val msg = s"append data failed! mapId $mapId, attemptId $attemptId," +
+          s"endedAttempt $endedAttempt fileName ${fileWriter.getFile.getAbsolutePath}"
+        logWarning(s"$msg ${e.getMessage}")
+      case e =>
+        logError("[handlePushData] Exception encountered when write", e)
+    }
+  }
+
+  override def handlePushMergedData(
+      pushMergedData: PushMergedData, callback: RpcResponseCallback): Unit = {
+    val shuffleKey = pushMergedData.shuffleKey
+    val mode = PartitionLocation.getMode(pushMergedData.mode)
+    val batchOffsets = pushMergedData.batchOffsets
+    val body = pushMergedData.body.asInstanceOf[NettyManagedBuffer].getBuf
+    val isMaster = mode == PartitionLocation.Mode.Master
+
+    val key = s"${pushMergedData.requestId}"
+    if (isMaster) {
+      workerSource.startTimer(WorkerSource.MasterPushDataTime, key)
+    } else {
+      workerSource.startTimer(WorkerSource.SlavePushDataTime, key)
     }
 
+    val wrappedCallback = new RpcResponseCallback() {
+      override def onSuccess(response: ByteBuffer): Unit = {
+        if (isMaster) {
+          workerSource.stopTimer(WorkerSource.MasterPushDataTime, key)
+          if (response.remaining() > 0) {
+            val resp = ByteBuffer.allocate(response.remaining())
+            resp.put(response)
+            resp.flip()
+            callback.onSuccess(resp)
+          } else {
+            callback.onSuccess(response)
+          }
+        } else {
+          workerSource.stopTimer(WorkerSource.SlavePushDataTime, key)
+          callback.onSuccess(response)
+        }
+      }
+
+      override def onFailure(e: Throwable): Unit = {
+        workerSource.incCounter(WorkerSource.PushDataFailCount)
+        callback.onFailure(e)
+      }
+    }
+
+    // find FileWriters responsible for the data
+    val locations = pushMergedData.partitionUniqueIds.map { id =>
+      val loc = if (mode == PartitionLocation.Mode.Master) {
+        workerInfo.getMasterLocation(shuffleKey, id)
+      } else {
+        workerInfo.getSlaveLocation(shuffleKey, id)
+      }
+      if (loc == null) {
+        val (mapId, attemptId) = getMapAttempt(body)
+        var msg = ""
+        if (shuffleMapperAttempts.containsKey(shuffleKey) && attemptId != shuffleMapperAttempts.get(shuffleKey)(mapId)) {
+          msg = s"[handlePushMergeData] Speculation task, $id, $mode $shuffleKey," +
+            s"mapId $mapId, attemptId $attemptId, committed attemptId ${shuffleMapperAttempts.get(shuffleKey)(mapId)}"
+          logInfo(msg)
+          wrappedCallback.onSuccess(ByteBuffer.wrap(Array[Byte](StatusCode.StageEnded.getValue)))
+          return
+        } else {
+          msg = s"[handlePushMergeData] Partition Location not found!, $id, $mode $shuffleKey," +
+            s"mapId $mapId, attemptId $attemptId"
+          logWarning(msg)
+        }
+        wrappedCallback.onFailure(new IOException(msg))
+        return
+      }
+      loc
+    }
+
+    val fileWriters = locations.map(_.asInstanceOf[WorkingPartition].getFileWriter)
+    fileWriters.foreach(_.incrementPendingWrites())
+
+    // for master, send data to slave
+    if (EssConf.essReplicate(conf) && isMaster) {
+      pushMergedData.body().retain()
+      replicateThreadPool.submit(new Runnable {
+        override def run(): Unit = {
+          try {
+            val location = locations.head
+            val peer = location.getPeer
+            val client = pushClientFactory.createClient(
+              peer.getHost, peer.getPort, location.getReduceId)
+            val newPushMergedData = new PushMergedData(PartitionLocation.Mode.Slave.mode(),
+              shuffleKey, pushMergedData.partitionUniqueIds, batchOffsets, pushMergedData.body)
+            client.pushMergedData(newPushMergedData, wrappedCallback)
+          } catch {
+            case e: Exception =>
+              wrappedCallback.onFailure(e)
+          }
+        }
+      })
+    } else {
+      wrappedCallback.onSuccess(ByteBuffer.wrap(Array[Byte]()))
+    }
+
+    var index = 0
+    var fileWriter: FileWriter = null
+    var alreadyClosed = false
+    while (index < fileWriters.length) {
+      fileWriter = fileWriters(index)
+      val offset = body.readerIndex() + batchOffsets(index)
+      val length = if (index == fileWriters.length - 1) {
+        body.readableBytes() - batchOffsets(index)
+      } else {
+        batchOffsets(index + 1) - batchOffsets(index)
+      }
+      val batchBody = body.slice(offset, length)
+
+      try {
+        if (!alreadyClosed) {
+          fileWriter.write(batchBody)
+        } else {
+          fileWriter.decrementPendingWrites()
+        }
+      } catch {
+        case e: AlreadyClosedException =>
+          fileWriter.decrementPendingWrites()
+          alreadyClosed = true
+          val (mapId, attemptId) = getMapAttempt(body)
+          val endedAttempt = if (shuffleMapperAttempts.containsKey(shuffleKey)) {
+            shuffleMapperAttempts.get(shuffleKey)(mapId)
+          } else -1
+          val msg = s"[handlePushMergedData] append data failed! mapId $mapId, attemptId" +
+            s"$attemptId, endedAttempt $endedAttempt fileName ${fileWriter.getFile.getAbsolutePath}"
+          logWarning(s"$msg ${e.getMessage}")
+        case e: Exception =>
+          logError("[handlePushMergedData] Exception encountered when write", e)
+      }
+      index += 1
+    }
   }
 
   override def handleOpenStream(
