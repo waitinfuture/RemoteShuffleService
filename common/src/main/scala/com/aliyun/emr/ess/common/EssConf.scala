@@ -472,7 +472,7 @@ object EssConf extends Logging {
   }
 
   def essPushDataMaxReqsInFlight(conf: EssConf): Int = {
-    conf.getInt("ess.push.data.maxReqsInFlight", 1024)
+    conf.getInt("ess.push.data.maxReqsInFlight", 32)
   }
 
   def essFetchChunkTimeoutMs(conf: EssConf): Long = {
@@ -572,11 +572,11 @@ object EssConf extends Logging {
   }
 
   def essLimitInFlightTimeoutMs(conf: EssConf): Long = {
-    conf.getTimeAsMs("ess.limit.in.flight.timeout", "120s")
+    conf.getTimeAsMs("ess.limit.inflight.timeout", "120s")
   }
 
   def essLimitInFlightSleepDeltaMs(conf: EssConf): Long = {
-    conf.getTimeAsMs("ess.limit.in.flight.sleep.delta", "50ms")
+    conf.getTimeAsMs("ess.limit.inflight.sleep.delta", "50ms")
   }
 
   def essPushServerPort(conf: EssConf): Int = {
