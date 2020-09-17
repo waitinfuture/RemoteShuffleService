@@ -3,6 +3,12 @@
 # 上层脚本如果看到输出为空，就fall back
 # 不存在success或者是检测失败就返回空，方便上层提交脚本判断
 
+# 使用说明：
+# 例子：python spark-submit.py 作业参数
+# 1. 先进行master探活，失败的话就不添加ess相关参数
+# 2. 获取到master地址之后，添加--conf spark.shuffle.manager=org.apache.spark.shuffle.ess.EssShuffleManager --conf spark.ess.master.address=xxx
+# 3. 依赖spark-submit在PATH上
+
 import os
 import socket
 import sys

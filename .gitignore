@@ -56,6 +56,7 @@ scalastyle-on-compile.generated.xml
 scalastyle-output.xml
 scalastyle.txt
 ess-*.tgz
+emr-*.tgz
 src_managed/
 target/
 unit-tests.log

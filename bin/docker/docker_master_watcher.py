@@ -3,6 +3,10 @@
 # Master的watcher脚本，用过类crontab逻辑来管理，不添加long running逻辑
 # 输入的master和worker部署节点列表，需要是salt能识别的id
 
+# 选主逻辑：（具体在下面实现逻辑处也有注释）
+# 1. 优先选择-m/--masterList 参数传递的master备选地址列表，如果启动失败，跳到2
+# 2. 从workerList中，随机选择一个节点作为master节点
+
 import sys
 import random
 import socket
@@ -15,7 +19,7 @@ MASTER_CHECKER_PATH = '/ess_master_address'
 CHECK = 'check'
 BOOTSTRAP = 'bootstrap'
 
-
+# 这个函数目的是支持shell命令超时逻辑
 class Command(object):
     def __init__(self, cmd):
         self.cmd = cmd
@@ -64,9 +68,23 @@ def read_worker_list_file(filename):
     content = [x.strip() for x in content]
     return ','.join(content)
 
-def restart_cluster(master_list, workers, port):
+def read_local_disk_volume_file(filename):
+    f = open(filename)
+    content = f.readlines()
+    f.close()
+    res = ""
+    for x in content:
+        disk = x.strip()
+        res = "{} -v {}:{}".format(res, disk, disk)#res + " -v " + disk + ":" + disk
+    return res
+
+def restart_cluster(master_list, workers, port, local_disks, image_tag, worker_cpu_limit, worker_memory_limit):
     print("begin to restart whole cluster, master_list is " + ",".join(master_list))
-    worker_list=workers.split(",")
+    worker_list = workers.split(",")
+
+    # 这一段是启动集群的时候，master选主逻辑，具体如下：
+    # 1. 优先选择-m/--masterList 参数传递的master备选地址列表，如果启动失败，跳到2
+    # 2. 从workerList中，随机选择一个节点作为master节点
     diff = list(set(worker_list) - set(master_list))
     random.shuffle(diff)
     candidates=master_list + diff
@@ -78,8 +96,10 @@ def restart_cluster(master_list, workers, port):
                 continue
             master_node = master_node.split(":")[0]
             print("try start master on " + master_node)
+            # 核心逻辑，操作restart_docker_cluster.sh脚本
             execute_command_with_timeout(
-                'sh restart_cluster.sh {} {} {} {}'.format(master_node, port, workers, ','.join(candidates)), 300)
+                'sh restart_docker_cluster.sh {} {} {} "{}" {} {} {}'.format(
+                    master_node, port, workers, local_disks, image_tag, worker_cpu_limit, worker_memory_limit, ','.join(candidates)), 300)
             if start_check("{}:{}".format(master_node, port), port):
                 # write master address
                 execute_command_with_timeout(
@@ -139,13 +159,30 @@ def main(argv):
     from optparse import OptionParser
     parser = OptionParser()
 
-    print("example:{}".format("python master_watcher.py -o bootstrap/check -m 192.168.6.85 -p 9099 -f filename"))
+    print("example:{}".format("python docker_master_watcher.py -o bootstrap/check"
+                              " -m 192.168.6.85 -p 9099 -f filename -d filename -i imageTag -C 6 -M 10g"))
+    # 操作：支持bootstrap/check
     parser.add_option("-o", "--operation", dest="operation", default='check', help="OPERATION for this call",
                       metavar="OPERATION")
+    # master列表，逗号分隔，可为空
     parser.add_option("-m", "--masterList", dest="masterList", help="node list to deploy master", metavar="masterlist")
+    # master端口
     parser.add_option("-p", "--port", dest="port", type="int", default=80, help="PORT for server", metavar="PORT")
+    # worker地址列表文件路径，地址需要是salt的minion id
     parser.add_option("-f", "--workerListFile", dest="workerListFile", help="worker nodes file",
                       metavar="workerListFile")
+    # 启动worker container mount的volume，例如：-v /mnt/disk1:/mnt/disk1 -v /mnt/disk2:/mnt/disk2 -v /mnt/disk3:/mnt/disk3
+    parser.add_option("-d", "--diskVolumesFile", dest="diskVolumesFile", help="local disks volumes file",
+                      metavar="diskVolumesFile")
+    # 镜像tag，例如：registry.cn-beijing.aliyuncs.com/zf-spark/emr-shuffle-service:v1.0.0
+    parser.add_option("-i", "--imageTag", dest="imageTag", help="ess image tag",
+                      metavar="imageTag")
+    # worker container cpu limit
+    parser.add_option("-C", "--workerCpuLimit", dest="workerCpuLimit", help="worker container cpu limit",
+                      metavar="workerCpuLimit")
+    # worker container内存limit
+    parser.add_option("-M", "--workerMemLimit", dest="workerMemLimit", help="worker container memory limit",
+                      metavar="workerMemLimit")
 
     (options, args) = parser.parse_args()
     print('options %s ,args %s' % (options, args))
@@ -156,16 +193,26 @@ def main(argv):
         master_list = options.masterList.split(",")
     port = options.port
     worker_list = read_worker_list_file(options.workerListFile)
+    local_disks = read_local_disk_volume_file(options.diskVolumesFile)
+    image_tag = options.imageTag
+    worker_memory_limit = options.workerMemLimit
+    worker_cpu_limit = options.workerCpuLimit
 
     print("begin to run master watcher, operation " + operation)
     try:
         if operation == BOOTSTRAP:
+            # 这个分支是重启/初始化集群。如果传递masterList为空并且集群已经初始化过，达到的目的就是重启集群
             execute_command_with_timeout("hdfs dfs -mkdir {}".format(MASTER_CHECKER_PATH))
             address_in_hdfs = get_master_addres_from_hdfs()
             if address_in_hdfs != "":
                 master_list.append(address_in_hdfs)
-            restart_cluster(master_list, worker_list, port)
+            restart_cluster(master_list, worker_list, port, local_disks, image_tag, worker_cpu_limit, worker_memory_limit)
         elif operation == CHECK:
+            # 这个分支是探活逻辑，master地址支持从hdfs读取和参数指定两种方式，具体如下：
+            # 1. 首先从hdfs读取master地址，并且添加到masterList，为空就忽略；
+            # 2. 遍历masterList的所有地址进行探活，一旦发现有存活的地址就退出此次探活；
+            # 注意：一般情况下，master_list为空即可，直接从hdfs中获取当前工作的master地址。
+            #      如果该master地址无法连接（尝试3次），认为该master dead，会重启集群。
             addresses = set(master_list)
             address_in_hdfs = get_master_addres_from_hdfs()
             if address_in_hdfs != "":
@@ -179,7 +226,7 @@ def main(argv):
                     print("master NOT alive on " + addr + ", try next")
 
             print("no alive master! restart cluster...")
-            restart_cluster(master_list, worker_list, port)
+            restart_cluster(master_list, worker_list, port, local_disks, image_tag, worker_cpu_limit, worker_memory_limit)
         else:
             print("Unknown operation! " + operation)
     except Exception as ex:
