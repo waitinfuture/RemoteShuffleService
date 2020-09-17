@@ -12,6 +12,7 @@ import random
 import socket
 import time
 import subprocess, threading
+import argparse
 
 MASTER_ADDRESS_FILE = 'master_address'
 SUCCESS_FILE = '_SUCCESS'
@@ -156,47 +157,46 @@ def get_master_addres_from_hdfs():
         return ""
 
 def main(argv):
-    from optparse import OptionParser
-    parser = OptionParser()
+    parser = argparse.ArgumentParser(description='Do master watcher...')
 
-    print("example:{}".format("python docker_master_watcher.py -o bootstrap/check"
+    print("usage:{}".format("python docker_master_watcher.py -o bootstrap/check"
                               " -m 192.168.6.85 -p 9099 -f filename -d filename -i imageTag -C 6 -M 10g"))
     # 操作：支持bootstrap/check
-    parser.add_option("-o", "--operation", dest="operation", default='check', help="OPERATION for this call",
-                      metavar="OPERATION")
+    parser.add_argument("-o", "--operation", dest="operation", default='check', help="OPERATION for this call",
+                      metavar="OPERATION", required=True)
     # master列表，逗号分隔，可为空
-    parser.add_option("-m", "--masterList", dest="masterList", help="node list to deploy master", metavar="masterlist")
+    parser.add_argument("-m", "--masterList", dest="masterList", help="node list to deploy master", metavar="masterlist", required=True)
     # master端口
-    parser.add_option("-p", "--port", dest="port", type="int", default=80, help="PORT for server", metavar="PORT")
+    parser.add_argument("-p", "--port", dest="port", type=int, default=80, help="PORT for server", metavar="PORT", required=True)
     # worker地址列表文件路径，地址需要是salt的minion id
-    parser.add_option("-f", "--workerListFile", dest="workerListFile", help="worker nodes file",
-                      metavar="workerListFile")
+    parser.add_argument("-f", "--workerListFile", dest="workerListFile", help="worker nodes file",
+                      metavar="workerListFile", required=True)
     # 启动worker container mount的volume，例如：-v /mnt/disk1:/mnt/disk1 -v /mnt/disk2:/mnt/disk2 -v /mnt/disk3:/mnt/disk3
-    parser.add_option("-d", "--diskVolumesFile", dest="diskVolumesFile", help="local disks volumes file",
-                      metavar="diskVolumesFile")
+    parser.add_argument("-d", "--diskVolumesFile", dest="diskVolumesFile", help="local disks volumes file",
+                      metavar="diskVolumesFile", required=True)
     # 镜像tag，例如：registry.cn-beijing.aliyuncs.com/zf-spark/emr-shuffle-service:v1.0.0
-    parser.add_option("-i", "--imageTag", dest="imageTag", help="ess image tag",
-                      metavar="imageTag")
+    parser.add_argument("-i", "--imageTag", dest="imageTag", help="ess image tag",
+                      metavar="imageTag", required=True)
     # worker container cpu limit
-    parser.add_option("-C", "--workerCpuLimit", dest="workerCpuLimit", help="worker container cpu limit",
-                      metavar="workerCpuLimit")
+    parser.add_argument("-C", "--workerCpuLimit", dest="workerCpuLimit", help="worker container cpu limit",
+                      metavar="workerCpuLimit", required=True)
     # worker container内存limit
-    parser.add_option("-M", "--workerMemLimit", dest="workerMemLimit", help="worker container memory limit",
-                      metavar="workerMemLimit")
+    parser.add_argument("-M", "--workerMemLimit", dest="workerMemLimit", help="worker container memory limit",
+                      metavar="workerMemLimit", required=True)
 
-    (options, args) = parser.parse_args()
-    print('options %s ,args %s' % (options, args))
-    operation = options.operation
-    if options.masterList is None:
+    args = parser.parse_args()
+    print('args %s' % args)
+    operation = args.operation
+    if args.masterList is None:
         master_list = []
     else:
-        master_list = options.masterList.split(",")
-    port = options.port
-    worker_list = read_worker_list_file(options.workerListFile)
-    local_disks = read_local_disk_volume_file(options.diskVolumesFile)
-    image_tag = options.imageTag
-    worker_memory_limit = options.workerMemLimit
-    worker_cpu_limit = options.workerCpuLimit
+        master_list = args.masterList.split(",")
+    port = args.port
+    worker_list = read_worker_list_file(args.workerListFile)
+    local_disks = read_local_disk_volume_file(args.diskVolumesFile)
+    image_tag = args.imageTag
+    worker_memory_limit = args.workerMemLimit
+    worker_cpu_limit = args.workerCpuLimit
 
     print("begin to run master watcher, operation " + operation)
     try:

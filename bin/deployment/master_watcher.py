@@ -8,6 +8,7 @@ import random
 import socket
 import time
 import subprocess, threading
+import argparse
 
 MASTER_ADDRESS_FILE = 'master_address'
 SUCCESS_FILE = '_SUCCESS'
@@ -136,26 +137,25 @@ def get_master_addres_from_hdfs():
         return ""
 
 def main(argv):
-    from optparse import OptionParser
-    parser = OptionParser()
+    parser = argparse.ArgumentParser(description='Do master watcher...')
 
-    print("example:{}".format("python master_watcher.py -o bootstrap/check -m 192.168.6.85 -p 9099 -f filename"))
-    parser.add_option("-o", "--operation", dest="operation", default='check', help="OPERATION for this call",
-                      metavar="OPERATION")
-    parser.add_option("-m", "--masterList", dest="masterList", help="node list to deploy master", metavar="masterlist")
-    parser.add_option("-p", "--port", dest="port", type="int", default=80, help="PORT for server", metavar="PORT")
-    parser.add_option("-f", "--workerListFile", dest="workerListFile", help="worker nodes file",
-                      metavar="workerListFile")
+    print("usage:{}".format("python master_watcher.py -o bootstrap/check -m 192.168.6.85 -p 9099 -f filename"))
+    parser.add_argument("-o", "--operation", dest="operation", default='check', help="OPERATION for this call",
+                      metavar="OPERATION", required=True)
+    parser.add_argument("-m", "--masterList", dest="masterList", help="node list to deploy master", metavar="masterlist", required=True)
+    parser.add_argument("-p", "--port", dest="port", type=int, default=80, help="PORT for server", metavar="PORT", required=True)
+    parser.add_argument("-f", "--workerListFile", dest="workerListFile", help="worker nodes file",
+                      metavar="workerListFile", required=True)
 
-    (options, args) = parser.parse_args()
-    print('options %s ,args %s' % (options, args))
-    operation = options.operation
-    if options.masterList is None:
+    args = parser.parse_args()
+    print('args %s' % args)
+    operation = args.operation
+    if args.masterList is None:
         master_list = []
     else:
-        master_list = options.masterList.split(",")
-    port = options.port
-    worker_list = read_worker_list_file(options.workerListFile)
+        master_list = args.masterList.split(",")
+    port = args.port
+    worker_list = read_worker_list_file(args.workerListFile)
 
     print("begin to run master watcher, operation " + operation)
     try:
