@@ -79,7 +79,7 @@ def read_local_disk_volume_file(filename):
         res = "{} -v {}:{}".format(res, disk, disk)#res + " -v " + disk + ":" + disk
     return res
 
-def restart_cluster(master_list, workers, port, local_disks, image_tag, worker_cpu_limit, worker_memory_limit):
+def restart_cluster(master_list, workers, port, local_disks, image_tag, worker_cpu_limit):
     print("begin to restart whole cluster, master_list is " + ",".join(master_list))
     worker_list = workers.split(",")
 
@@ -100,7 +100,7 @@ def restart_cluster(master_list, workers, port, local_disks, image_tag, worker_c
             # 核心逻辑，操作restart_docker_cluster.sh脚本
             execute_command_with_timeout(
                 'sh restart_docker_cluster.sh {} {} {} "{}" {} {} {}'.format(
-                    master_node, port, workers, local_disks, image_tag, worker_cpu_limit, worker_memory_limit, ','.join(candidates)), 300)
+                    master_node, port, workers, local_disks, image_tag, worker_cpu_limit, ','.join(candidates)), 300)
             if start_check("{}:{}".format(master_node, port), port):
                 # write master address
                 execute_command_with_timeout(
@@ -159,8 +159,8 @@ def get_master_addres_from_hdfs():
 def main(argv):
     parser = argparse.ArgumentParser(description='Do master watcher...')
 
-    print("usage:{}".format("python docker_master_watcher.py -o bootstrap/check"
-                              " -m 192.168.6.85 -p 9099 -f filename -d filename -i imageTag -C 6 -M 10g"))
+    print("Usage:{}".format("python docker_master_watcher.py -o bootstrap/check"
+                              " -m 192.168.6.85 -p 9099 -f filename -d filename -i imageTag -C 8"))
     # 操作：支持bootstrap/check
     parser.add_argument("-o", "--operation", dest="operation", default='check', help="OPERATION for this call",
                       metavar="OPERATION", required=True)
@@ -180,9 +180,6 @@ def main(argv):
     # worker container cpu limit
     parser.add_argument("-C", "--workerCpuLimit", dest="workerCpuLimit", help="worker container cpu limit",
                       metavar="workerCpuLimit", required=True)
-    # worker container内存limit
-    parser.add_argument("-M", "--workerMemLimit", dest="workerMemLimit", help="worker container memory limit",
-                      metavar="workerMemLimit", required=True)
 
     args = parser.parse_args()
     print('args %s' % args)
@@ -195,7 +192,6 @@ def main(argv):
     worker_list = read_worker_list_file(args.workerListFile)
     local_disks = read_local_disk_volume_file(args.diskVolumesFile)
     image_tag = args.imageTag
-    worker_memory_limit = args.workerMemLimit
     worker_cpu_limit = args.workerCpuLimit
 
     print("begin to run master watcher, operation " + operation)
@@ -206,7 +202,7 @@ def main(argv):
             address_in_hdfs = get_master_addres_from_hdfs()
             if address_in_hdfs != "":
                 master_list.append(address_in_hdfs)
-            restart_cluster(master_list, worker_list, port, local_disks, image_tag, worker_cpu_limit, worker_memory_limit)
+            restart_cluster(master_list, worker_list, port, local_disks, image_tag, worker_cpu_limit)
         elif operation == CHECK:
             # 这个分支是探活逻辑，master地址支持从hdfs读取和参数指定两种方式，具体如下：
             # 1. 首先从hdfs读取master地址，并且添加到masterList，为空就忽略；
@@ -226,7 +222,7 @@ def main(argv):
                     print("master NOT alive on " + addr + ", try next")
 
             print("no alive master! restart cluster...")
-            restart_cluster(master_list, worker_list, port, local_disks, image_tag, worker_cpu_limit, worker_memory_limit)
+            restart_cluster(master_list, worker_list, port, local_disks, image_tag, worker_cpu_limit)
         else:
             print("Unknown operation! " + operation)
     except Exception as ex:

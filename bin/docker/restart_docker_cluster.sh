@@ -3,7 +3,7 @@
 # shellcheck disable=SC2068
 echo ${@}
 
-usage="Usage: restart_cluster.sh master_host master_port worker_hosts local_disks_volume image_tag worker_cpu_limit worker_memory_limit [old_master_host]"
+usage="Usage: restart_cluster.sh master_host master_port worker_hosts local_disks_volume image_tag worker_cpu_limit [old_master_host]"
 # if no args specified, show usage
 if [ $# -le 2 ]; then
   echo $usage
@@ -22,12 +22,9 @@ image_tag=$1
 shift
 worker_cpu_limit=$1
 shift
-worker_memory_limit=$1
-shift
 old_master_host=$1
 
 echo "Worker Cpu limit:${worker_cpu_limit}"
-echo "Worker Mem limit:${worker_memory_limit}"
 
 echo "Image tag ${image_tag}"
 echo "Local disk volume ${local_disks_volume}"
@@ -76,4 +73,4 @@ sudo salt ${master_host} cmd.run "docker run -d --env ESS_NO_DAEMONIZE=yes --nam
 sleep 3
 
 echo "Start Workers"
-sudo salt -L ${worker_hosts} cmd.run "docker run --cpus='${worker_cpu_limit}' --memory='${worker_memory_limit}' -d ${local_disks_volume} -v /home/$(echo $USER)/ess-conf:/opt/ess-1.0.0-bin-release/conf/ --env ESS_NO_DAEMONIZE=yes --name ess_worker --net=host ${image_tag} /usr/bin/tini -s -- /opt/ess-1.0.0-bin-release/sbin/start-worker.sh ess://${master_host}:${master_port}" runas=$(echo $USER)
+sudo salt -L ${worker_hosts} cmd.run "docker run --cpus='${worker_cpu_limit}' -d ${local_disks_volume} -v /home/$(echo $USER)/ess-conf:/opt/ess-1.0.0-bin-release/conf/ --env ESS_NO_DAEMONIZE=yes --name ess_worker --net=host ${image_tag} /usr/bin/tini -s -- /opt/ess-1.0.0-bin-release/sbin/start-worker.sh ess://${master_host}:${master_port}" runas=$(echo $USER)
