@@ -46,11 +46,15 @@ if [ $(command -v git) ]; then
     unset GITREV
 fi
 
-VERSION=$("$MVN" help:evaluate -Dexpression=project.version 2>/dev/null\
+VERSION=$("$MVN" help:evaluate -Dexpression=project.version $@ 2>/dev/null\
     | grep -v "INFO"\
     | grep -v "WARNING"\
     | tail -n 1)
 SCALA_VERSION=$("$MVN" help:evaluate -Dexpression=scala.binary.version $@ 2>/dev/null\
+    | grep -v "INFO"\
+    | grep -v "WARNING"\
+    | tail -n 1)
+SHUFFLE_MANAGER_DIR=$("$MVN" help:evaluate -Dexpression=ess.shuffle.manager $@ 2>/dev/null\
     | grep -v "INFO"\
     | grep -v "WARNING"\
     | tail -n 1)
@@ -86,7 +90,7 @@ echo "Build flags: $@" >> "$DISTDIR/RELEASE"
 
 # Copy jars
 cp "$ESS_HOME"/service/target/ess-service-"$VERSION"-shaded.jar "$DISTDIR/jars/"
-cp "$ESS_HOME"/ess-shuffle-manager/target/ess-shuffle-manager-"$VERSION"-shaded.jar "$DISTDIR/spark/"
+cp "$ESS_HOME"/${SHUFFLE_MANAGER_DIR}/target/ess-shuffle-manager-"$VERSION"-shaded.jar "$DISTDIR/spark/"
 
 # Copy other things
 mkdir "$DISTDIR/conf"

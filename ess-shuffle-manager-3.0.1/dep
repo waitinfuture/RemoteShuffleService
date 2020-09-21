@@ -1,0 +1,21 @@
+[INFO] Scanning for projects...
+[INFO] 
+[INFO] -----------------< com.aliyun.emr:ess-shuffle-manager >-----------------
+[INFO] Building Aliyun E-MapReduce Shuffle Service Shuffle Manager for Spark 1.0.0
+[INFO] --------------------------------[ jar ]---------------------------------
+Downloading from central1: http://emr-maven.alibaba.net/repository/emr-repo/com/aliyun/emr/ess-client-java/1.0.0/ess-client-java-1.0.0.pom
+Downloading from central2: http://mvnrepo.alibaba-inc.com/mvn/repository/com/aliyun/emr/ess-client-java/1.0.0/ess-client-java-1.0.0.pom
+Downloading from central: https://emr-maven.alibaba.net/repository/emr-repo/com/aliyun/emr/ess-client-java/1.0.0/ess-client-java-1.0.0.pom
+[INFO] ------------------------------------------------------------------------
+[INFO] BUILD FAILURE
+[INFO] ------------------------------------------------------------------------
+[INFO] Total time:  19.691 s
+[INFO] Finished at: 2020-07-21T11:47:42+08:00
+[INFO] ------------------------------------------------------------------------
+[ERROR] Failed to execute goal on project ess-shuffle-manager: Could not resolve dependencies for project com.aliyun.emr:ess-shuffle-manager:jar:1.0.0: Failed to collect dependencies at com.aliyun.emr:ess-client-java:jar:1.0.0: Failed to read artifact descriptor for com.aliyun.emr:ess-client-java:jar:1.0.0: Could not transfer artifact com.aliyun.emr:ess-client-java:pom:1.0.0 from/to central1 (http://emr-maven.alibaba.net/repository/emr-repo/): Transfer failed for http://emr-maven.alibaba.net/repository/emr-repo/com/aliyun/emr/ess-client-java/1.0.0/ess-client-java-1.0.0.pom: sun.security.validator.ValidatorException: PKIX path building failed: sun.security.provider.certpath.SunCertPathBuilderException: unable to find valid certification path to requested target -> [Help 1]
+[ERROR] 
+[ERROR] To see the full stack trace of the errors, re-run Maven with the -e switch.
+[ERROR] Re-run Maven using the -X switch to enable full debug logging.
+[ERROR] 
+[ERROR] For more information about the errors and possible solutions, please read the following articles:
+[ERROR] [Help 1] http://cwiki.apache.org/confluence/display/MAVEN/DependencyResolutionException
