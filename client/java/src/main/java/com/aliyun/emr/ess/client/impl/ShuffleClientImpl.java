@@ -273,7 +273,7 @@ public class ShuffleClientImpl extends ShuffleClient {
             pushState.exception.set(new IOException(e));
         }
 
-        if (inFlightBatches.size() > limit) {
+        if (times <= 0) {
             for (int req : inFlightBatches) {
                 logger.error(mapKey + " batch " + req);
             }
@@ -508,6 +508,17 @@ public class ShuffleClientImpl extends ShuffleClient {
 
         return pushOrMergeData(applicationId, shuffleId, mapId, attemptId, reduceId,
             data, offset, length, numMappers, numPartitions, true);
+    }
+
+    @Override
+    public void prepareForMergeData(int shuffleId,
+                                    int mapId,
+                                    int attemptId) throws IOException {
+        final String mapKey = Utils.makeMapKey(shuffleId, mapId, attemptId);
+        PushState pushState = pushStates.get(mapKey);
+        if (pushState != null) {
+            limitMaxInFlight(mapKey, pushState, 0);
+        }
     }
 
     @Override

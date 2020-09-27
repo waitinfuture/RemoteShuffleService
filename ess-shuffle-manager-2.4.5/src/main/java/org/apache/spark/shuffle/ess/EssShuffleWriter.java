@@ -397,7 +397,13 @@ public class EssShuffleWriter<K, V, C> extends ShuffleWriter<K, V> {
     }
 
     private void close() throws IOException {
-        // merge and push residual data
+        // here we wait for all the in-flight batches to return which sent by dataPusher thread
+        dataPusher.waitOnTermination();
+        essShuffleClient.prepareForMergeData(shuffleId, mapId, taskContext.attemptNumber());
+
+        // merge and push residual data to reduce network traffic
+        // NB: since dataPusher thread have no in-flight data at this point,
+        //     we now push merged data by task thread will not introduce any contention
         for (int i = 0; i < sendBuffers.length; i++) {
             final int size = sendOffsets[i];
             if (size > 0) {
@@ -420,7 +426,6 @@ public class EssShuffleWriter<K, V, C> extends ShuffleWriter<K, V> {
         }
         essShuffleClient.pushMergedData(appId, shuffleId, mapId, taskContext.attemptNumber());
 
-        dataPusher.waitOnTermination();
         updateMapStatus();
 
         sendBuffers = null;
