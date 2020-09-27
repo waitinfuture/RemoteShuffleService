@@ -154,35 +154,36 @@ private[deploy] class Worker(
 
   override def receiveAndReply(context: RpcCallContext): PartialFunction[Any, Unit] = {
     case ReserveBuffers(applicationId, shuffleId, masterLocations, slaveLocations) =>
-      val key = s"$applicationId $shuffleId"
-      workerSource.sample(WorkerSource.ReserveBufferTime, key) {
-        logInfo(s"received ReserveBuffers request,  key $key," +
-          s"master partitions ${masterLocations.map(_.getUniqueId).mkString(",")}, " +
-          s"slave partitions ${slaveLocations.map(_.getUniqueId).mkString(",")}")
+      val shuffleKey = Utils.makeShuffleKey(applicationId, shuffleId)
+      workerSource.sample(WorkerSource.ReserveBufferTime, shuffleKey) {
+        logInfo(s"Received ReserveBuffers request, $shuffleKey, " +
+          s"master partitions: ${masterLocations.map(_.getUniqueId).mkString(",")}; " +
+          s"slave partitions: ${slaveLocations.map(_.getUniqueId).mkString(",")}")
         handleReserveBuffers(context, applicationId, shuffleId, masterLocations, slaveLocations)
+        logInfo(s"ReserveBuffers for $shuffleKey succeed.")
       }
 
     case CommitFiles(shuffleKey, masterIds, slaveIds, mapAttempts) =>
       workerSource.sample(WorkerSource.CommitFilesTime, shuffleKey) {
-        logInfo(s"receive CommitFiles request, $shuffleKey, " +
-          s"master files ${masterIds.mkString(",")} slave files ${slaveIds.mkString(",")}")
+        logInfo(s"Received CommitFiles request, $shuffleKey, " +
+          s"master files ${masterIds.mkString(",")}; slave files ${slaveIds.mkString(",")}")
         val commitFilesTimeMs = Utils.timeIt({
           handleCommitFiles(context, shuffleKey, masterIds, slaveIds, mapAttempts)
         })
-        logInfo(s"Done processed CommitFiles request with shuffleKey:$shuffleKey, in " +
+        logInfo(s"Done processed CommitFiles request with shuffleKey $shuffleKey, in " +
           s"${commitFilesTimeMs}ms")
       }
 
     case GetWorkerInfos =>
-      logInfo("received GetWorkerInfos request")
+      logInfo("Received GetWorkerInfos request")
       handleGetWorkerInfos(context)
 
     case ThreadDump =>
-      logInfo("receive ThreadDump request")
+      logInfo("Receive ThreadDump request")
       handleThreadDump(context)
 
     case Destroy(shuffleKey, masterLocations, slaveLocations) =>
-      logInfo(s"receive Destroy request, $shuffleKey")
+      logInfo(s"Receive Destroy request, $shuffleKey")
       handleDestroy(context, shuffleKey, masterLocations, slaveLocations)
   }
 
@@ -192,6 +193,7 @@ private[deploy] class Worker(
       shuffleId: Int,
       masterLocations: util.List[PartitionLocation],
       slaveLocations: util.List[PartitionLocation]): Unit = {
+    val shuffleKey = Utils.makeShuffleKey(applicationId, shuffleId)
     val masterPartitions = new util.ArrayList[PartitionLocation]()
     try {
       for (ind <- 0 until masterLocations.size()) {
@@ -201,10 +203,10 @@ private[deploy] class Worker(
       }
     } catch {
       case e: Exception =>
-        logError(s"createWriter for $applicationId-$shuffleId failed", e)
+        logError(s"CreateWriter for $shuffleKey failed", e)
     }
     if (masterPartitions.size() < masterLocations.size()) {
-      logInfo("not all master partition satisfied, destroy writers")
+      logInfo("Not all master partition satisfied, destroy writers")
       masterPartitions.foreach(_.asInstanceOf[WorkingPartition].getFileWriter.destroy())
       context.reply(ReserveBuffersResponse(StatusCode.ReserveBufferFailed))
       return
@@ -219,24 +221,19 @@ private[deploy] class Worker(
       }
     } catch {
       case e: Exception =>
-        logError(s"createWriter for $applicationId-$shuffleId failed", e)
+        logError(s"CreateWriter for $shuffleKey failed", e)
     }
     if (slavePartitions.size() < slaveLocations.size()) {
-      logError("not all slave partition satisfied, destroy writers")
+      logError("Not all slave partition satisfied, destroy writers")
       masterPartitions.foreach(_.asInstanceOf[WorkingPartition].getFileWriter.destroy())
       slavePartitions.foreach(_.asInstanceOf[WorkingPartition].getFileWriter.destroy())
       context.reply(ReserveBuffersResponse(StatusCode.ReserveBufferFailed))
       return
     }
 
-    val shuffleKey = Utils.makeShuffleKey(applicationId, shuffleId)
-
     // reserve success, update status
     workerInfo.addMasterPartitions(shuffleKey, masterPartitions)
     workerInfo.addSlavePartitions(shuffleKey, slavePartitions)
-
-    logInfo(s"reserve buffer succeed!")
-
     context.reply(ReserveBuffersResponse(StatusCode.Success))
   }
 
@@ -248,7 +245,7 @@ private[deploy] class Worker(
       mapAttempts: Array[Int]): Unit = {
     // return null if shuffleKey does not exist
     if (!workerInfo.containsShuffle(shuffleKey)) {
-      logError(s"shuffle $shuffleKey doesn't exist!")
+      logError(s"Shuffle $shuffleKey doesn't exist!")
       context.reply(CommitFilesResponse(
         StatusCode.ShuffleNotRegistered, null, null, masterIds, slaveIds))
       return
@@ -263,6 +260,7 @@ private[deploy] class Worker(
 
     val futures = new util.ArrayList[Future[_]]()
 
+    // TODO: refactor these copy/paste code
     if (masterIds != null) {
       masterIds.foreach { id =>
         val target = workerInfo.getMasterLocation(shuffleKey, id)
@@ -272,14 +270,14 @@ private[deploy] class Worker(
               try {
                 val bytes = target.asInstanceOf[WorkingPartition].getFileWriter.close()
                 if (bytes > 0L) {
-                  logInfo(s"fileName ${target.asInstanceOf[WorkingPartition].getFileWriter.getFile.getAbsoluteFile}, size $bytes")
+                  logInfo(s"FileName ${target.asInstanceOf[WorkingPartition].getFileWriter.getFile.getAbsoluteFile}, size $bytes")
                   committedMasterIds.synchronized {
                     committedMasterIds.add(id)
                   }
                 }
               } catch {
                 case e: IOException =>
-                  logError("[handleCommitFiles] IOException encountered", e)
+                  logError("[handleCommitFiles] throws IOException", e)
                   failedMasterIds.synchronized {
                     failedMasterIds.add(id)
                   }
@@ -300,12 +298,14 @@ private[deploy] class Worker(
               try {
                 val bytes = target.asInstanceOf[WorkingPartition].getFileWriter.close()
                 if (bytes > 0L) {
+                  logInfo(s"FileName ${target.asInstanceOf[WorkingPartition].getFileWriter.getFile.getAbsoluteFile}, size $bytes")
                   committedSlaveIds.synchronized {
                     committedSlaveIds.add(id)
                   }
                 }
               } catch {
-                case _: IOException =>
+                case e: IOException =>
+                  logError("[handleCommitFiles] throws IOException", e)
                   failedSlaveIds.synchronized {
                     failedSlaveIds.add(id)
                   }
@@ -324,11 +324,11 @@ private[deploy] class Worker(
 
     // reply
     if (failedMasterIds.isEmpty && failedSlaveIds.isEmpty) {
-      logInfo("CommitFile success!")
+      logInfo(s"CommitFiles for $shuffleKey success!")
       context.reply(CommitFilesResponse(
         StatusCode.Success, committedMasterIds, committedSlaveIds, null, null))
     } else {
-      logError("CommitFiles failed!")
+      logError(s"CommitFiles for $shuffleKey failed!")
       context.reply(CommitFilesResponse(
         StatusCode.PartialSuccess, committedMasterIds, committedSlaveIds,
         failedMasterIds, failedSlaveIds))
@@ -735,11 +735,22 @@ private[deploy] object Worker extends Logging {
       logInfo(s"Metrics system enabled!")
       metricsSystem.start()
 
-      val httpServer = new HttpServer(
-        new HttpServerInitializer(new HttpRequestHandler(metricsSystem.getPrometheusHandler)),
-        EssConf.essWorkerPrometheusMetricPort(conf))
-      httpServer.start()
-      logInfo("[Worker] httpServer started")
+      var port = EssConf.essWorkerPrometheusMetricPort(conf)
+      var initialized = false
+      while (!initialized) {
+        try {
+          val httpServer = new HttpServer(
+            new HttpServerInitializer(new HttpRequestHandler(metricsSystem.getPrometheusHandler)), port)
+          httpServer.start()
+          initialized = true
+        } catch {
+          case e: Exception =>
+            logWarning(s"HttpServer port $port may already exist, try port ${port+1}.", e)
+            port += 1
+            Thread.sleep(1000)
+        }
+      }
+      logInfo(s"HttpServer on port $port started.")
     }
 
     rpcEnv.awaitTermination()
