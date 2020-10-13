@@ -158,7 +158,7 @@ private[deploy] class Worker(
       workerSource.sample(WorkerSource.ReserveBufferTime, shuffleKey) {
         logInfo(s"Received ReserveBuffers request, $shuffleKey, " +
           s"master partitions: ${masterLocations.map(_.getUniqueId).mkString(",")}; " +
-          s"slave partitions: ${slaveLocations.map(_.getUniqueId).mkString(",")}")
+          s"slave partitions: ${slaveLocations.map(_.getUniqueId).mkString(",")}.")
         handleReserveBuffers(context, applicationId, shuffleId, masterLocations, slaveLocations)
         logInfo(s"ReserveBuffers for $shuffleKey succeed.")
       }
@@ -166,24 +166,24 @@ private[deploy] class Worker(
     case CommitFiles(shuffleKey, masterIds, slaveIds, mapAttempts) =>
       workerSource.sample(WorkerSource.CommitFilesTime, shuffleKey) {
         logInfo(s"Received CommitFiles request, $shuffleKey, " +
-          s"master files ${masterIds.mkString(",")}; slave files ${slaveIds.mkString(",")}")
+          s"master files ${masterIds.mkString(",")}; slave files ${slaveIds.mkString(",")}.")
         val commitFilesTimeMs = Utils.timeIt({
           handleCommitFiles(context, shuffleKey, masterIds, slaveIds, mapAttempts)
         })
         logInfo(s"Done processed CommitFiles request with shuffleKey $shuffleKey, in " +
-          s"${commitFilesTimeMs}ms")
+          s"${commitFilesTimeMs}ms.")
       }
 
     case GetWorkerInfos =>
-      logInfo("Received GetWorkerInfos request")
+      logInfo("Received GetWorkerInfos request.")
       handleGetWorkerInfos(context)
 
     case ThreadDump =>
-      logInfo("Receive ThreadDump request")
+      logInfo("Receive ThreadDump request.")
       handleThreadDump(context)
 
     case Destroy(shuffleKey, masterLocations, slaveLocations) =>
-      logInfo(s"Receive Destroy request, $shuffleKey")
+      logInfo(s"Receive Destroy request, $shuffleKey.")
       handleDestroy(context, shuffleKey, masterLocations, slaveLocations)
   }
 
@@ -206,7 +206,7 @@ private[deploy] class Worker(
         logError(s"CreateWriter for $shuffleKey failed", e)
     }
     if (masterPartitions.size() < masterLocations.size()) {
-      logInfo("Not all master partition satisfied, destroy writers")
+      logInfo("Not all master partition satisfied, will destroy writers.")
       masterPartitions.foreach(_.asInstanceOf[WorkingPartition].getFileWriter.destroy())
       context.reply(ReserveBuffersResponse(StatusCode.ReserveBufferFailed))
       return
@@ -224,7 +224,7 @@ private[deploy] class Worker(
         logError(s"CreateWriter for $shuffleKey failed", e)
     }
     if (slavePartitions.size() < slaveLocations.size()) {
-      logError("Not all slave partition satisfied, destroy writers")
+      logError("Not all slave partition satisfied, destroy writers.")
       masterPartitions.foreach(_.asInstanceOf[WorkingPartition].getFileWriter.destroy())
       slavePartitions.foreach(_.asInstanceOf[WorkingPartition].getFileWriter.destroy())
       context.reply(ReserveBuffersResponse(StatusCode.ReserveBufferFailed))
@@ -343,7 +343,7 @@ private[deploy] class Worker(
     // check whether shuffleKey has registered
     if (!workerInfo.containsShuffleMaster(shuffleKey) &&
       !workerInfo.containsShuffleSlave(shuffleKey)) {
-      logWarning(s"[handleDestroy] shuffle $shuffleKey not registered!")
+      logWarning(s"[handleDestroy] Shuffle $shuffleKey not registered!")
       context.reply(DestroyResponse(
         StatusCode.ShuffleNotRegistered, masterLocations, slaveLocations))
       return
@@ -380,10 +380,10 @@ private[deploy] class Worker(
     }
     // reply
     if (failedMasters.isEmpty && failedSlaves.isEmpty) {
-      logInfo("finished handle destroy")
+      logInfo("Finished handle destroy.")
       context.reply(DestroyResponse(StatusCode.Success, null, null))
     } else {
-      logWarning("finished handle destroy PartialSuccess")
+      logWarning("Finished handle destroy PartialSuccess.")
       context.reply(DestroyResponse(StatusCode.PartialSuccess, failedMasters, failedSlaves))
     }
   }
@@ -505,8 +505,8 @@ private[deploy] class Worker(
         val endedAttempt = if (shuffleMapperAttempts.containsKey(shuffleKey)) {
           shuffleMapperAttempts.get(shuffleKey)(mapId)
         } else -1
-        val msg = s"append data failed! mapId $mapId, attemptId $attemptId," +
-          s"endedAttempt $endedAttempt fileName ${fileWriter.getFile.getAbsolutePath}"
+        val msg = s"Append data failed! mapId $mapId, attemptId $attemptId," +
+          s"endedAttempt $endedAttempt fileName ${fileWriter.getFile.getAbsolutePath}."
         logWarning(s"$msg ${e.getMessage}")
       case e =>
         logError("[handlePushData] Exception encountered when write", e)
@@ -632,8 +632,8 @@ private[deploy] class Worker(
           val endedAttempt = if (shuffleMapperAttempts.containsKey(shuffleKey)) {
             shuffleMapperAttempts.get(shuffleKey)(mapId)
           } else -1
-          val msg = s"[handlePushMergedData] append data failed! mapId $mapId, attemptId" +
-            s"$attemptId, endedAttempt $endedAttempt fileName ${fileWriter.getFile.getAbsolutePath}"
+          val msg = s"[handlePushMergedData] Append data failed! mapId $mapId, attemptId" +
+            s"$attemptId, endedAttempt $endedAttempt fileName ${fileWriter.getFile.getAbsolutePath}."
           logWarning(s"$msg ${e.getMessage}")
         case e: Exception =>
           logError("[handlePushMergedData] Exception encountered when write", e)
@@ -656,17 +656,17 @@ private[deploy] class Worker(
   }
 
   private def registerWithMaster() {
-    logInfo("Trying to register with master")
+    logInfo("Trying to register with master.")
     var res = masterEndpoint.askSync[RegisterWorkerResponse](
       RegisterWorker(host, port, fetchPort, workerInfo.numSlots, self)
     )
     var registerTimeout = EssConf.essRegisterWorkerTimeoutMs(conf)
     val delta = 2000
     while (!res.success && registerTimeout > 0) {
-      logInfo(s"register worker failed!, ${res.message}")
+      logInfo(s"Register worker failed!, ${res.message}")
       Thread.sleep(delta)
       registerTimeout = registerTimeout - delta
-      logInfo("Trying to re-register with master")
+      logInfo("Trying to re-register with master.")
       res = masterEndpoint.askSync[RegisterWorkerResponse](
         RegisterWorker(host, port, fetchPort, workerInfo.numSlots, self)
       )
@@ -686,7 +686,7 @@ private[deploy] class Worker(
           cleanup(expiredShuffleKeys)
         } catch {
           case e: Exception =>
-            logError("cleanup failed", e)
+            logError("Cleanup failed", e)
         }
       }
     }

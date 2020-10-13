@@ -2,8 +2,7 @@ package org.apache.spark.shuffle.ess
 
 import com.aliyun.emr.ess.client.ShuffleClient
 import com.aliyun.emr.ess.common.EssConf
-
-import org.apache.spark._
+import org.apache.spark.{SparkContext, _}
 import org.apache.spark.internal.Logging
 import org.apache.spark.shuffle._
 
@@ -13,14 +12,17 @@ class EssShuffleManager(conf: SparkConf)
   // Read EssConf from SparkConf
   private lazy val essConf = EssShuffleManager.fromSparkConf(conf)
   private lazy val essShuffleClient = ShuffleClient.get(essConf)
+  private var appId: Option[String] = None
 
   override def registerShuffle[K, V, C](
     shuffleId: Int,
     dependency: ShuffleDependency[K, V, C]): ShuffleHandle = {
 
-    essShuffleClient.startHeartbeat(conf.getAppId)
+    appId = Some(EssShuffleManager.genAppId(dependency.rdd.context))
+    essShuffleClient.startHeartbeat(appId.get)
 
     new EssShuffleHandle[K, V](
+      appId.get,
       shuffleId,
       dependency.rdd.getNumPartitions,
       dependency.asInstanceOf[ShuffleDependency[K, V, V]])
@@ -60,7 +62,8 @@ class EssShuffleManager(conf: SparkConf)
   }
 
   override def unregisterShuffle(shuffleId: Int): Boolean = {
-    essShuffleClient.unregisterShuffle(conf.getAppId, shuffleId,
+    assert(appId.isDefined, "App Id should not be None")
+    essShuffleClient.unregisterShuffle(appId.get, shuffleId,
       SparkEnv.get.executorId == SparkContext.DRIVER_IDENTIFIER)
   }
 
@@ -97,11 +100,20 @@ object EssShuffleManager {
     }
     tmpEssConf
   }
+
+  def genAppId(context: SparkContext): String = {
+    context.applicationAttemptId match {
+      case Some(id) => s"${context.applicationId}_${System.currentTimeMillis()}_$id"
+      case None => s"${context.applicationId}_${System.currentTimeMillis()}"
+    }
+  }
 }
 
 class EssShuffleHandle[K, V](
+  newAppId: String,
   shuffleId: Int,
   val numMappers: Int,
   dependency: ShuffleDependency[K, V, V])
   extends BaseShuffleHandle(shuffleId, dependency) {
+  val appId = newAppId
 }

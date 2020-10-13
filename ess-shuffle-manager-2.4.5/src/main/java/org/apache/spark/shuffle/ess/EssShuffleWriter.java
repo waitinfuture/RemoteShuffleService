@@ -3,7 +3,6 @@ package org.apache.spark.shuffle.ess;
 import com.aliyun.emr.ess.client.ShuffleClient;
 import com.aliyun.emr.ess.common.EssConf;
 
-import com.aliyun.emr.ess.common.util.Utils;
 import org.apache.spark.*;
 import org.apache.spark.annotation.Private;
 import org.apache.spark.executor.ShuffleWriteMetrics;
@@ -28,7 +27,6 @@ import scala.reflect.ClassTag$;
 import javax.annotation.Nullable;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.sql.Time;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
@@ -245,7 +243,7 @@ public class EssShuffleWriter<K, V, C> extends ShuffleWriter<K, V> {
         int numPartitions) throws IOException {
         this.mapId = mapId;
         this.dep = handle.dependency();
-        this.appId = sparkConf.getAppId();
+        this.appId = ((EssShuffleHandle)handle).appId();
         this.shuffleId = dep.shuffleId();
         this.serializer = dep.serializer().newInstance();
         this.partitioner = dep.partitioner();
@@ -466,7 +464,7 @@ public class EssShuffleWriter<K, V, C> extends ShuffleWriter<K, V> {
                     if (mapStatus == null) {
                         throw new IllegalStateException("Cannot call stop(true) without having called write()");
                     }
-                    logger.info("mapStatus " + mapStatus.getSizeForBlock(0) + ", " + mapStatus.getRecordForBlock(0));
+                    logger.info("MapStatus " + mapStatus.getSizeForBlock(0) + "," + mapStatus.getRecordForBlock(0));
                     return Option.apply(mapStatus);
                 } else {
                     return Option.apply(null);

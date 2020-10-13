@@ -420,7 +420,7 @@ private[deploy] class Master(
           val initialLocs = workersSnapShot
             .flatMap(w => w.getAllMasterLocationsWithMinEpoch(shuffleKey))
             .filter(_.getEpoch == 0)
-          logDebug(s"Shuffle $shuffleKey already registered, just return")
+          logDebug(s"Shuffle $shuffleKey already registered, just return.")
           if (initialLocs.size != numPartitions) {
             logWarning(s"Shuffle $shuffleKey location size ${initialLocs.size} not equal to " +
               s"numPartitions: $numPartitions!")
@@ -428,7 +428,7 @@ private[deploy] class Master(
           context.reply(RegisterShuffleResponse(StatusCode.Success, initialLocs))
           return
         }
-        logInfo(s"New shuffle request, shuffleKey $shuffleKey")
+        logInfo(s"New shuffle request, shuffleKey $shuffleKey.")
         val set = new util.HashSet[RpcCallContext]()
         set.add(context)
         registerShuffleRequest.put(shuffleKey, set)
@@ -463,7 +463,7 @@ private[deploy] class Master(
 
     // reserve buffers failed, clear allocated resources
     if (failed != null && !failed.isEmpty()) {
-      logWarning("Reserve buffers still fail after retry, clear buffers")
+      logWarning("Reserve buffers still fail after retrying, clear buffers.")
       slots.foreach(entry => {
         destroyBuffersWithRetry(shuffleKey, entry._1,
           entry._2._1.map(_.getUniqueId),
@@ -471,7 +471,7 @@ private[deploy] class Master(
         entry._1.removeMasterPartitions(shuffleKey, entry._2._1.map(_.getUniqueId))
         entry._1.removeSlavePartitions(shuffleKey, entry._2._2.map(_.getUniqueId))
       })
-      logError(s"RegisterShuffle for $shuffleKey failed, reply to all")
+      logError(s"RegisterShuffle for $shuffleKey failed, reply to all.")
       registerShuffleRequest.synchronized {
         val set = registerShuffleRequest.get(shuffleKey)
         set.foreach { context =>
@@ -501,7 +501,7 @@ private[deploy] class Master(
 
     reducerFileGroupsMap.put(shuffleKey, new Array[Array[PartitionLocation]](numPartitions))
 
-    logInfo(s"Handle RegisterShuffle Success for $shuffleKey")
+    logInfo(s"Handle RegisterShuffle Success for $shuffleKey.")
     registerShuffleRequest.synchronized {
       val set = registerShuffleRequest.get(shuffleKey)
       set.foreach { context =>
@@ -705,10 +705,10 @@ private[deploy] class Master(
     var timeout = EssConf.essStageEndTimeout(conf)
     val delta = 50
     while (!stageEndShuffleSet.contains(shuffleKey)) {
-      logInfo(s"Wait for StageEnd, $shuffleKey")
+      logInfo(s"Wait for StageEnd, $shuffleKey.")
       Thread.sleep(50)
       if (timeout <= 0) {
-        logError(s"StageEnd Timeout! $shuffleKey")
+        logError(s"StageEnd Timeout! $shuffleKey.")
         context.reply(GetReducerFileGroupResponse(StatusCode.Failed, null, null))
         return
       }
@@ -934,7 +934,7 @@ private[deploy] class Master(
 
   private def handleHeartBeatFromApplication(appId: String): Unit = {
     appHeartbeatTime.synchronized {
-      logInfo(s"Heartbeat from application, appId $appId")
+      logInfo(s"Heartbeat from application, appId $appId.")
       appHeartbeatTime.put(appId, System.currentTimeMillis())
     }
   }
