@@ -13,18 +13,20 @@ class EssShuffleManager(conf: SparkConf)
   // Read EssConf from SparkConf
   private lazy val essConf = EssShuffleManager.fromSparkConf(conf)
   private lazy val essShuffleClient = ShuffleClient.get(essConf)
-  private var appId: Option[String] = None
+  private var newAppId: Option[String] = None
 
   override def registerShuffle[K, V, C](
     shuffleId: Int,
     numMaps: Int,
     dependency: ShuffleDependency[K, V, C]): ShuffleHandle = {
 
-    appId = Some(EssShuffleManager.genAppId(dependency.rdd.context))
-    essShuffleClient.startHeartbeat(appId.get)
+    // Note: generate newAppId at driver side, make sure dependency.rdd.context
+    // is the same SparkContext among different shuffleIds.
+    newAppId = Some(EssShuffleManager.genNewAppId(dependency.rdd.context))
+    essShuffleClient.startHeartbeat(newAppId.get)
 
     new EssShuffleHandle[K, V](
-      appId.get,
+      newAppId.get,
       shuffleId,
       numMaps,
       dependency.asInstanceOf[ShuffleDependency[K, V, V]])
@@ -62,8 +64,8 @@ class EssShuffleManager(conf: SparkConf)
   }
 
   override def unregisterShuffle(shuffleId: Int): Boolean = {
-    assert(appId.isDefined, "App Id should not be None")
-    essShuffleClient.unregisterShuffle(appId.get, shuffleId,
+    assert(newAppId.isDefined, "App Id should not be None")
+    essShuffleClient.unregisterShuffle(newAppId.get, shuffleId,
       SparkEnv.get.executorId == SparkContext.DRIVER_IDENTIFIER)
   }
 
@@ -90,19 +92,18 @@ object EssShuffleManager {
     tmpEssConf
   }
 
-  def genAppId(context: SparkContext): String = {
+  def genNewAppId(context: SparkContext): String = {
     context.applicationAttemptId match {
-      case Some(id) => s"${context.applicationId}_${System.currentTimeMillis()}_$id"
-      case None => s"${context.applicationId}_${System.currentTimeMillis()}"
+      case Some(id) => s"${context.applicationId}_$id"
+      case None => s"${context.applicationId}"
     }
   }
 }
 
 class EssShuffleHandle[K, V](
-  newAppId: String,
+  val newAppId: String,
   shuffleId: Int,
   numMaps: Int,
   dependency: ShuffleDependency[K, V, V])
   extends BaseShuffleHandle(shuffleId, numMaps, dependency) {
-  val appId = newAppId
 }

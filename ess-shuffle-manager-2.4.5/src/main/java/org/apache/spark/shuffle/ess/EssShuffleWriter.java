@@ -243,7 +243,7 @@ public class EssShuffleWriter<K, V, C> extends ShuffleWriter<K, V> {
         int numPartitions) throws IOException {
         this.mapId = mapId;
         this.dep = handle.dependency();
-        this.appId = ((EssShuffleHandle)handle).appId();
+        this.appId = ((EssShuffleHandle)handle).newAppId();
         this.shuffleId = dep.shuffleId();
         this.serializer = dep.serializer().newInstance();
         this.partitioner = dep.partitioner();

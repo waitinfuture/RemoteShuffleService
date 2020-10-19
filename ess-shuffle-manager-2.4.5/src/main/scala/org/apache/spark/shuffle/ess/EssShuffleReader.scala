@@ -37,7 +37,7 @@ class EssShuffleReader[K, C](
       if (handle.numMaps > 0) {
         val start = System.currentTimeMillis()
         val inputStream = essShuffleClient.readPartition(
-          handle.asInstanceOf[EssShuffleHandle[_, _]].appId, handle.shuffleId, reduceId, context.attemptNumber())
+          handle.asInstanceOf[EssShuffleHandle[_, _]].newAppId, handle.shuffleId, reduceId, context.attemptNumber())
         metricsCallback.incReadTime(System.currentTimeMillis() - start)
         inputStream.setCallback(metricsCallback)
         inputStream
