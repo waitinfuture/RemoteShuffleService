@@ -548,6 +548,18 @@ object EssConf extends Logging {
     conf.getTimeAsMs("ess.flush.timeout", "240s")
   }
 
+  def essNoneEmptyDirExpireDurationMs(conf: EssConf): Long = {
+    conf.getTimeAsMs("ess.expire.nonEmptyDir.duration", "3d")
+  }
+
+  def essNoneEmptyDirCleanUpThreshold(conf: EssConf): Int = {
+    conf.getInt("ess.expire.nonEmptyDir.cleanUp.threshold", 10)
+  }
+
+  def essEmptyDirExpireDurationMs(conf: EssConf): Long = {
+    conf.getTimeAsMs("ess.expire.emptyDir.duration", "2h")
+  }
+
   def essWorkerBaseDirs(conf: EssConf): Array[String] = {
     val baseDirs = conf.get("ess.worker.base.dirs", "")
     if (baseDirs.nonEmpty) {

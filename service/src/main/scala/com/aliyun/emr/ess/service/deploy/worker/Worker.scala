@@ -707,7 +707,7 @@ private[deploy] class Worker(
       shuffleMapperAttempts.remove(shuffleKey)
     }
 
-    localStorageManager.cleanup(expiredShuffleKeys)
+    localStorageManager.cleanupExpiredShuffleKey(expiredShuffleKeys)
   }
 
   def Registered(): Boolean = {

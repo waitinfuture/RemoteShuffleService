@@ -172,9 +172,9 @@ private[worker] final class LocalStorageManager(conf: EssConf, workerSource: Abs
 
   def shuffleKeySet(): util.Set[String] = writers.keySet()
 
-  def cleanup(expiredShuffleKeys: util.HashSet[String]): Unit = {
+  def cleanupExpiredShuffleKey(expiredShuffleKeys: util.HashSet[String]): Unit = {
     expiredShuffleKeys.foreach { shuffleKey =>
-      logInfo(s"cleanup $shuffleKey")
+      logInfo(s"Cleanup $shuffleKey")
       writers.remove(shuffleKey)
       val splits = shuffleKey.split("-")
       val appId = splits.dropRight(1).mkString("-")
@@ -186,24 +186,41 @@ private[worker] final class LocalStorageManager(conf: EssConf, workerSource: Abs
     }
   }
 
-  private val cleanupEmptyAppDirsScheduler =
-    ThreadUtils.newDaemonSingleThreadScheduledExecutor("cleanup-empty-dirs-scheduler")
-  cleanupEmptyAppDirsScheduler.scheduleAtFixedRate(new Runnable {
+  private val noneEmptyDirExpireDurationMs = EssConf.essNoneEmptyDirExpireDurationMs(conf)
+  private val noneEmptyDirCleanUpThreshold = EssConf.essNoneEmptyDirCleanUpThreshold(conf)
+  private val emptyDirExpireDurationMs = EssConf.essEmptyDirExpireDurationMs(conf)
+  private val cleanupExpiredAppDirsScheduler =
+    ThreadUtils.newDaemonSingleThreadScheduledExecutor("cleanup-expired-dirs-scheduler")
+  cleanupExpiredAppDirsScheduler.scheduleAtFixedRate(new Runnable {
     override def run(): Unit = {
-      cleanupEmptyAppDirs()
+      cleanupExpiredAppDirs()
     }
   }, 30, 30, TimeUnit.MINUTES)
 
-  private def cleanupEmptyAppDirs(): Unit = {
-    val expireTime = System.currentTimeMillis() - expireDurationMs
+  private def cleanupExpiredAppDirs(deleteRecursively: Boolean = false, expireDuration: Long): Unit = {
     workingDirs.foreach { workingDir =>
-      val appDirs = workingDir.listFiles
+      var appDirs = workingDir.listFiles
+
       if (appDirs != null) {
-        for (appDir <- appDirs if appDir.lastModified() < expireTime) {
-          appDir.delete()
+        if (deleteRecursively) {
+          appDirs = appDirs.sortBy(_.lastModified()).take(noneEmptyDirCleanUpThreshold)
+        }
+        for (appDir <- appDirs if appDir.lastModified() < expireDuration) {
+          deleteDirectory(appDir)
         }
       }
     }
+  }
+
+  private def cleanupExpiredAppDirs(): Unit = {
+    // Clean up empty dirs, since the appDir do not delete during expired shuffle key cleanup
+    cleanupExpiredAppDirs(expireDuration = System.currentTimeMillis() - emptyDirExpireDurationMs)
+
+    // Clean up non-empty dirs which has not been modified
+    // in the past {{noneEmptyExpireDurationsMs}}, since
+    // non empty dirs may exist after cluster restart.
+    cleanupExpiredAppDirs(
+      true, System.currentTimeMillis() - noneEmptyDirExpireDurationMs)
   }
 
   def logAvailableFlushBuffersInfo(): Unit =
@@ -212,5 +229,4 @@ private[worker] final class LocalStorageManager(conf: EssConf, workerSource: Abs
 
 private object LocalStorageManager {
   private val workingDirName = "hadoop/ess-worker/data"
-  private val expireDurationMs = TimeUnit.HOURS.toMillis(2)
 }
