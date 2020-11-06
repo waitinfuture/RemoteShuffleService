@@ -14,4 +14,4 @@ fi
 
 export ESS_JAVA_OPTS="-Xmx$ESS_MASTER_MEMORY $ESS_MASTER_JAVA_OPTS"
 
-"${ESS_HOME}/sbin/ess-daemon.sh" start com.aliyun.emr.ess.service.deploy.master.Master 1
+"${ESS_HOME}/sbin/ess-daemon.sh" start com.aliyun.emr.ess.service.deploy.master.Master 1 "$@"
