@@ -204,9 +204,14 @@ private[worker] final class LocalStorageManager(conf: EssConf, workerSource: Abs
       if (appDirs != null) {
         if (deleteRecursively) {
           appDirs = appDirs.sortBy(_.lastModified()).take(noneEmptyDirCleanUpThreshold)
-        }
-        for (appDir <- appDirs if appDir.lastModified() < expireDuration) {
-          deleteDirectory(appDir)
+
+          for (appDir <- appDirs if appDir.lastModified() < expireDuration) {
+            deleteDirectory(appDir)
+          }
+        } else {
+          for (appDir <- appDirs if appDir.lastModified() < expireDuration) {
+            appDir.delete()
+          }
         }
       }
     }
