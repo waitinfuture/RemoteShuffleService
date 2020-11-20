@@ -19,18 +19,23 @@ package com.aliyun.emr.network.util;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.nio.channels.ClosedChannelException;
 import java.nio.channels.ReadableByteChannel;
 
 import io.netty.buffer.ByteBuf;
 
 public class ByteArrayReadableChannel implements ReadableByteChannel {
   private ByteBuf data;
+  private boolean closed;
 
   public int readableBytes() {
     return data.readableBytes();
   }
 
-  public void feedData(ByteBuf buf) {
+  public void feedData(ByteBuf buf) throws ClosedChannelException {
+    if (closed) {
+      throw new ClosedChannelException();
+    }
     data = buf;
   }
 
@@ -43,20 +48,17 @@ public class ByteArrayReadableChannel implements ReadableByteChannel {
       totalRead += bytesToRead;
     }
 
-    if (data.readableBytes() == 0) {
-      data.release();
-    }
-
     return totalRead;
   }
 
   @Override
   public void close() throws IOException {
+    closed = true;
   }
 
   @Override
   public boolean isOpen() {
-    return true;
+    return !closed;
   }
 
 }
