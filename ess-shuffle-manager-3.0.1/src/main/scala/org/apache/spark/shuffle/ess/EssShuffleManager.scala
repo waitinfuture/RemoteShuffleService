@@ -2,7 +2,7 @@ package org.apache.spark.shuffle.ess
 
 import com.aliyun.emr.ess.client.ShuffleClient
 import com.aliyun.emr.ess.common.EssConf
-import org.apache.spark.{SparkContext, _}
+import org.apache.spark.{SparkContext, SparkEnv, _}
 import org.apache.spark.internal.Logging
 import org.apache.spark.shuffle._
 
@@ -64,9 +64,11 @@ class EssShuffleManager(conf: SparkConf)
   }
 
   override def unregisterShuffle(shuffleId: Int): Boolean = {
-    assert(newAppId.isDefined, "App Id should not be None")
-    essShuffleClient.unregisterShuffle(newAppId.get, shuffleId,
-      SparkEnv.get.executorId == SparkContext.DRIVER_IDENTIFIER)
+    newAppId match {
+      case Some(id) => essShuffleClient.unregisterShuffle(id, shuffleId,
+        SparkEnv.get.executorId == SparkContext.DRIVER_IDENTIFIER)
+      case None => true
+    }
   }
 
   override def shuffleBlockResolver: ShuffleBlockResolver = null
