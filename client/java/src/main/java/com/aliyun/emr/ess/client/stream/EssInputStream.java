@@ -392,7 +392,7 @@ public abstract class EssInputStream extends InputStream {
             }
 
             private void fetchChunks() {
-                final int inFlight = chunkIndex - returnedChunks - results.size();
+                final int inFlight = chunkIndex - returnedChunks;
                 if (inFlight < maxInFlight) {
                     final int toFetch = Math.min(maxInFlight - inFlight + 1, numChunks - chunkIndex);
                     for (int i = 0; i < toFetch; i++) {
