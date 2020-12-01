@@ -119,6 +119,9 @@ public abstract class EssInputStream extends InputStream {
 
         private void moveToNextReader() throws IOException {
             logger.info("move to next partition " + locations[fileIndex]);
+            if (currentReader != null) {
+                currentReader.close();
+            }
             currentReader = createReader(locations[fileIndex]);
             currentChunk = currentReader.next();
             fileIndex++;
@@ -213,7 +216,12 @@ public abstract class EssInputStream extends InputStream {
             if (currentReader != null) {
                 currentReader.close();
                 currentReader = null;
-                currentChunk = null;
+                logger.info("Closing reader");
+                if (currentChunk != null) {
+                    logger.info("Release chunk!");
+                    currentChunk.release();
+                    currentChunk = null;
+                }
             }
         }
 
@@ -300,6 +308,8 @@ public abstract class EssInputStream extends InputStream {
 
             private final long timeoutMs = EssConf.essFetchChunkTimeoutMs(conf);
 
+            private boolean closed = false;
+
             PartitionReader(TransportClient client, String fileName) throws IOException {
                 this.client = client;
 
@@ -321,8 +331,10 @@ public abstract class EssInputStream extends InputStream {
                     @Override
                     public void onSuccess(int chunkIndex, ManagedBuffer buffer) {
                         ByteBuf buf = ((NettyManagedBuffer) buffer).getBuf();
-                        buf.retain();
-                        results.add(buf);
+                        if (!closed) {
+                            buf.retain();
+                            results.add(buf);
+                        }
                     }
 
                     @Override
@@ -372,6 +384,10 @@ public abstract class EssInputStream extends InputStream {
             }
 
             void close() {
+                closed = true;
+                if (results.size() > 0) {
+                    results.forEach(res -> res.release());
+                }
                 results.clear();
             }
 

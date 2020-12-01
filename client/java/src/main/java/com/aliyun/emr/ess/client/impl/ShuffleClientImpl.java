@@ -31,11 +31,13 @@ import io.netty.buffer.CompositeByteBuf;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.ChannelFuture;
 import io.netty.util.internal.ConcurrentSet;
+import io.netty.util.internal.PlatformDependent;
 import org.apache.log4j.Logger;
 
 import scala.reflect.ClassTag$;
 
 import java.io.IOException;
+import java.lang.reflect.Field;
 import java.net.InetAddress;
 import java.net.UnknownHostException;
 import java.nio.ByteBuffer;
@@ -43,6 +45,7 @@ import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 
 public class ShuffleClientImpl extends ShuffleClient {
     private static final Logger logger = Logger.getLogger(ShuffleClientImpl.class);
@@ -134,6 +137,21 @@ public class ShuffleClientImpl extends ShuffleClient {
 
         int retryThreadNum = EssConf.essPushDataRetryThreadNum(conf);
         pushDataRetryPool = ThreadUtils.newDaemonCachedThreadPool("Retry-Sender", retryThreadNum, 60);
+        ThreadUtils.newDaemonSingleThreadScheduledExecutor("test-netty-0mem").scheduleAtFixedRate(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    Field field = PlatformDependent.class.getDeclaredField("DIRECT_MEMORY_COUNTER");
+                    field.setAccessible(true);
+                    AtomicLong directMemory = (AtomicLong) field.get(PlatformDependent.class);
+                    logger.info("netty memory " + directMemory.get()/1024/1024 + "MB");
+                } catch (NoSuchFieldException e) {
+                    e.printStackTrace();
+                } catch (IllegalAccessException e) {
+                    e.printStackTrace();
+                }
+            }
+        },0 , 10, TimeUnit.SECONDS);
     }
 
     private void submitRetryPushData(String applicationId,
