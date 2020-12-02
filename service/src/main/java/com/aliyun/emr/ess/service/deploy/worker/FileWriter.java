@@ -2,10 +2,10 @@ package com.aliyun.emr.ess.service.deploy.worker;
 
 import com.aliyun.emr.ess.common.exception.AlreadyClosedException;
 import com.aliyun.emr.ess.common.metrics.source.AbstractSource;
+import com.aliyun.emr.ess.unsafe.Platform;
 import io.netty.buffer.ByteBuf;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import scala.Function0;
 import scala.runtime.AbstractFunction0;
 
 import java.io.File;
@@ -125,6 +125,19 @@ public final class FileWriter {
         addTask(task);
     }
 
+    private void logBatch(ByteBuf data) {
+        // header: mapId attemptId batchId compressedTotalSize
+        byte[] header = new byte[16];
+        data.getBytes(data.readerIndex(), header);
+        int mapId = Platform.getInt(header, Platform.BYTE_ARRAY_OFFSET);
+        int attemptId = Platform.getInt(header, Platform.BYTE_ARRAY_OFFSET + 4);
+        int batchId = Platform.getInt(header, Platform.BYTE_ARRAY_OFFSET + 8);
+        int size = Platform.getInt(header, Platform.BYTE_ARRAY_OFFSET + 12);
+        logger.debug("16+size equals data.readableBytes:" + (16+size == data.readableBytes()));
+        logger.debug("write batch to " + file.getAbsolutePath() + ": mapId " + mapId
+            + ", attemptId " + attemptId + ", batchId " + batchId + ", size " + size);
+    }
+
     /**
      * assume data size is less than chunk capacity
      *
@@ -141,19 +154,19 @@ public final class FileWriter {
             return;
         }
 
-        synchronized (this) {
-            if (bytesWritten >= nextBoundary) {
-                chunkOffsets.add(bytesWritten);
-                nextBoundary = bytesWritten + chunkSize;
-            }
+        logBatch(data);
 
+        synchronized (this) {
             final int numBytes = data.readableBytes();
 
             if (flushBuffer.capacity() < numBytes) {
                 flush(data.nioBuffer());
                 logger.info("flush giant record, size " + numBytes);
+                bytesWritten += numBytes;
             } else {
                 if (flushBuffer.position() + numBytes >= flushBuffer.capacity()) {
+                    // must ahead of flush() because flush() sets position to 0
+                    bytesWritten += flushBuffer.position();
                     flush();
                     takeBuffer();
                 }
@@ -162,7 +175,11 @@ public final class FileWriter {
                 data.getBytes(data.readerIndex(), flushBuffer);
             }
 
-            bytesWritten += numBytes;
+            if (bytesWritten >= nextBoundary) {
+                chunkOffsets.add(bytesWritten);
+                nextBoundary = bytesWritten + chunkSize;
+            }
+
             numPendingWrites.decrementAndGet();
         }
     }
@@ -180,6 +197,7 @@ public final class FileWriter {
 
             synchronized (this) {
                 if (flushBuffer.position() > 0) {
+                    bytesWritten += flushBuffer.position();
                     flush();
                 }
             }

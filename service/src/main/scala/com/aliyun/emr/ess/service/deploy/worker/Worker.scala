@@ -651,6 +651,8 @@ private[deploy] class Worker(
       logError(msg)
       return null
     }
+    logDebug(s"open stream for file $shuffleKey, $fileName, length: ${fileWriter.getFileLength}" +
+      s", chunk offsets: ${fileWriter.getChunkOffsets.mkString(",")}")
     new OpenStreamHandler.FileInfo(
       fileWriter.getFile, fileWriter.getChunkOffsets, fileWriter.getFileLength)
   }
