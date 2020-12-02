@@ -47,22 +47,21 @@ public abstract class EssInputStream extends InputStream {
 
     public abstract void setCallback(MetricsCallback callback);
 
-    private static final EssInputStream emptyInputStream =
-            new EssInputStream() {
-                @Override
-                public int read() throws IOException {
-                    return -1;
-                }
+    private static final EssInputStream emptyInputStream = new EssInputStream() {
+        @Override
+        public int read() throws IOException {
+            return -1;
+        }
 
-                @Override
-                public int read(byte b[], int off, int len) throws IOException {
-                    return -1;
-                }
+        @Override
+        public int read(byte b[], int off, int len) throws IOException {
+            return -1;
+        }
 
-                @Override
-                public void setCallback(MetricsCallback callback) {
-                }
-            };
+        @Override
+        public void setCallback(MetricsCallback callback) {
+        }
+    };
 
     private static final class EssInputStreamImpl extends EssInputStream {
         private final EssConf conf;
@@ -212,16 +211,16 @@ public abstract class EssInputStream extends InputStream {
         }
 
         @Override
-        public void close() throws IOException {
+        public void close() {
+            if (currentChunk != null) {
+                logger.info("Release chunk!");
+                currentChunk.release();
+                currentChunk = null;
+            }
             if (currentReader != null) {
+                logger.info("Closing reader");
                 currentReader.close();
                 currentReader = null;
-                logger.info("Closing reader");
-                if (currentChunk != null) {
-                    logger.info("Release chunk!");
-                    currentChunk.release();
-                    currentChunk = null;
-                }
             }
         }
 

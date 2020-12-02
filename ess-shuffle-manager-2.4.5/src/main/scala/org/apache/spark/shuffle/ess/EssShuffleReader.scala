@@ -40,6 +40,8 @@ class EssShuffleReader[K, C](
           handle.asInstanceOf[EssShuffleHandle[_, _]].newAppId, handle.shuffleId, reduceId, context.attemptNumber())
         metricsCallback.incReadTime(System.currentTimeMillis() - start)
         inputStream.setCallback(metricsCallback)
+        // ensure inputStream is closed when task completes
+        context.addTaskCompletionListener(_ => inputStream.close())
         inputStream
       } else {
         EssInputStream.empty()
