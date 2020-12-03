@@ -2,7 +2,6 @@ package com.aliyun.emr.ess.service.deploy.worker;
 
 import com.aliyun.emr.ess.common.exception.AlreadyClosedException;
 import com.aliyun.emr.ess.common.metrics.source.AbstractSource;
-import com.aliyun.emr.ess.unsafe.Platform;
 import io.netty.buffer.ByteBuf;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -125,19 +124,6 @@ public final class FileWriter {
         addTask(task);
     }
 
-    private void logBatch(ByteBuf data) {
-        // header: mapId attemptId batchId compressedTotalSize
-        byte[] header = new byte[16];
-        data.getBytes(data.readerIndex(), header);
-        int mapId = Platform.getInt(header, Platform.BYTE_ARRAY_OFFSET);
-        int attemptId = Platform.getInt(header, Platform.BYTE_ARRAY_OFFSET + 4);
-        int batchId = Platform.getInt(header, Platform.BYTE_ARRAY_OFFSET + 8);
-        int size = Platform.getInt(header, Platform.BYTE_ARRAY_OFFSET + 12);
-        logger.debug("16+size equals data.readableBytes:" + (16+size == data.readableBytes()));
-        logger.debug("write batch to " + file.getAbsolutePath() + ": mapId " + mapId
-            + ", attemptId " + attemptId + ", batchId " + batchId + ", size " + size);
-    }
-
     /**
      * assume data size is less than chunk capacity
      *
@@ -153,8 +139,6 @@ public final class FileWriter {
         if (notifier.hasException()) {
             return;
         }
-
-        logBatch(data);
 
         synchronized (this) {
             final int numBytes = data.readableBytes();

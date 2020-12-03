@@ -256,9 +256,6 @@ public abstract class EssInputStream extends InputStream {
                     compressedBuf = new byte[size];
                 }
 
-                logger.debug("Read batch: mapId " + mapId + ", attemptId " + attemptId
-                    + ", batchId " + batchId + ", size " + size);
-
                 currentChunk.readBytes(compressedBuf, 0, size);
 
                 // de-duplicate
@@ -333,7 +330,6 @@ public abstract class EssInputStream extends InputStream {
                     @Override
                     public void onSuccess(int chunkIndex, ManagedBuffer buffer) {
                         ByteBuf buf = ((NettyManagedBuffer) buffer).getBuf();
-                        logger.debug("Read chunk " + chunkIndex + ", size: " + buf.readableBytes());
                         if (!closed) {
                             buf.retain();
                             results.add(buf);
