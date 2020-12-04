@@ -329,10 +329,13 @@ public abstract class EssInputStream extends InputStream {
                 callback = new ChunkReceivedCallback() {
                     @Override
                     public void onSuccess(int chunkIndex, ManagedBuffer buffer) {
-                        ByteBuf buf = ((NettyManagedBuffer) buffer).getBuf();
-                        if (!closed) {
-                            buf.retain();
-                            results.add(buf);
+                        // only add the buffer to results queue if this reader is not closed.
+                        synchronized(PartitionReader.this) {
+                            ByteBuf buf = ((NettyManagedBuffer) buffer).getBuf();
+                            if (!closed) {
+                                buf.retain();
+                                results.add(buf);
+                            }
                         }
                     }
 
@@ -383,7 +386,9 @@ public abstract class EssInputStream extends InputStream {
             }
 
             void close() {
-                closed = true;
+                synchronized(this) {
+                    closed = true;
+                }
                 if (results.size() > 0) {
                     results.forEach(res -> res.release());
                 }
