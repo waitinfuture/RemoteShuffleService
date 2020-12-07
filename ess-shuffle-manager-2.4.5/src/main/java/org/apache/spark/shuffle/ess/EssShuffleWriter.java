@@ -372,7 +372,7 @@ public class EssShuffleWriter<K, V, C> extends ShuffleWriter<K, V> {
         int numBytes = serBuffer.size();
         logger.info("push giant record, size " + numBytes);
         long pushStartTime = System.nanoTime();
-        essShuffleClient.pushData(
+        int bytesWritten = essShuffleClient.pushData(
             appId,
             shuffleId,
             mapId,
@@ -384,7 +384,7 @@ public class EssShuffleWriter<K, V, C> extends ShuffleWriter<K, V> {
             numMappers,
             numPartitions
         );
-        writeMetrics.incBytesWritten(serBuffer.size());
+        writeMetrics.incBytesWritten(bytesWritten);
         writeMetrics.incWriteTime(System.nanoTime() - pushStartTime);
     }
 

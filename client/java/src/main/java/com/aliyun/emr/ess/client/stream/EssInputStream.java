@@ -88,7 +88,8 @@ public abstract class EssInputStream extends InputStream {
         private MetricsCallback callback;
 
         // mapId, attempId, batchId, size
-        private final byte[] sizeBuf = new byte[16];
+        private final int BATCH_HEADER_SIZE = 4 * 4;
+        private final byte[] sizeBuf = new byte[BATCH_HEADER_SIZE];
 
         public EssInputStreamImpl(
                 EssConf conf,
@@ -268,7 +269,7 @@ public abstract class EssInputStream extends InputStream {
                     if (!batchSet.contains(batchId)) {
                         batchSet.add(batchId);
                         if (callback != null) {
-                            callback.incBytesWritten(size);
+                            callback.incBytesRead(BATCH_HEADER_SIZE + size);
                         }
                         // decompress data
                         int originalLength = decompressor.getOriginalLen(compressedBuf);

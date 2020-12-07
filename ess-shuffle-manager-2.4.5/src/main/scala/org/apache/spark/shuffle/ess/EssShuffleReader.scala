@@ -26,8 +26,8 @@ class EssShuffleReader[K, C](
     // Update the context task metrics for each record read.
     val readMetrics = context.taskMetrics.createTempShuffleReadMetrics()
     val metricsCallback = new MetricsCallback {
-      override def incBytesWritten(bytesWritten: Long): Unit =
-        readMetrics.incRemoteBytesRead(bytesWritten)
+      override def incBytesRead(bytesRead: Long): Unit =
+        readMetrics.incRemoteBytesRead(bytesRead)
 
       override def incReadTime(time: Long): Unit =
         readMetrics.incFetchWaitTime(time)
