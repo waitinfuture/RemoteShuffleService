@@ -227,6 +227,7 @@ public abstract class EssInputStream extends InputStream {
 
         private boolean moveToNextChunk() throws IOException {
             currentChunk.release();
+            currentChunk = null;
             if (currentReader.hasNext()) {
                 currentChunk = currentReader.next();
                 return true;
@@ -234,7 +235,6 @@ public abstract class EssInputStream extends InputStream {
                 moveToNextReader();
                 return true;
             }
-            currentChunk = null;
             currentReader = null;
             return false;
         }
