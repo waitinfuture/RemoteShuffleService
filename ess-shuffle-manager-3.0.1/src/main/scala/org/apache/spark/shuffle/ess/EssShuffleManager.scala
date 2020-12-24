@@ -1,10 +1,12 @@
 package org.apache.spark.shuffle.ess
 
-import com.aliyun.emr.ess.client.ShuffleClient
-import com.aliyun.emr.ess.common.EssConf
 import org.apache.spark.{SparkContext, SparkEnv, _}
 import org.apache.spark.internal.Logging
 import org.apache.spark.shuffle._
+import org.apache.spark.sql.internal.SQLConf
+
+import com.aliyun.emr.ess.client.ShuffleClient
+import com.aliyun.emr.ess.common.EssConf
 
 class EssShuffleManager(conf: SparkConf)
   extends ShuffleManager with Logging {
@@ -17,6 +19,15 @@ class EssShuffleManager(conf: SparkConf)
   override def registerShuffle[K, V, C](
     shuffleId: Int,
     dependency: ShuffleDependency[K, V, C]): ShuffleHandle = {
+
+    if (conf.get(SQLConf.LOCAL_SHUFFLE_READER_ENABLED) || conf.get(SQLConf.SKEW_JOIN_ENABLED)) {
+      // todo: support local shuffle reader and skew join.
+      // fast fail.
+      throw new UnsupportedOperationException(s"Currently RSS doesn't support LocalShuffleReader" +
+        s" and skew join. Please set the value of ${SQLConf.LOCAL_SHUFFLE_READER_ENABLED.key} and" +
+        s" ${SQLConf.SKEW_JOIN_ENABLED.key} to false in order to use RSS, or remove `--conf " +
+        "spark.shuffle.manager=org.apache.spark.shuffle.ess.EssShuffleManager` to disable rss.")
+    }
 
     // Note: generate newAppId at driver side, make sure dependency.rdd.context
     // is the same SparkContext among different shuffleIds.
@@ -85,7 +96,7 @@ class EssShuffleManager(conf: SparkConf)
     endPartition: Int,
     context: TaskContext,
     metrics: ShuffleReadMetricsReporter): ShuffleReader[K, C] = {
-    throw new UnsupportedOperationException("Unsupported Operation! getReaderForRange")
+    throw new UnsupportedOperationException("Do not support Ess Shuffle and AE at the same time.")
   }
 }
 
