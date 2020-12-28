@@ -17,6 +17,10 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
+/*
+ * Note: Once FlushNotifier.exception is set, the whole file is not available.
+ *       That's fine some of the internal state(e.g. bytesFlushed) may be inaccurate.
+ */
 public final class FileWriter {
     private static final Logger logger = LoggerFactory.getLogger(FileWriter.class);
 
@@ -29,7 +33,7 @@ public final class FileWriter {
     private final AtomicInteger numPendingWrites = new AtomicInteger();
     private final ArrayList<Long> chunkOffsets = new ArrayList<>();
     private long nextBoundary;
-    private long bytesWritten;
+    private long bytesFlushed;
 
     private final DiskFlusher flusher;
     private ByteBuffer flushBuffer;
@@ -67,6 +71,8 @@ public final class FileWriter {
         this.file = file;
         this.flusher = flusher;
         this.chunkSize = chunkSize;
+        this.nextBoundary = chunkSize;
+        this.chunkOffsets.add(0L);
         this.timeoutMs = timeoutMs;
         this.workerSource = workerSource;
         channel = new FileOutputStream(file).getChannel();
@@ -97,7 +103,7 @@ public final class FileWriter {
     }
 
     public long getFileLength() {
-        return bytesWritten;
+        return bytesFlushed;
     }
 
     public void incrementPendingWrites() {
@@ -108,13 +114,16 @@ public final class FileWriter {
         numPendingWrites.decrementAndGet();
     }
 
-    private void flush() throws IOException {
+    private void flush(boolean finalFlush) throws IOException {
+        int numBytes = flushBuffer.position();
         notifier.checkException();
         flushBuffer.flip();
         notifier.numPendingFlushes.incrementAndGet();
         FlushTask task = new FlushTask(flushBuffer, channel, notifier);
         addTask(task);
         flushBuffer = null;
+        bytesFlushed += numBytes;
+        maybeSetChunkOffsets(finalFlush);
     }
 
     private void flush(ByteBuffer giantBatch) throws IOException {
@@ -122,6 +131,27 @@ public final class FileWriter {
         notifier.numPendingFlushes.incrementAndGet();
         FlushTask task = new FlushTask(giantBatch, channel, notifier);
         addTask(task);
+        bytesFlushed += giantBatch.remaining();
+        maybeSetChunkOffsets(false);
+    }
+
+    private void maybeSetChunkOffsets(boolean forceSet) {
+        if (bytesFlushed >= nextBoundary || forceSet) {
+            chunkOffsets.add(bytesFlushed);
+            nextBoundary = bytesFlushed + chunkSize;
+        }
+    }
+
+    private boolean isChunkOffsetValid() {
+        // Consider a scenario where some bytes have been flushed
+        // but the chunk offset boundary has not yet been updated.
+        // we should check if the chunk offset boundary equals
+        // bytesFlush or not. For example:
+        // The last record is a giant record and it has been flushed
+        // but its size is smaller than the nextBoundary, then the
+        // chunk offset will not be set after flushing. we should
+        // set it during FileWriter close.
+        return chunkOffsets.get(chunkOffsets.size() - 1) == bytesFlushed;
     }
 
     /**
@@ -144,24 +174,16 @@ public final class FileWriter {
             final int numBytes = data.readableBytes();
 
             if (flushBuffer.capacity() < numBytes) {
+                logger.info("Flush giant record, size " + numBytes);
                 flush(data.nioBuffer());
-                logger.info("flush giant record, size " + numBytes);
-                bytesWritten += numBytes;
             } else {
                 if (flushBuffer.position() + numBytes >= flushBuffer.capacity()) {
-                    // must ahead of flush() because flush() sets position to 0
-                    bytesWritten += flushBuffer.position();
-                    flush();
+                    flush(false);
                     takeBuffer();
                 }
 
                 flushBuffer.limit(flushBuffer.position() + numBytes);
                 data.getBytes(data.readerIndex(), flushBuffer);
-            }
-
-            if (bytesWritten >= nextBoundary) {
-                chunkOffsets.add(bytesWritten);
-                nextBoundary = bytesWritten + chunkSize;
             }
 
             numPendingWrites.decrementAndGet();
@@ -181,8 +203,10 @@ public final class FileWriter {
 
             synchronized (this) {
                 if (flushBuffer.position() > 0) {
-                    bytesWritten += flushBuffer.position();
-                    flush();
+                    flush(true);
+                }
+                if (!isChunkOffsetValid()) {
+                    maybeSetChunkOffsets(true);
                 }
             }
 
@@ -192,7 +216,7 @@ public final class FileWriter {
             channel.close();
         }
 
-        return bytesWritten;
+        return bytesFlushed;
     }
 
     public void destroy() {

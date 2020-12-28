@@ -310,7 +310,26 @@ public class EssShuffleWriter<K, V, C> extends ShuffleWriter<K, V> {
             }
 
             if (serializedRecordSize > SEND_BUFFER_SIZE) {
-                pushGiantRecord(partitionId);
+                logger.info("Write giant record for fast writer! with size " + serializedRecordSize);
+                long pushStartTime = System.nanoTime();
+                byte[] giantBuffer = new byte[serializedRecordSize];
+                Platform.putInt(giantBuffer, Platform.BYTE_ARRAY_OFFSET, Integer.reverseBytes(rowSize));
+                Platform.copyMemory(row.getBaseObject(), row.getBaseOffset(),
+                        giantBuffer, Platform.BYTE_ARRAY_OFFSET + 4, rowSize);
+                int bytesWritten = essShuffleClient.pushData(
+                        appId,
+                        shuffleId,
+                        mapId,
+                        taskContext.attemptNumber(),
+                        partitionId,
+                        giantBuffer,
+                        0,
+                        serializedRecordSize,
+                        numMappers,
+                        numPartitions
+                );
+                writeMetrics.incBytesWritten(bytesWritten);
+                writeMetrics.incWriteTime(System.nanoTime() - pushStartTime);
             } else {
                 int offset = sendOffsets[partitionId];
                 if ((SEND_BUFFER_SIZE - offset) < serializedRecordSize) {

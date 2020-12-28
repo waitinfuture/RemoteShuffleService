@@ -2,10 +2,12 @@ package com.aliyun.emr.ess.service.deploy.worker;
 
 import java.io.File;
 import java.io.FileNotFoundException;
+import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.util.Iterator;
 
+import com.aliyun.emr.ess.common.exception.EssException;
 import com.aliyun.emr.network.buffer.FileSegmentManagedBuffer;
 import com.aliyun.emr.network.buffer.ManagedBuffer;
 import com.aliyun.emr.network.client.RpcResponseCallback;
@@ -44,17 +46,23 @@ public final class ChunkFetchRpcHandler extends RpcHandler {
         String fileName = readString(message);
         OpenStreamHandler.FileInfo fileInfo = handler.handleOpenStream(shuffleKey, fileName);
         if (fileInfo != null) {
-            long streamId = streamManager.registerStream(
-                    client.getClientId(), new ManagedBufferIterator(fileInfo), client.getChannel());
+            try {
+                ManagedBufferIterator iterator = new ManagedBufferIterator(fileInfo);
+                long streamId = streamManager.registerStream(
+                        client.getClientId(), iterator, client.getChannel());
 
-            ByteBuffer response = ByteBuffer.allocate(8 + 4);
-            response.putLong(streamId);
-            response.putInt(fileInfo.chunkOffsets.size());
-            if (fileInfo.chunkOffsets.size() == 0) {
-                logger.error("ChunkOffsets size is 0! fileName " + fileName);
+                ByteBuffer response = ByteBuffer.allocate(8 + 4);
+                response.putLong(streamId);
+                response.putInt(fileInfo.numChunks);
+                if (fileInfo.numChunks == 0) {
+                    logger.debug("Chunk size is 0! fileName " + fileName);
+                }
+                response.flip();
+                callback.onSuccess(response);
+            } catch (IOException e) {
+                callback.onFailure(
+                        new EssException("Chunk offsets meta exception ", e));
             }
-            response.flip();
-            callback.onSuccess(response);
         } else {
             callback.onFailure(new FileNotFoundException());
         }
@@ -87,14 +95,17 @@ public final class ChunkFetchRpcHandler extends RpcHandler {
 
         private int index;
 
-        ManagedBufferIterator(OpenStreamHandler.FileInfo fileInfo) {
+        ManagedBufferIterator(OpenStreamHandler.FileInfo fileInfo) throws IOException {
             file = fileInfo.file;
-            numChunks = fileInfo.chunkOffsets.size();
+            numChunks = fileInfo.numChunks;
             offsets = new long[numChunks + 1];
-            for (int i = 0; i < numChunks; i++) {
+            for (int i = 0; i <= numChunks ; i++) {
                 offsets[i] =  fileInfo.chunkOffsets.get(i);
             }
-            offsets[numChunks] = fileInfo.fileLength;
+            if (offsets[numChunks] != fileInfo.fileLength) {
+                throw new IOException(String.format("The last chunk offset %d should be equals to file length %d!",
+                        offsets[numChunks], fileInfo.fileLength));
+            }
         }
 
         @Override
