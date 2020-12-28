@@ -9,6 +9,8 @@ import java.util.concurrent.{ConcurrentHashMap, LinkedBlockingQueue, TimeUnit}
 import java.util.function.IntUnaryOperator
 
 import scala.collection.JavaConversions._
+import scala.collection.mutable
+
 import com.aliyun.emr.ess.common.EssConf
 import com.aliyun.emr.ess.common.internal.Logging
 import com.aliyun.emr.ess.common.util.{ThreadUtils, Utils}
@@ -83,18 +85,32 @@ private[worker] final class LocalStorageManager(conf: EssConf, workerSource: Abs
 
   import LocalStorageManager._
 
-  private val workingDirs = {
-    val baseDirs = EssConf.essWorkerBaseDirs(conf)
-    baseDirs.map(new File(_, workingDirName))
-  }
-
-  workingDirs.foreach { dir =>
-    dir.mkdirs()
-    // since mkdirs do not throw any exception,
-    // we should check directory status by create a test file
-    val file = new File(dir, s"_SUCCESS_${System.currentTimeMillis()}")
-    file.createNewFile()
-    file.delete()
+  private val workingDirs: Array[File] = {
+    val baseDirs = EssConf.essWorkerBaseDirs(conf).map(new File(_, workingDirName))
+    var availableDirs = new mutable.HashSet[File]()
+    baseDirs.foreach { dir =>
+      try {
+        dir.mkdirs()
+        // since mkdirs do not throw any exception,
+        // we should check directory status by create a test file
+        val file = new File(dir, s"_SUCCESS_${System.currentTimeMillis()}")
+        file.createNewFile()
+        file.delete()
+        availableDirs += dir
+      } catch {
+        case ie: IOException =>
+          if (EssConf.essWorkerRemoveUnavailableDirs(conf)) {
+            logWarning(s"Exception raised when trying to create a file in dir $dir, due to " +
+              "`ess.worker.unavailable.dirs.remove` is true, remove it.")
+          } else {
+            throw ie
+          }
+      }
+    }
+    if (availableDirs.size <= 0) {
+      throw new IOException("No available working directory.")
+    }
+    availableDirs.toArray
   }
 
   private val diskFlushers = {

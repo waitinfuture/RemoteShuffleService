@@ -579,6 +579,10 @@ object EssConf extends Logging {
     conf.getInt("ess.worker.base.dir.number", 16)
   }
 
+  def essWorkerRemoveUnavailableDirs(conf: EssConf): Boolean = {
+    conf.getBoolean("ess.worker.unavailable.dirs.remove", defaultValue = true)
+  }
+
   def essStageEndTimeout(conf: EssConf): Long = {
     conf.getTimeAsMs("ess.stage.end.timeout", "120s")
   }
