@@ -1,12 +1,12 @@
 package org.apache.spark.shuffle.ess
 
 import org.apache.spark.{SparkContext, SparkEnv, _}
-import org.apache.spark.internal.Logging
 import org.apache.spark.shuffle._
 import org.apache.spark.sql.internal.SQLConf
 
 import com.aliyun.emr.ess.client.ShuffleClient
 import com.aliyun.emr.ess.common.EssConf
+import com.aliyun.emr.ess.common.internal.Logging
 
 class EssShuffleManager(conf: SparkConf)
   extends ShuffleManager with Logging {

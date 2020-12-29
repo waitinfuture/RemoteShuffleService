@@ -27,7 +27,6 @@ import scala.reflect.ClassTag$;
 import javax.annotation.Nullable;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.sql.Time;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
@@ -311,7 +310,26 @@ public class EssShuffleWriter<K, V, C> extends ShuffleWriter<K, V> {
             }
 
             if (serializedRecordSize > SEND_BUFFER_SIZE) {
-                pushGiantRecord(partitionId);
+                logger.info("Write giant record for fast writer! with size " + serializedRecordSize);
+                long pushStartTime = System.nanoTime();
+                byte[] giantBuffer = new byte[serializedRecordSize];
+                Platform.putInt(giantBuffer, Platform.BYTE_ARRAY_OFFSET, Integer.reverseBytes(rowSize));
+                Platform.copyMemory(row.getBaseObject(), row.getBaseOffset(),
+                        giantBuffer, Platform.BYTE_ARRAY_OFFSET + 4, rowSize);
+                int bytesWritten = essShuffleClient.pushData(
+                        appId,
+                        shuffleId,
+                        (int) mapId,
+                        taskContext.attemptNumber(),
+                        partitionId,
+                        giantBuffer,
+                        0,
+                        serializedRecordSize,
+                        numMappers,
+                        numPartitions
+                );
+                writeMetrics.incBytesWritten(bytesWritten);
+                writeMetrics.incWriteTime(System.nanoTime() - pushStartTime);
             } else {
                 int offset = sendOffsets[partitionId];
                 if ((SEND_BUFFER_SIZE - offset) < serializedRecordSize) {
@@ -396,7 +414,13 @@ public class EssShuffleWriter<K, V, C> extends ShuffleWriter<K, V> {
     }
 
     private void close() throws IOException {
-        // merge and push residual data
+        // here we wait for all the in-flight batches to return which sent by dataPusher thread
+        dataPusher.waitOnTermination();
+        essShuffleClient.prepareForMergeData(shuffleId, (int) mapId, taskContext.attemptNumber());
+
+        // merge and push residual data to reduce network traffic
+        // NB: since dataPusher thread have no in-flight data at this point,
+        //     we now push merged data by task thread will not introduce any contention
         for (int i = 0; i < sendBuffers.length; i++) {
             final int size = sendOffsets[i];
             if (size > 0) {
@@ -418,7 +442,6 @@ public class EssShuffleWriter<K, V, C> extends ShuffleWriter<K, V> {
             }
         }
         essShuffleClient.pushMergedData(appId, shuffleId, (int) mapId, taskContext.attemptNumber());
-        dataPusher.waitOnTermination();
 
         updateMapStatus();
 
@@ -460,7 +483,7 @@ public class EssShuffleWriter<K, V, C> extends ShuffleWriter<K, V> {
                     if (mapStatus == null) {
                         throw new IllegalStateException("Cannot call stop(true) without having called write()");
                     }
-                    logger.info("mapStatus " + mapStatus.getSizeForBlock(0));
+                    logger.info("MapStatus " + mapStatus.getSizeForBlock(0));
                     return Option.apply(mapStatus);
                 } else {
                     return Option.apply(null);
