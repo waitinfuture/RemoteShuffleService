@@ -1,5 +1,23 @@
 package com.aliyun.emr.ess.client.impl;
 
+import java.io.IOException;
+import java.net.InetAddress;
+import java.net.UnknownHostException;
+import java.nio.ByteBuffer;
+import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.TimeUnit;
+
+import scala.reflect.ClassTag$;
+
+import com.google.common.collect.Lists;
+import io.netty.buffer.CompositeByteBuf;
+import io.netty.buffer.Unpooled;
+import io.netty.channel.ChannelFuture;
+import io.netty.util.internal.ConcurrentSet;
+import org.apache.log4j.Logger;
+
 import com.aliyun.emr.ess.client.DataBatches;
 import com.aliyun.emr.ess.client.PushState;
 import com.aliyun.emr.ess.client.ShuffleClient;
@@ -13,6 +31,7 @@ import com.aliyun.emr.ess.common.util.ThreadUtils;
 import com.aliyun.emr.ess.common.util.Utils;
 import com.aliyun.emr.ess.protocol.PartitionLocation;
 import com.aliyun.emr.ess.protocol.RpcNameConstants;
+import com.aliyun.emr.ess.protocol.TransportModuleConstants;
 import com.aliyun.emr.ess.protocol.message.ControlMessages.*;
 import com.aliyun.emr.ess.protocol.message.StatusCode;
 import com.aliyun.emr.ess.unsafe.Platform;
@@ -26,23 +45,6 @@ import com.aliyun.emr.network.protocol.PushData;
 import com.aliyun.emr.network.protocol.PushMergedData;
 import com.aliyun.emr.network.server.NoOpRpcHandler;
 import com.aliyun.emr.network.util.TransportConf;
-import com.google.common.collect.Lists;
-import io.netty.buffer.CompositeByteBuf;
-import io.netty.buffer.Unpooled;
-import io.netty.channel.ChannelFuture;
-import io.netty.util.internal.ConcurrentSet;
-import org.apache.log4j.Logger;
-
-import scala.reflect.ClassTag$;
-
-import java.io.IOException;
-import java.net.InetAddress;
-import java.net.UnknownHostException;
-import java.nio.ByteBuffer;
-import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.TimeUnit;
 
 public class ShuffleClientImpl extends ShuffleClient {
     private static final Logger logger = Logger.getLogger(ShuffleClientImpl.class);
@@ -125,7 +127,9 @@ public class ShuffleClientImpl extends ShuffleClient {
                 EssConf.essMasterPort(conf))
             , RpcNameConstants.MASTER_EP);
 
-        TransportConf dataTransportConf = Utils.fromEssConf(conf, "data",
+        TransportConf dataTransportConf = Utils.fromEssConf(
+            conf,
+            TransportModuleConstants.DATA_MODULE,
             conf.getInt("ess.data.io.threads", 8));
         TransportContext context =
             new TransportContext(dataTransportConf, new NoOpRpcHandler(), true);

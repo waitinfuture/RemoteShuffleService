@@ -178,16 +178,6 @@
                 <artifactId>mockito-core</artifactId>
                 <version>1.10.19</version>
                 <scope>test</scope>
-                <exclusions>
-                    <exclusion>
-                        <artifactId>hamcrest-core</artifactId>
-                        <groupId>org.hamcrest</groupId>
-                    </exclusion>
-                    <exclusion>
-                        <artifactId>objenesis</artifactId>
-                        <groupId>org.objenesis</groupId>
-                    </exclusion>
-                </exclusions>
             </dependency>
             <dependency>
                 <groupId>io.dropwizard.metrics</groupId>

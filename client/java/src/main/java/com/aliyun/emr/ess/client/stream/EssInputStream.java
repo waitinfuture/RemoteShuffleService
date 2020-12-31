@@ -1,6 +1,22 @@
 package com.aliyun.emr.ess.client.stream;
 
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.ByteBuffer;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
+
+import io.netty.buffer.ByteBuf;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import com.aliyun.emr.ess.client.MetricsCallback;
+import com.aliyun.emr.ess.client.RetryingChunkClient;
 import com.aliyun.emr.ess.client.compress.EssLz4CompressorTrait;
 import com.aliyun.emr.ess.client.compress.EssLz4Decompressor;
 import com.aliyun.emr.ess.common.EssConf;
@@ -9,22 +25,10 @@ import com.aliyun.emr.ess.unsafe.Platform;
 import com.aliyun.emr.network.buffer.ManagedBuffer;
 import com.aliyun.emr.network.buffer.NettyManagedBuffer;
 import com.aliyun.emr.network.client.ChunkReceivedCallback;
-import com.aliyun.emr.network.client.TransportClient;
 import com.aliyun.emr.network.client.TransportClientFactory;
-import io.netty.buffer.ByteBuf;
-import org.apache.log4j.Logger;
-
-import java.io.*;
-import java.nio.ByteBuffer;
-import java.nio.charset.StandardCharsets;
-import java.util.*;
-import java.util.concurrent.LinkedBlockingQueue;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicReference;
-
 
 public abstract class EssInputStream extends InputStream {
-    private static final Logger logger = Logger.getLogger(EssInputStream.class);
+    private static final Logger logger = LoggerFactory.getLogger(EssInputStream.class);
 
     public static EssInputStream create(
             EssConf conf,
@@ -135,27 +139,7 @@ public abstract class EssInputStream extends InputStream {
                 location = location.getPeer();
                 logger.warn("read peer: " + location + " for attempt " + attemptNumber);
             }
-
-            TransportClient client;
-            try {
-                try {
-                    client = clientFactory.createClient(location.getHost(), location.getPort());
-                } catch (IOException e) {
-                    PartitionLocation peer = location.getPeer();
-                    if (peer != null) {
-                        logger.warn("connect to " + location + " failed, try to read peer " + peer);
-                        location = peer;
-                        client = clientFactory.createClient(location.getHost(), location.getPort());
-                    } else {
-                        throw e;
-                    }
-                }
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                throw new IOException(e);
-            }
-
-            return new PartitionReader(client, location.getFileName());
+            return new PartitionReader(location);
         }
 
         public void setCallback(MetricsCallback callback) {
@@ -294,8 +278,7 @@ public abstract class EssInputStream extends InputStream {
         }
 
         private final class PartitionReader {
-            private final TransportClient client;
-            private final long streamId;
+            private final RetryingChunkClient client;
             private final int numChunks;
 
             private int returnedChunks;
@@ -306,26 +289,9 @@ public abstract class EssInputStream extends InputStream {
 
             private final AtomicReference<IOException> exception = new AtomicReference<>();
 
-            private final long timeoutMs = EssConf.essFetchChunkTimeoutMs(conf);
-
             private boolean closed = false;
 
-            PartitionReader(TransportClient client, String fileName) throws IOException {
-                this.client = client;
-
-                ByteBuffer request = createOpenMessage(shuffleKey, fileName);
-                ByteBuffer response;
-                try {
-                    response = client.sendRpcSync(request, timeoutMs);
-                } catch (Exception e) {
-                    throw new IOException("FetchChunk open stream failed", e);
-                }
-                streamId = response.getLong();
-                numChunks = response.getInt();
-                if (numChunks <= 0) {
-                    throw new IOException("numChunks is " + numChunks);
-                }
-
+            PartitionReader(PartitionLocation location) throws IOException {
                 results = new LinkedBlockingQueue<>();
                 callback = new ChunkReceivedCallback() {
                     @Override
@@ -342,23 +308,11 @@ public abstract class EssInputStream extends InputStream {
 
                     @Override
                     public void onFailure(int chunkIndex, Throwable e) {
-                        logger.error(e);
                         exception.set(new IOException("FetchChunk failed", e));
                     }
                 };
-            }
-
-            private ByteBuffer createOpenMessage(String shuffleKey, String fileName) {
-                byte[] shuffleKeyBytes = shuffleKey.getBytes(StandardCharsets.UTF_8);
-                byte[] fileNameBytes = fileName.getBytes(StandardCharsets.UTF_8);
-                ByteBuffer openMessage = ByteBuffer.allocate(
-                        4 + shuffleKeyBytes.length + 4 + fileNameBytes.length);
-                openMessage.putInt(shuffleKeyBytes.length);
-                openMessage.put(shuffleKeyBytes);
-                openMessage.putInt(fileNameBytes.length);
-                openMessage.put(fileNameBytes);
-                openMessage.flip();
-                return openMessage;
+                this.client = new RetryingChunkClient(conf, shuffleKey, location, callback, clientFactory);
+                this.numChunks = client.openChunks();
             }
 
             boolean hasNext() {
@@ -401,7 +355,7 @@ public abstract class EssInputStream extends InputStream {
                 if (inFlight < maxInFlight) {
                     final int toFetch = Math.min(maxInFlight - inFlight + 1, numChunks - chunkIndex);
                     for (int i = 0; i < toFetch; i++) {
-                        client.fetchChunk(streamId, chunkIndex++, callback);
+                        client.fetchChunk(chunkIndex++);
                     }
                 }
             }

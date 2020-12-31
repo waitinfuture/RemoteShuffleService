@@ -42,10 +42,10 @@ public class OneForOneStreamManager extends StreamManager {
   private static final Logger logger = LoggerFactory.getLogger(OneForOneStreamManager.class);
 
   private final AtomicLong nextStreamId;
-  private final ConcurrentHashMap<Long, StreamState> streams;
+  protected final ConcurrentHashMap<Long, StreamState> streams;
 
   /** State of a single stream. */
-  private static class StreamState {
+  protected static class StreamState {
     final String appId;
     final Iterator<ManagedBuffer> buffers;
 
@@ -76,17 +76,25 @@ public class OneForOneStreamManager extends StreamManager {
   @Override
   public ManagedBuffer getChunk(long streamId, int chunkIndex) {
     StreamState state = streams.get(streamId);
-    if (chunkIndex != state.curChunk) {
+    if (state == null) {
       throw new IllegalStateException(String.format(
-        "Received out-of-order chunk index %s (expected %s)", chunkIndex, state.curChunk));
+        "Stream %s for chunk %s is not registered(Maybe removed).", streamId, chunkIndex));
     } else if (!state.buffers.hasNext()) {
       throw new IllegalStateException(String.format(
         "Requested chunk index beyond end %s", chunkIndex));
     }
-    state.curChunk += 1;
-    ManagedBuffer nextChunk = state.buffers.next();
+
+    ManagedBufferIterator iterator = (ManagedBufferIterator) state.buffers;
+    if (iterator.hasAlreadyRead(chunkIndex)) {
+      throw new IllegalStateException(String.format(
+          "Chunk %s for stream %s has already been read.", chunkIndex, streamId));
+    }
+    ManagedBuffer nextChunk = iterator.chunk(chunkIndex);
 
     if (!state.buffers.hasNext()) {
+      // Normally, when all chunks are returned to the client, the stream should be removed here.
+      // But if there is a switch on the client side, it will not go here at this time, so we need
+      // to remove the stream when the connection is terminated, and release the unused buffer.
       logger.trace("Removing stream id {}", streamId);
       streams.remove(streamId);
     }

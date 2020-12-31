@@ -22,6 +22,7 @@ import java.nio.ByteBuffer
 import java.nio.channels.{Pipe, ReadableByteChannel, WritableByteChannel}
 import java.util.concurrent._
 import java.util.concurrent.atomic.AtomicBoolean
+import javax.annotation.Nullable
 
 import scala.concurrent.{Future, Promise}
 import scala.reflect.ClassTag
@@ -33,11 +34,10 @@ import com.aliyun.emr.ess.common.internal.Logging
 import com.aliyun.emr.ess.common.rpc._
 import com.aliyun.emr.ess.common.serializer.{JavaSerializer, JavaSerializerInstance, SerializationStream}
 import com.aliyun.emr.ess.common.util.{ByteBufferInputStream, ByteBufferOutputStream, ThreadUtils, Utils}
-import com.aliyun.emr.ess.protocol.RpcNameConstants
+import com.aliyun.emr.ess.protocol.{RpcNameConstants, TransportModuleConstants}
 import com.aliyun.emr.network.TransportContext
 import com.aliyun.emr.network.client._
 import com.aliyun.emr.network.server._
-import javax.annotation.Nullable
 
 private[ess] class NettyRpcEnv(
     val conf: EssConf,
@@ -47,7 +47,7 @@ private[ess] class NettyRpcEnv(
 
   private[ess] val transportConf = Utils.fromEssConf(
     conf.clone.set("ess.rpc.io.numConnectionsPerPeer", "1"),
-    "rpc",
+    TransportModuleConstants.RPC_MODULE,
     conf.getInt("ess.rpc.io.threads", numUsableCores))
 
   private val dispatcher: Dispatcher = new Dispatcher(this, numUsableCores)
@@ -350,7 +350,7 @@ private[ess] class NettyRpcEnv(
   private def downloadClient(host: String, port: Int): TransportClient = {
     if (fileDownloadFactory == null) synchronized {
       if (fileDownloadFactory == null) {
-        val module = "files"
+        val module = TransportModuleConstants.FILE_MODULE
         val prefix = "spark.rpc.io."
         val clone = conf.clone()
 

@@ -25,6 +25,8 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 import scala.collection.JavaConversions._
 
+import io.netty.buffer.ByteBuf
+
 import com.aliyun.emr.ess.common.EssConf
 import com.aliyun.emr.ess.common.exception.AlreadyClosedException
 import com.aliyun.emr.ess.common.http.{HttpServer, HttpServerInitializer}
@@ -33,7 +35,7 @@ import com.aliyun.emr.ess.common.metrics.MetricsSystem
 import com.aliyun.emr.ess.common.metrics.source.NetWorkSource
 import com.aliyun.emr.ess.common.rpc._
 import com.aliyun.emr.ess.common.util.{ThreadUtils, Utils}
-import com.aliyun.emr.ess.protocol.{PartitionLocation, RpcNameConstants}
+import com.aliyun.emr.ess.protocol.{PartitionLocation, RpcNameConstants, TransportModuleConstants}
 import com.aliyun.emr.ess.protocol.message.ControlMessages._
 import com.aliyun.emr.ess.protocol.message.StatusCode
 import com.aliyun.emr.ess.service.deploy.worker.http.HttpRequestHandler
@@ -42,8 +44,7 @@ import com.aliyun.emr.network.TransportContext
 import com.aliyun.emr.network.buffer.NettyManagedBuffer
 import com.aliyun.emr.network.client.{RpcResponseCallback, TransportClientBootstrap}
 import com.aliyun.emr.network.protocol.{PushData, PushMergedData}
-import com.aliyun.emr.network.server.TransportServerBootstrap
-import io.netty.buffer.ByteBuf
+import com.aliyun.emr.network.server.{FileInfo, TransportServerBootstrap}
 
 private[deploy] class Worker(
     override val rpcEnv: RpcEnv,
@@ -65,7 +66,7 @@ private[deploy] class Worker(
 
   private val (pushServer, pushClientFactory) = {
     val numThreads = conf.getInt("ess.push.io.threads", localStorageManager.numDisks * 2)
-    val transportConf = Utils.fromEssConf(conf, "push", numThreads)
+    val transportConf = Utils.fromEssConf(conf, TransportModuleConstants.PUSH_MODULE, numThreads)
     val rpcHandler = new PushDataRpcHandler(transportConf, this)
     val transportContext: TransportContext =
       new TransportContext(transportConf, rpcHandler, false)
@@ -77,7 +78,7 @@ private[deploy] class Worker(
 
   private val fetchServer = {
     val numThreads = conf.getInt("ess.fetch.io.threads", localStorageManager.numDisks * 2)
-    val transportConf = Utils.fromEssConf(conf, "fetch", numThreads)
+    val transportConf = Utils.fromEssConf(conf, TransportModuleConstants.FETCH_MODULE, numThreads)
     val rpcHandler = new ChunkFetchRpcHandler(transportConf, this)
     val transportContext: TransportContext =
       new TransportContext(transportConf, rpcHandler, false)
@@ -643,7 +644,7 @@ private[deploy] class Worker(
   }
 
   override def handleOpenStream(
-      shuffleKey: String, fileName: String): OpenStreamHandler.FileInfo = {
+      shuffleKey: String, fileName: String): FileInfo = {
     // find FileWriter responsible for the data
     val fileWriter = localStorageManager.getWriter(shuffleKey, fileName)
     if (fileWriter eq null) {
@@ -651,8 +652,7 @@ private[deploy] class Worker(
       logError(msg)
       return null
     }
-    new OpenStreamHandler.FileInfo(
-      fileWriter.getFile, fileWriter.getChunkOffsets, fileWriter.getFileLength)
+    new FileInfo(fileWriter.getFile, fileWriter.getChunkOffsets, fileWriter.getFileLength)
   }
 
   private def registerWithMaster() {
