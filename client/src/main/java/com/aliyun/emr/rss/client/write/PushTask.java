@@ -17,6 +17,8 @@
 
 package com.aliyun.emr.rss.client.write;
 
+import com.aliyun.emr.rss.client.ShuffleClient;
+
 public class PushTask {
   private int partitionId;
   private int size;
@@ -39,7 +41,7 @@ public class PushTask {
   }
   public void setSize(int size) {
     if (size > buffer.length) {
-      buffer = new byte[size];
+      buffer = new byte[size + ShuffleClient.SEND_BUFFER_RESERVATION_SIZE];
     }
     this.size = size;
   }

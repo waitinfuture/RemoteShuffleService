@@ -83,8 +83,7 @@ public class ShuffleClientSuiteJ {
     setupEnv();
 
     int pushDataLen = shuffleClient.pushData(TEST_APPLICATION_ID, TEST_SHUFFLE_ID, TEST_ATTEMPT_ID,
-      TEST_ATTEMPT_ID, TEST_REDUCRE_ID, TEST_BUF1, 0,
-      TEST_BUF1.length, 1, 1);
+      TEST_ATTEMPT_ID, TEST_REDUCRE_ID, TEST_BUF1, 1, 1);
 
     RssLz4Compressor compressor = new RssLz4Compressor();
     compressor.compress(TEST_BUF1, 0, TEST_BUF1.length);
@@ -99,8 +98,7 @@ public class ShuffleClientSuiteJ {
     setupEnv();
 
     int mergeSize = shuffleClient.mergeData(TEST_APPLICATION_ID, TEST_SHUFFLE_ID, TEST_ATTEMPT_ID,
-      TEST_ATTEMPT_ID, TEST_REDUCRE_ID, TEST_BUF1, 0,
-      TEST_BUF1.length, 1, 1);
+      TEST_ATTEMPT_ID, TEST_REDUCRE_ID, TEST_BUF1, 1, 1);
 
     RssLz4Compressor compressor = new RssLz4Compressor();
     compressor.compress(TEST_BUF1, 0, TEST_BUF1.length);
@@ -108,14 +106,14 @@ public class ShuffleClientSuiteJ {
 
     shuffleClient.mergeData(TEST_APPLICATION_ID, TEST_SHUFFLE_ID, TEST_ATTEMPT_ID,
       TEST_ATTEMPT_ID, TEST_REDUCRE_ID,
-      TEST_BUF1, 0, TEST_BUF1.length, 1, 1);
+      TEST_BUF1, 1, 1);
 
     assert (mergeSize == compressedTotalSize + BATCH_HEADER_SIZE);
 
     byte[] buf1k = RandomStringUtils.random(4000).getBytes(StandardCharsets.UTF_8);
     int largeMergeSize = shuffleClient.mergeData(TEST_APPLICATION_ID, TEST_SHUFFLE_ID,
       TEST_ATTEMPT_ID, TEST_ATTEMPT_ID, TEST_REDUCRE_ID,
-      buf1k, 0, buf1k.length, 1, 1);
+      buf1k, 1, 1);
 
     compressor = new RssLz4Compressor();
     compressor.compress(buf1k, 0, buf1k.length);

@@ -414,6 +414,9 @@ object RssConf extends Logging {
 
   // Conf getters
 
+  def pushDataBufferInitialSize(conf: RssConf): Int = {
+    conf.getSizeAsBytes("rss.push.data.buffer.initial.size", "8k").toInt
+  }
   def pushDataBufferSize(conf: RssConf): Int = {
     conf.getSizeAsBytes("rss.push.data.buffer.size", "64k").toInt
   }
@@ -631,6 +634,10 @@ object RssConf extends Logging {
 
   def sortPushThreshold(conf: RssConf): Long = {
     conf.getSizeAsBytes("rss.sort.push.data.threshold", "64m")
+  }
+
+  def compressPoolNumThreads(conf: RssConf): Int = {
+    conf.getInt("rss.compress.pool.thread.num", Math.min(16, Runtime.getRuntime.availableProcessors()));
   }
 
   def driverMetaServicePort(conf: RssConf): Int = {

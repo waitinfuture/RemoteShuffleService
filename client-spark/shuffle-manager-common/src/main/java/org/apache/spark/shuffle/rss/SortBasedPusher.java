@@ -122,7 +122,7 @@ public class SortBasedPusher extends MemoryConsumer {
     final ShuffleInMemorySorter.ShuffleSorterIterator sortedRecords =
       inMemSorter.getSortedIterator();
 
-    byte[] dataBuf = new byte[pushBufferSize];
+    byte[] dataBuf = new byte[pushBufferSize + ShuffleClient.SEND_BUFFER_RESERVATION_SIZE];
     int offSet = 0;
     int currentPartition = -1;
     while(sortedRecords.hasNext()) {
@@ -133,15 +133,18 @@ public class SortBasedPusher extends MemoryConsumer {
         if (currentPartition == -1) {
           currentPartition = partition;
         } else {
+          // TODO
+          int length = rssShuffleClient.compressInplace(
+            shuffleId, mapId, attemptNumber, dataBuf, 0, offSet);
+          byte[] compressed = new byte[length];
+          System.arraycopy(dataBuf, 0, compressed, 0, length);
           int bytesWritten = rssShuffleClient.mergeData(
             appId,
             shuffleId,
             mapId,
             attemptNumber,
             currentPartition,
-            dataBuf,
-            0,
-            offSet,
+            compressed,
             numMappers,
             numPartitions
           );
@@ -156,7 +159,7 @@ public class SortBasedPusher extends MemoryConsumer {
       final long recordOffsetInPage = taskMemoryManager.getOffsetInPage(recordPointer);
       int recordSize = UnsafeAlignedOffset.getSize(recordPage, recordOffsetInPage);
 
-      if (offSet + recordSize > dataBuf.length) {
+      if (offSet + recordSize > pushBufferSize) {
         dataPusher.addTask(partition, dataBuf, offSet);
         offSet = 0;
       }

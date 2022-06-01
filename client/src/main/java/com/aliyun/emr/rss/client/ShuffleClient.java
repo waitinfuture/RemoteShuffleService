@@ -19,6 +19,8 @@ package com.aliyun.emr.rss.client;
 
 import java.io.IOException;
 
+import com.aliyun.emr.rss.client.compress.RssLz4Compressor;
+import com.aliyun.emr.rss.client.compress.RssLz4Trait;
 import com.aliyun.emr.rss.client.read.RssInputStream;
 import com.aliyun.emr.rss.common.RssConf;
 import com.aliyun.emr.rss.common.rpc.RpcEndpointRef;
@@ -30,6 +32,9 @@ import com.aliyun.emr.rss.common.rpc.RpcEndpointRef;
 public abstract class ShuffleClient implements Cloneable {
   private static volatile ShuffleClient _instance;
   private static volatile boolean initFinished = false;
+
+  public static int BATCH_HEADER_SIZE = 4 * 4;
+  public static int SEND_BUFFER_RESERVATION_SIZE = RssLz4Trait.HEADER_LENGTH + BATCH_HEADER_SIZE;
 
   protected ShuffleClient() {}
 
@@ -83,6 +88,15 @@ public abstract class ShuffleClient implements Cloneable {
 
   public abstract void setupMetaServiceRef(RpcEndpointRef endpointRef);
 
+  public abstract int compressInplace(
+    int shuffleId,
+    int mapId,
+    int attemptId,
+    byte[] data,
+    int offset,
+    int length
+  );
+
   /**
    * 往具体的一个reduce partition里写数据
    * @param applicationId
@@ -90,9 +104,7 @@ public abstract class ShuffleClient implements Cloneable {
    * @param mapId taskContext.partitionId
    * @param attemptId taskContext.attemptNumber()
    * @param reduceId
-   * @param data
-   * @param offset
-   * @param length
+   * @param compressedData'
    */
   public abstract int pushData(
       String applicationId,
@@ -100,9 +112,7 @@ public abstract class ShuffleClient implements Cloneable {
       int mapId,
       int attemptId,
       int reduceId,
-      byte[] data,
-      int offset,
-      int length,
+      byte[] compressedData,
       int numMappers,
       int numPartitions) throws IOException;
 
@@ -117,9 +127,7 @@ public abstract class ShuffleClient implements Cloneable {
       int mapId,
       int attemptId,
       int reduceId,
-      byte[] data,
-      int offset,
-      int length,
+      byte[] compressedData,
       int numMappers,
       int numPartitions) throws IOException;
 

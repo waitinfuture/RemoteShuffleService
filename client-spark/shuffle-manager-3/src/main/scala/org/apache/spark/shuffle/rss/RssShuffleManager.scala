@@ -22,11 +22,15 @@ import org.apache.spark._
 import org.apache.spark.shuffle.{ShuffleReadMetricsReporter, _}
 import org.apache.spark.shuffle.sort.SortShuffleManager
 import org.apache.spark.util.Utils
-
 import com.aliyun.emr.rss.client.ShuffleClient
 import com.aliyun.emr.rss.client.write.LifecycleManager
 import com.aliyun.emr.rss.common.RssConf
+import com.aliyun.emr.rss.common.RssConf.compressPoolNumThreads
 import com.aliyun.emr.rss.common.internal.Logging
+import com.aliyun.emr.rss.common.util.ThreadUtils
+
+import java.util
+import java.util.concurrent.{ConcurrentHashMap, ExecutorService}
 
 class RssShuffleManager(conf: SparkConf) extends ShuffleManager with Logging {
 
@@ -46,6 +50,13 @@ class RssShuffleManager(conf: SparkConf) extends ShuffleManager with Logging {
   private val sortShuffleIds = new ConcurrentSet[Int]()
 
   private lazy val fallbackPolicyRunner = new RssShuffleFallbackPolicyRunner(conf)
+
+  // (shuffleId -> sendBuffer) Only used on Executors
+  private val reusedSendBuffers = new ConcurrentHashMap[Integer, util.LinkedList[Array[Array[Byte]]]]
+
+  private lazy val compressPool: ExecutorService = {
+    ThreadUtils.newDaemonCachedThreadPool("Compress-Pool", compressPoolNumThreads(rssConf), 60)
+  };
 
   private def initializeLifecycleManager(appId: String): Unit = {
     // Only create LifecycleManager singleton in Driver. When register shuffle multiple times, we
@@ -93,7 +104,10 @@ class RssShuffleManager(conf: SparkConf) extends ShuffleManager with Logging {
       sortShuffleManager.unregisterShuffle(shuffleId)
     } else {
       newAppId match {
-        case Some(id) => rssShuffleClient.exists(_.unregisterShuffle(id, shuffleId, isDriver))
+        case Some(id) =>
+          logWarning("in registerShuffle, remove send buffer")
+          reusedSendBuffers.remove(shuffleId)
+          rssShuffleClient.exists(_.unregisterShuffle(id, shuffleId, isDriver))
         case None => true
       }
     }
@@ -123,7 +137,9 @@ class RssShuffleManager(conf: SparkConf) extends ShuffleManager with Logging {
           new SortBasedShuffleWriter(h.dependency, h.newAppId, h.numMappers,
             context, rssConf, client, metrics)
         } else if (RssConf.shuffleWriterMode(rssConf) == "hash") {
-          new HashBasedShuffleWriter(h, context, rssConf, client, metrics)
+          logWarning(s"inside get Writer, empty: ${reusedSendBuffers.contains(handle.shuffleId)}")
+          reusedSendBuffers.putIfAbsent(handle.shuffleId, new util.LinkedList[Array[Array[Byte]]]())
+          new HashBasedShuffleWriter(h, context, rssConf, client, metrics, reusedSendBuffers.get(handle.shuffleId), compressPool)
         } else {
           throw new UnsupportedOperationException(
             s"Unrecognized shuffle write mode! ${RssConf.shuffleWriterMode(rssConf)}")

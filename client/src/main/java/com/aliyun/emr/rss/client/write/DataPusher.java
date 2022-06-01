@@ -168,15 +168,17 @@ public class DataPusher {
   }
 
   private void pushData(PushTask task) throws IOException {
+    int length =
+      client.compressInplace(shuffleId, mapId, attemptId, task.getBuffer(), 0, task.getSize());
+    byte[] compressed = new byte[length];
+    System.arraycopy(task.getBuffer(), 0, compressed, 0, length);
     int bytesWritten = client.pushData(
         appId,
         shuffleId,
         mapId,
         attemptId,
         task.getPartitionId(),
-        task.getBuffer(),
-        0,
-        task.getSize(),
+        compressed,
         numMappers,
         numPartitions
     );

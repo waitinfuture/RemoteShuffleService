@@ -21,15 +21,8 @@ import java.io.IOException;
 import java.net.InetAddress;
 import java.net.UnknownHostException;
 import java.nio.ByteBuffer;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.Random;
-import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.TimeUnit;
+import java.util.*;
+import java.util.concurrent.*;
 
 import scala.reflect.ClassTag;
 import scala.reflect.ClassTag$;
@@ -388,9 +381,7 @@ public class ShuffleClientImpl extends ShuffleClient {
       int mapId,
       int attemptId,
       int reduceId,
-      byte[] data,
-      int offset,
-      int length,
+      byte[] body,
       int numMappers,
       int numPartitions,
       boolean doPush) throws IOException {
@@ -441,23 +432,7 @@ public class ShuffleClientImpl extends ShuffleClient {
     }
 
     PushState pushState = pushStates.computeIfAbsent(mapKey, (s) -> new PushState(conf));
-
-    // increment batchId
-    final int nextBatchId = pushState.batchId.addAndGet(1);
-
-    // compress data
-    final RssLz4Compressor compressor = lz4CompressorThreadLocal.get();
-    compressor.compress(data, offset, length);
-
-    final int compressedTotalSize = compressor.getCompressedTotalSize();
-    final int BATCH_HEADER_SIZE = 4 * 4;
-    final byte[] body = new byte[BATCH_HEADER_SIZE + compressedTotalSize];
-    Platform.putInt(body, Platform.BYTE_ARRAY_OFFSET, mapId);
-    Platform.putInt(body, Platform.BYTE_ARRAY_OFFSET + 4, attemptId);
-    Platform.putInt(body, Platform.BYTE_ARRAY_OFFSET + 8, nextBatchId);
-    Platform.putInt(body, Platform.BYTE_ARRAY_OFFSET + 12, compressedTotalSize);
-    System.arraycopy(compressor.getCompressedBuffer(), 0, body, BATCH_HEADER_SIZE,
-        compressedTotalSize);
+    int nextBatchId = Platform.getInt(body, Platform.BYTE_ARRAY_OFFSET + 8);
 
     if (doPush) {
       logger.debug("Do push data for app {} shuffle {} map {} attempt {} reduce {} batch {}.",
@@ -605,13 +580,11 @@ public class ShuffleClientImpl extends ShuffleClient {
       int mapId,
       int attemptId,
       int reduceId,
-      byte[] data,
-      int offset,
-      int length,
+      byte[] compressedData,
       int numMappers,
       int numPartitions) throws IOException {
     return pushOrMergeData(applicationId, shuffleId, mapId, attemptId, reduceId,
-        data, offset, length, numMappers, numPartitions, true);
+        compressedData, numMappers, numPartitions, true);
   }
 
   @Override
@@ -630,13 +603,11 @@ public class ShuffleClientImpl extends ShuffleClient {
       int mapId,
       int attemptId,
       int reduceId,
-      byte[] data,
-      int offset,
-      int length,
+      byte[] compressedData,
       int numMappers,
       int numPartitions) throws IOException {
     return pushOrMergeData(applicationId, shuffleId, mapId, attemptId, reduceId,
-        data, offset, length, numMappers, numPartitions, false);
+        compressedData, numMappers, numPartitions, false);
   }
 
   public void pushMergedData(
@@ -894,6 +865,38 @@ public class ShuffleClientImpl extends ShuffleClient {
   @Override
   public void setupMetaServiceRef(RpcEndpointRef endpointRef) {
     driverRssMetaService = endpointRef;
+  }
+
+  @Override
+  public int compressInplace(
+    int shuffleId,
+    int mapId,
+    int attemptId,
+    byte[] data,
+    int offset,
+    int length) {
+    final String mapKey = Utils.makeMapKey(shuffleId, mapId, attemptId);
+    PushState pushState = pushStates.computeIfAbsent(mapKey, (s) -> new PushState(conf));
+    // increment batchId
+    final int nextBatchId = pushState.batchId.addAndGet(1);
+
+    // compress data
+    final RssLz4Compressor compressor = lz4CompressorThreadLocal.get();
+    compressor.compress(data, offset, length);
+
+
+    final int compressedTotalSize = compressor.getCompressedTotalSize();
+
+    assert(BATCH_HEADER_SIZE + compressedTotalSize <= length);
+
+    Platform.putInt(data, Platform.BYTE_ARRAY_OFFSET + offset, mapId);
+    Platform.putInt(data, Platform.BYTE_ARRAY_OFFSET + offset + 4, attemptId);
+    Platform.putInt(data, Platform.BYTE_ARRAY_OFFSET + offset + 8, nextBatchId);
+    Platform.putInt(data, Platform.BYTE_ARRAY_OFFSET + offset + 12, compressedTotalSize);
+    System.arraycopy(compressor.getCompressedBuffer(), 0, data, offset + BATCH_HEADER_SIZE,
+      compressedTotalSize);
+
+    return BATCH_HEADER_SIZE + compressedTotalSize;
   }
 
   private synchronized String getLocalHost() {

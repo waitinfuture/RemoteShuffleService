@@ -233,15 +233,17 @@ public class SortBasedShuffleWriter<K, V, C> extends ShuffleWriter<K, V> {
   private void pushGiantRecord(int partitionId, byte[] buffer, int numBytes) throws IOException {
     logger.info("Push giant record, size {}.", numBytes);
     long pushStartTime = System.nanoTime();
+    int length = rssShuffleClient.compressInplace(
+      shuffleId, mapId, taskContext.attemptNumber(), buffer, 0, numBytes);
+    byte[] compressed = new byte[length];
+    System.arraycopy(buffer, 0, compressed, 0, length);
     int bytesWritten = rssShuffleClient.pushData(
         appId,
         shuffleId,
         mapId,
         taskContext.attemptNumber(),
         partitionId,
-        buffer,
-        0,
-        numBytes,
+        compressed,
         numMappers,
         numPartitions
     );

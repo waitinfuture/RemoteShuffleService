@@ -46,6 +46,11 @@ public class DummyShuffleClient extends ShuffleClient {
   public void setupMetaServiceRef(RpcEndpointRef endpointRef) {}
 
   @Override
+  public int compressInplace(int shuffleId, int mapId, int attemptId, byte[] data, int offset, int length) {
+    return length;
+  }
+
+  @Override
   public int pushData(
       String applicationId,
       int shuffleId,
@@ -53,12 +58,10 @@ public class DummyShuffleClient extends ShuffleClient {
       int attemptId,
       int reduceId,
       byte[] data,
-      int offset,
-      int length,
       int numMappers,
       int numPartitions) throws IOException {
-    os.write(data, offset, length);
-    return length;
+    os.write(data, 0, data.length);
+    return data.length;
   }
 
   @Override
@@ -71,13 +74,11 @@ public class DummyShuffleClient extends ShuffleClient {
       int mapId,
       int attemptId,
       int reduceId,
-      byte[] data,
-      int offset,
-      int length,
+      byte[] compressedData,
       int numMappers,
       int numPartitions) throws IOException {
-    os.write(data, offset, length);
-    return length;
+    os.write(compressedData, 0, compressedData.length);
+    return compressedData.length;
   }
 
   @Override

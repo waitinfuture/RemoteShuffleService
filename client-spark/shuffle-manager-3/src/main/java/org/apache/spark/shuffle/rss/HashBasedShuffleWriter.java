@@ -19,9 +19,15 @@ package org.apache.spark.shuffle.rss;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.util.LinkedList;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Future;
 import java.util.concurrent.atomic.LongAdder;
 import javax.annotation.Nullable;
 
+import com.aliyun.emr.rss.common.util.ThreadUtils;
+import org.apache.commons.collections.functors.ExceptionPredicate;
 import scala.Option;
 import scala.Product2;
 import scala.reflect.ClassTag$;
@@ -57,6 +63,8 @@ public class HashBasedShuffleWriter<K, V, C> extends ShuffleWriter<K, V> {
 
   private static final int DEFAULT_INITIAL_SER_BUFFER_SIZE = 1024 * 1024;
 
+  private RssConf conf;
+  private final int SEND_BUFFER_INIT_SIZE;
   private final int SEND_BUFFER_SIZE;
   private final ShuffleDependency<K, V, C> dep;
   private final Partitioner partitioner;
@@ -72,6 +80,8 @@ public class HashBasedShuffleWriter<K, V, C> extends ShuffleWriter<K, V> {
   @Nullable
   private MapStatus mapStatus;
   private long peakMemoryUsedBytes = 0;
+
+  private final ExecutorService compressPool;
 
   /**
    * Subclass of ByteArrayOutputStream that exposes `buf` directly.
@@ -95,6 +105,8 @@ public class HashBasedShuffleWriter<K, V, C> extends ShuffleWriter<K, V> {
   private final LongAdder[] mapStatusLengths;
   private final long[] tmpRecords;
 
+  private LinkedList<byte[][]> reusedSendBuffers;
+
   /**
    * Are we in the process of stopping? Because map tasks can call stop() with success = true
    * and then call stop() with success = false if they get an exception, we want to make sure
@@ -111,8 +123,11 @@ public class HashBasedShuffleWriter<K, V, C> extends ShuffleWriter<K, V> {
       TaskContext taskContext,
       RssConf conf,
       ShuffleClient client,
-      ShuffleWriteMetricsReporter metrics
+      ShuffleWriteMetricsReporter metrics,
+      LinkedList<byte[][]> reusedSendBuffers,
+      ExecutorService compressPool
   ) throws IOException {
+    this.conf = conf;
     this.mapId = taskContext.partitionId();
     this.dep = handle.dependency();
     this.appId = handle.newAppId();
@@ -134,9 +149,19 @@ public class HashBasedShuffleWriter<K, V, C> extends ShuffleWriter<K, V> {
     }
     tmpRecords = new long[numPartitions];
 
+    SEND_BUFFER_INIT_SIZE = RssConf.pushDataBufferInitialSize(conf);
     SEND_BUFFER_SIZE = RssConf.pushDataBufferSize(conf);
 
-    sendBuffers = new byte[numPartitions][];
+    this.reusedSendBuffers = reusedSendBuffers;
+    synchronized(reusedSendBuffers) {
+      if (!reusedSendBuffers.isEmpty()) {
+        logger.warn("reuse send buffer");
+        sendBuffers = reusedSendBuffers.remove();
+      } else {
+        logger.warn("empty, create send buffer");
+        sendBuffers = new byte[numPartitions][];
+      }
+    }
     sendOffsets = new int[numPartitions];
 
     dataPusher = new DataPusher(
@@ -151,6 +176,8 @@ public class HashBasedShuffleWriter<K, V, C> extends ShuffleWriter<K, V> {
         rssShuffleClient,
         writeMetrics::incBytesWritten,
         mapStatusLengths);
+
+    this.compressPool = compressPool;
   }
 
   @Override
@@ -192,13 +219,6 @@ public class HashBasedShuffleWriter<K, V, C> extends ShuffleWriter<K, V> {
         dataSize.add(rowSize);
       }
 
-      byte[] buffer = sendBuffers[partitionId];
-      if (buffer == null) {
-        buffer = new byte[SEND_BUFFER_SIZE];
-        sendBuffers[partitionId] = buffer;
-        peakMemoryUsedBytes += SEND_BUFFER_SIZE;
-      }
-
       if (serializedRecordSize > SEND_BUFFER_SIZE) {
         byte[] giantBuffer = new byte[serializedRecordSize];
         Platform.putInt(giantBuffer, Platform.BYTE_ARRAY_OFFSET, Integer.reverseBytes(rowSize));
@@ -206,7 +226,8 @@ public class HashBasedShuffleWriter<K, V, C> extends ShuffleWriter<K, V> {
             giantBuffer, Platform.BYTE_ARRAY_OFFSET + 4, rowSize);
         pushGiantRecord(partitionId, giantBuffer, serializedRecordSize);
       } else {
-        int offset = getOrUpdateOffset(partitionId, buffer, serializedRecordSize);
+        int offset = getOrUpdateOffset(partitionId, serializedRecordSize);
+        byte[] buffer = getOrCreateBuffer(partitionId);
         Platform.putInt(buffer, Platform.BYTE_ARRAY_OFFSET + offset, Integer.reverseBytes(rowSize));
         Platform.copyMemory(row.getBaseObject(), row.getBaseOffset(),
             buffer, Platform.BYTE_ARRAY_OFFSET + offset + 4, rowSize);
@@ -231,12 +252,11 @@ public class HashBasedShuffleWriter<K, V, C> extends ShuffleWriter<K, V> {
       final int serializedRecordSize = serBuffer.size();
       assert (serializedRecordSize > 0);
 
-      byte[] buffer = getOrCreateBuffer(partitionId);
-
       if (serializedRecordSize > SEND_BUFFER_SIZE) {
         pushGiantRecord(partitionId, serBuffer.getBuf(), serializedRecordSize);
       } else {
-        int offset = getOrUpdateOffset(partitionId, buffer, serializedRecordSize);
+        int offset = getOrUpdateOffset(partitionId, serializedRecordSize);
+        byte[] buffer = getOrCreateBuffer(partitionId);
         System.arraycopy(serBuffer.getBuf(), 0, buffer, offset, serializedRecordSize);
         sendOffsets[partitionId] = offset + serializedRecordSize;
       }
@@ -247,9 +267,9 @@ public class HashBasedShuffleWriter<K, V, C> extends ShuffleWriter<K, V> {
   private byte[] getOrCreateBuffer(int partitionId) {
     byte[] buffer = sendBuffers[partitionId];
     if (buffer == null) {
-      buffer = new byte[SEND_BUFFER_SIZE];
+      buffer = new byte[SEND_BUFFER_INIT_SIZE];
       sendBuffers[partitionId] = buffer;
-      peakMemoryUsedBytes += SEND_BUFFER_SIZE;
+      peakMemoryUsedBytes += SEND_BUFFER_INIT_SIZE;
     }
     return buffer;
   }
@@ -257,15 +277,17 @@ public class HashBasedShuffleWriter<K, V, C> extends ShuffleWriter<K, V> {
   private void pushGiantRecord(int partitionId, byte[] buffer, int numBytes) throws IOException {
     logger.debug("Push giant record, size {}.", numBytes);
     long pushStartTime = System.nanoTime();
+    int length = rssShuffleClient.compressInplace(
+      shuffleId, mapId, taskContext.attemptNumber(), buffer, 0, numBytes);
+    byte[] compressed = new byte[length];
+    System.arraycopy(buffer, 0, compressed, 0, length);
     int bytesWritten = rssShuffleClient.pushData(
         appId,
         shuffleId,
         mapId,
         taskContext.attemptNumber(),
         partitionId,
-        buffer,
-        0,
-        numBytes,
+        compressed,
         numMappers,
         numPartitions
     );
@@ -275,9 +297,20 @@ public class HashBasedShuffleWriter<K, V, C> extends ShuffleWriter<K, V> {
   }
 
   private int getOrUpdateOffset(
-      int partitionId, byte[] buffer, int serializedRecordSize) throws IOException {
+      int partitionId, int serializedRecordSize) throws IOException {
     int offset = sendOffsets[partitionId];
-    if ((SEND_BUFFER_SIZE - offset) < serializedRecordSize) {
+    byte[] buffer = getOrCreateBuffer(partitionId);
+    while ((buffer.length - offset - ShuffleClient.SEND_BUFFER_RESERVATION_SIZE) <
+      serializedRecordSize && buffer.length < SEND_BUFFER_SIZE) {
+
+      byte[] newBuffer = new byte[Math.min(buffer.length * 2, SEND_BUFFER_SIZE)];
+      peakMemoryUsedBytes += newBuffer.length - buffer.length;
+      System.arraycopy(buffer, 0, newBuffer, 0, offset);
+      sendBuffers[partitionId] = newBuffer;
+      buffer = newBuffer;
+    }
+
+    if ((buffer.length - offset - ShuffleClient.SEND_BUFFER_RESERVATION_SIZE) < serializedRecordSize) {
       flushSendBuffer(partitionId, buffer, offset);
       updateMapStatus();
       offset = 0;
@@ -301,32 +334,63 @@ public class HashBasedShuffleWriter<K, V, C> extends ShuffleWriter<K, V> {
     // merge and push residual data to reduce network traffic
     // NB: since dataPusher thread have no in-flight data at this point,
     //     we now push merged data by task thread will not introduce any contention
-    for (int i = 0; i < sendBuffers.length; i++) {
-      final int size = sendOffsets[i];
-      if (size > 0) {
-        int bytesWritten = rssShuffleClient.mergeData(
-            appId,
-            shuffleId,
-            mapId,
-            taskContext.attemptNumber(),
-            i,
-            sendBuffers[i],
-            0,
-            size,
-            numMappers,
-            numPartitions
-        );
-        // free buffer
-        sendBuffers[i] = null;
-        mapStatusLengths[i].add(bytesWritten);
-        writeMetrics.incBytesWritten(bytesWritten);
+    LinkedList<Future> futures = new LinkedList<>();
+    int step = numPartitions / RssConf.compressPoolNumThreads(conf) + 1;
+    for (int i = 0; i < numPartitions; i += step) {
+      final int from = i;
+      final int end = Math.min(numPartitions, i + step);
+      Future future = compressPool.submit(() -> {
+        for (int j = from; j < end ; j++) {
+          int size = sendOffsets[j];
+          if (size > 0) {
+            int length = rssShuffleClient.compressInplace(
+              shuffleId, mapId, taskContext.attemptNumber(), sendBuffers[j], 0, size);
+            sendOffsets[j] = length;
+          }
+        }
+      });
+      futures.add(future);
+    }
+
+    for (int j = 0; j < futures.size(); j++) {
+      try {
+        futures.get(j).get();
+        int from = j * step;
+        int end = Math.min(numPartitions, (j + 1) * step);
+        for (int i = from; i < end; i++) {
+          final int size = sendOffsets[i];
+          if (size > 0) {
+            byte[] compressed = new byte[size];
+            System.arraycopy(sendBuffers[i], 0, compressed, 0, size);
+            int bytesWritten = rssShuffleClient.mergeData(
+              appId,
+              shuffleId,
+              mapId,
+              taskContext.attemptNumber(),
+              i,
+              compressed,
+              numMappers,
+              numPartitions
+            );
+            // free buffer
+            sendBuffers[i] = null;
+            mapStatusLengths[i].add(bytesWritten);
+            writeMetrics.incBytesWritten(bytesWritten);
+          }
+        }
+      } catch (Exception e) {
+        throw new IOException(e);
       }
     }
+
     rssShuffleClient.pushMergedData(appId, shuffleId, mapId, taskContext.attemptNumber());
     writeMetrics.incWriteTime(System.nanoTime() - pushMergedDataTime);
 
     updateMapStatus();
 
+    synchronized (reusedSendBuffers) {
+      reusedSendBuffers.add(sendBuffers);
+    }
     sendBuffers = null;
     sendOffsets = null;
 
@@ -338,6 +402,7 @@ public class HashBasedShuffleWriter<K, V, C> extends ShuffleWriter<K, V> {
     BlockManagerId bmId = SparkEnv.get().blockManager().shuffleServerId();
     mapStatus = SparkUtils.createMapStatus(bmId, SparkUtils.unwrap(mapStatusLengths),
       taskContext.taskAttemptId());
+
   }
 
   private void updateMapStatus() {
