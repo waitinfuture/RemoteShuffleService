@@ -426,7 +426,7 @@ object RssConf extends Logging {
   }
 
   def pushDataMaxReqsInFlight(conf: RssConf): Int = {
-    conf.getInt("rss.push.data.maxReqsInFlight", 32)
+    conf.getInt("rss.push.data.maxReqsInFlight", 64)
   }
 
   def fetchChunkTimeoutMs(conf: RssConf): Long = {
@@ -637,7 +637,7 @@ object RssConf extends Logging {
   }
 
   def compressPoolNumThreads(conf: RssConf): Int = {
-    conf.getInt("rss.compress.pool.thread.num", Math.min(16, Runtime.getRuntime.availableProcessors()));
+    conf.getInt("rss.compress.pool.thread.num", Math.min(8, Runtime.getRuntime.availableProcessors()));
   }
 
   def driverMetaServicePort(conf: RssConf): Int = {
