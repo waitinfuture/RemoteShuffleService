@@ -110,7 +110,7 @@
     <module name="ImportOrder">
         <property name="separated" value="true"/>
         <property name="ordered" value="true"/>
-        <property name="groups" value="/^javax?\./,scala,*,com.aliyun.emr"/>
+        <property name="groups" value="/^javax?\./,scala,*,com.aliyun"/>
     </module>
 
     <module name="MethodParamPad"/>

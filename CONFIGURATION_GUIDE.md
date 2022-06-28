@@ -89,8 +89,8 @@ memory. In conclusion, RSS worker off-heap memory should be set to `(numDirs * q
 #### metrics.properties
 
 ```properties
-*.sink.csv.class=com.aliyun.emr.rss.common.metrics.sink.CsvSink
-*.sink.prometheusServlet.class=com.aliyun.emr.rss.common.metrics.sink.PrometheusServlet
+*.sink.csv.class=com.aliyun.rss.common.metrics.sink.CsvSink
+*.sink.prometheusServlet.class=com.aliyun.rss.common.metrics.sink.PrometheusServlet
 ```
 
 ## Tuning

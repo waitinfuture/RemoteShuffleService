@@ -58,7 +58,7 @@ scrape_configs:
 
 RSS master metric : `com/aliyun/emr/rss/service/deploy/master/MasterSource.scala`  
 RSS worker metric : `com/aliyun/emr/rss/service/deploy/master/MasterSource.scala`  
-and `com.aliyun.emr.rss.common.metrics.source.NetWorkSource`  
+and `com.aliyun.rss.common.metrics.source.NetWorkSource`  
 
 ## Grafana Dashboard
 
