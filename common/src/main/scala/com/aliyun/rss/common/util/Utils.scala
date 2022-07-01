@@ -23,6 +23,7 @@ import java.math.{MathContext, RoundingMode}
 import java.net._
 import java.nio.charset.StandardCharsets
 import java.text.SimpleDateFormat
+import java.util
 import java.util.{Locale, Properties, UUID}
 
 import scala.collection.JavaConverters._
@@ -37,6 +38,7 @@ import org.apache.commons.lang3.SystemUtils
 import com.aliyun.rss.common.RssConf
 import com.aliyun.rss.common.exception.RssException
 import com.aliyun.rss.common.internal.Logging
+import com.aliyun.rss.common.network.util.{ConfigProvider, TransportConf}
 
 object Utils extends Logging {
 
@@ -211,6 +213,63 @@ object Utils extends Logging {
     }
   }
 
+  def startServiceOnPort[T](
+                             startPort: Int,
+                             startService: Int => (T, Int),
+                             conf: RssConf,
+                             serviceName: String = ""): (T, Int) = {
+
+    require(startPort == 0 || (1024 <= startPort && startPort < 65536),
+      "startPort should be between 1024 and 65535 (inclusive), or 0 for a random free port.")
+
+    val serviceString = if (serviceName.isEmpty) "" else s" '$serviceName'"
+    val maxRetries = RssConf.masterPortMaxRetry(conf)
+    for (offset <- 0 to maxRetries) {
+      // Do not increment port if startPort is 0, which is treated as a special port
+      val tryPort = if (startPort == 0) {
+        startPort
+      } else {
+        userPort(startPort, offset)
+      }
+      try {
+        val (service, port) = startService(tryPort)
+        logInfo(s"Successfully started service$serviceString on port $port.")
+        return (service, port)
+      } catch {
+        case e: Exception if isBindCollision(e) =>
+          if (offset >= maxRetries) {
+            val exceptionMessage = if (startPort == 0) {
+              s"${e.getMessage}: Service$serviceString failed after " +
+                s"$maxRetries retries (on a random free port)! " +
+                s"Consider explicitly setting the appropriate binding address for " +
+                s"the service$serviceString (for example spark.driver.bindAddress " +
+                s"for SparkDriver) to the correct binding address."
+            } else {
+              s"${e.getMessage}: Service$serviceString failed after " +
+                s"$maxRetries retries (starting from $startPort)! Consider explicitly setting " +
+                s"the appropriate port for the service$serviceString (for example spark.ui.port " +
+                s"for SparkUI) to an available port or increasing spark.port.maxRetries."
+            }
+            val exception = new BindException(exceptionMessage)
+            // restore original stack trace
+            exception.setStackTrace(e.getStackTrace)
+            throw exception
+          }
+          if (startPort == 0) {
+            // As startPort 0 is for a random free port, it is most possibly binding address is
+            // not correct.
+            logWarning(s"Service$serviceString could not bind on a random free port. " +
+              "You may check whether configuring an appropriate binding address.")
+          } else {
+            logWarning(s"Service$serviceString could not bind on port $tryPort. " +
+              s"Attempting port ${tryPort + 1}.")
+          }
+      }
+    }
+    // Should never happen
+    throw new RssException(s"Failed to start service$serviceString on port $startPort")
+  }
+
   def userPort(base: Int, offset: Int): Int = {
     (base + offset - 1024) % (65536 - 1024) + 1024
   }
@@ -306,6 +365,27 @@ object Utils extends Logging {
   }
 
   private val MAX_DEFAULT_NETTY_THREADS = 64
+
+  def fromRssConf(_conf: RssConf, module: String, numUsableCores: Int = 0): TransportConf = {
+    val conf = _conf.clone
+
+    // Specify thread configuration based on our JVM's allocation of cores (rather than necessarily
+    // assuming we have all the machine's cores).
+    // NB: Only set if serverThreads/clientThreads not already set.
+    val numThreads = defaultNumThreads(numUsableCores)
+    conf.setIfMissing(s"rss.$module.io.serverThreads", numThreads.toString)
+    conf.setIfMissing(s"rss.$module.io.clientThreads", numThreads.toString)
+
+    new TransportConf(module, new ConfigProvider {
+      override def get(name: String): String = conf.get(name)
+
+      override def get(name: String, defaultValue: String): String = conf.get(name, defaultValue)
+
+      override def getAll(): java.lang.Iterable[java.util.Map.Entry[String, String]] = {
+        conf.getAll.toMap.asJava.entrySet()
+      }
+    })
+  }
 
   private def defaultNumThreads(numUsableCores: Int): Int = {
     val availableCores =

@@ -450,4 +450,8 @@ object RssConf extends Logging {
   def workerPrometheusMetricPort(conf: RssConf): Int = {
     conf.getInt("rss.worker.prometheus.metric.port", 9096)
   }
+
+  def masterPortMaxRetry(conf: RssConf): Int = {
+    conf.getInt("rss.master.port.maxretry", 1)
+  }
 }
