@@ -77,7 +77,7 @@ class FetchHandler(val conf: TransportConf) extends BaseMessageHandler with Logg
 
   def handleOpenStream(client: TransportClient, request: RpcRequest): Unit = {
     val msg = Message.decode(request.body().nioByteBuffer())
-    val openBlocks = msg.asInstanceOf[OpenStream]
+    val openBlocks = msg.asInstanceOf[OpenStreamReduce]
     val shuffleKey = new String(openBlocks.shuffleKey, StandardCharsets.UTF_8)
     val fileName = new String(openBlocks.fileName, StandardCharsets.UTF_8)
     val startMapIndex = openBlocks.startMapIndex
@@ -92,7 +92,7 @@ class FetchHandler(val conf: TransportConf) extends BaseMessageHandler with Logg
       try {
         val buffers = new FileManagedBuffers(fileInfo, conf)
         val streamId = streamManager.registerStream(buffers, client.getChannel)
-        val streamHandle = new StreamHandle(streamId, fileInfo.numChunks)
+        val streamHandle = new StreamHandleReduce(streamId, fileInfo.numChunks)
         if (fileInfo.numChunks == 0) {
           logDebug(s"StreamId $streamId fileName $fileName startMapIndex" +
             s" $startMapIndex endMapIndex $endMapIndex is empty.")

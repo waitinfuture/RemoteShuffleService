@@ -56,7 +56,7 @@ import com.aliyun.emr.rss.common.network.client.ChunkReceivedCallback;
 import com.aliyun.emr.rss.common.network.client.TransportClient;
 import com.aliyun.emr.rss.common.network.client.TransportClientFactory;
 import com.aliyun.emr.rss.common.network.client.TransportResponseHandler;
-import com.aliyun.emr.rss.common.network.protocol.StreamHandle;
+import com.aliyun.emr.rss.common.network.protocol.StreamHandleReduce;
 import com.aliyun.emr.rss.common.protocol.PartitionLocation;
 import com.aliyun.emr.rss.common.util.ThreadUtils;
 
@@ -381,7 +381,7 @@ public class RetryingChunkClientSuiteJ {
 
     @Override
     public ByteBuffer sendRpcSync(ByteBuffer message, long timeoutMs) {
-      StreamHandle handle = new StreamHandle(streamId, numChunks);
+      StreamHandleReduce handle = new StreamHandleReduce(streamId, numChunks);
       return handle.toByteBuffer();
     }
 

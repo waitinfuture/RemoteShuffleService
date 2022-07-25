@@ -24,17 +24,17 @@ import io.netty.buffer.ByteBuf;
  * Identifier for a fixed number of chunks to read from a stream created by an "open blocks"
  * message.
  */
-public final class StreamHandle extends RequestMessage {
+public final class StreamHandleReduce extends RequestMessage {
   public final long streamId;
   public final int numChunks;
 
-  public StreamHandle(long streamId, int numChunks) {
+  public StreamHandleReduce(long streamId, int numChunks) {
     this.streamId = streamId;
     this.numChunks = numChunks;
   }
 
   @Override
-  public Type type() { return Type.StreamHandle; }
+  public Type type() { return Type.StreamHandleReduce; }
 
   @Override
   public int encodedLength() {
@@ -47,8 +47,8 @@ public final class StreamHandle extends RequestMessage {
     buf.writeInt(numChunks);
   }
 
-  public static StreamHandle decode(ByteBuf buf) {
-    return new StreamHandle(buf.readLong(), buf.readInt());
+  public static StreamHandleReduce decode(ByteBuf buf) {
+    return new StreamHandleReduce(buf.readLong(), buf.readInt());
   }
 
   @Override
@@ -58,8 +58,8 @@ public final class StreamHandle extends RequestMessage {
 
   @Override
   public boolean equals(Object other) {
-    if (other instanceof StreamHandle) {
-      StreamHandle o = (StreamHandle) other;
+    if (other instanceof StreamHandleReduce) {
+      StreamHandleReduce o = (StreamHandleReduce) other;
       return streamId == o.streamId && numChunks == o.numChunks;
     }
     return false;

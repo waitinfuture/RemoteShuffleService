@@ -48,8 +48,8 @@ import com.aliyun.emr.rss.common.network.client.ChunkReceivedCallback;
 import com.aliyun.emr.rss.common.network.client.TransportClient;
 import com.aliyun.emr.rss.common.network.client.TransportClientFactory;
 import com.aliyun.emr.rss.common.network.protocol.Message;
-import com.aliyun.emr.rss.common.network.protocol.OpenStream;
-import com.aliyun.emr.rss.common.network.protocol.StreamHandle;
+import com.aliyun.emr.rss.common.network.protocol.OpenStreamReduce;
+import com.aliyun.emr.rss.common.network.protocol.StreamHandleReduce;
 import com.aliyun.emr.rss.common.network.server.FileInfo;
 import com.aliyun.emr.rss.common.network.server.MemoryTracker;
 import com.aliyun.emr.rss.common.network.server.TransportServer;
@@ -159,7 +159,7 @@ public class FileWriterSuiteJ {
     byte[] shuffleKeyBytes = "shuffleKey".getBytes(StandardCharsets.UTF_8);
     byte[] fileNameBytes = "location".getBytes(StandardCharsets.UTF_8);
 
-    OpenStream openBlocks = new OpenStream(shuffleKeyBytes, fileNameBytes,
+    OpenStreamReduce openBlocks = new OpenStreamReduce(shuffleKeyBytes, fileNameBytes,
       0, Integer.MAX_VALUE);
 
     return openBlocks.toByteBuffer();
@@ -167,9 +167,9 @@ public class FileWriterSuiteJ {
 
   private void setUpConn(TransportClient client) {
     ByteBuffer resp = client.sendRpcSync(createOpenMessage(), 10000);
-    StreamHandle streamHandle = (StreamHandle) Message.decode(resp);
-    streamId = streamHandle.streamId;
-    numChunks = streamHandle.numChunks;
+    StreamHandleReduce streamHandleReduce = (StreamHandleReduce) Message.decode(resp);
+    streamId = streamHandleReduce.streamId;
+    numChunks = streamHandleReduce.numChunks;
   }
 
   private FetchResult fetchChunks(TransportClient client,

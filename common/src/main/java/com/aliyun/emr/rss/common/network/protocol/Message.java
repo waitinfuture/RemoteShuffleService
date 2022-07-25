@@ -19,6 +19,7 @@ package com.aliyun.emr.rss.common.network.protocol;
 
 import java.nio.ByteBuffer;
 
+import com.aliyun.emr.rss.common.network.protocol.flink.message.*;
 import com.google.common.base.Objects;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
@@ -77,11 +78,23 @@ public abstract class Message implements Encodable {
     RpcRequest(3),
     RpcResponse(4),
     RpcFailure(5),
-    OpenStream(6),
-    StreamHandle(7),
+    OpenStreamReduce(6),
+    StreamHandleReduce(7),
     OneWayMessage(9),
     PushData(11),
-    PushMergedData(12);
+    PushMergedData(12),
+
+    ErrorResponse(101),
+    WriteRegionStart(102),
+    WriteRegionFinish(103),
+    WriteFinish(104),
+    WriteFinishCommit(105),
+    OpenStreamMap(106),
+    ReadAddCredit(107),
+    ReadData(108),
+    StreamHandleMap(109),
+    BacklogAnnouncement(110),
+    ;
 
     private final byte id;
 
@@ -105,11 +118,21 @@ public abstract class Message implements Encodable {
         case 3: return RpcRequest;
         case 4: return RpcResponse;
         case 5: return RpcFailure;
-        case 6: return OpenStream;
-        case 7: return StreamHandle;
+        case 6: return OpenStreamReduce;
+        case 7: return StreamHandleReduce;
         case 9: return OneWayMessage;
         case 11: return PushData;
         case 12: return PushMergedData;
+        case 101: return ErrorResponse;
+        case 102: return WriteRegionStart;
+        case 103: return WriteRegionFinish;
+        case 104: return WriteFinish;
+        case 105: return WriteFinishCommit;
+        case 106: return OpenStreamMap;
+        case 107: return ReadAddCredit;
+        case 108: return ReadData;
+        case 109: return StreamHandleMap;
+        case 110: return BacklogAnnouncement;
         case -1: throw new IllegalArgumentException("User type messages cannot be decoded.");
         default: throw new IllegalArgumentException("Unknown message type: " + id);
       }
@@ -125,36 +148,47 @@ public abstract class Message implements Encodable {
     switch (msgType) {
       case ChunkFetchRequest:
         return ChunkFetchRequest.decode(in);
-
       case ChunkFetchSuccess:
         return ChunkFetchSuccess.decode(in, decodeBody);
-
       case ChunkFetchFailure:
         return ChunkFetchFailure.decode(in);
-
       case RpcRequest:
         return RpcRequest.decode(in, decodeBody);
-
       case RpcResponse:
         return RpcResponse.decode(in, decodeBody);
-
       case RpcFailure:
         return RpcFailure.decode(in);
-
-      case OpenStream:
-        return OpenStream.decode(in);
-
-      case StreamHandle:
-        return StreamHandle.decode(in);
-
+      case OpenStreamReduce:
+        return OpenStreamReduce.decode(in);
+      case StreamHandleReduce:
+        return StreamHandleReduce.decode(in);
       case OneWayMessage:
         return OneWayMessage.decode(in, decodeBody);
-
       case PushData:
         return PushData.decode(in, decodeBody);
-
       case PushMergedData:
         return PushMergedData.decode(in, decodeBody);
+
+      case ErrorResponse:
+        return ErrorResponse.decode(in);
+      case WriteRegionStart:
+        return WriteRegionStart.decode(in);
+      case WriteRegionFinish:
+        return WriteRegionFinish.decode(in);
+      case WriteFinish:
+        return WriteFinish.decode(in);
+      case WriteFinishCommit:
+        return WriteFinishCommit.decode(in);
+      case OpenStreamMap:
+        return OpenStreamMap.decode(in);
+      case ReadAddCredit:
+        return ReadAddCredit.decode(in);
+      case ReadData:
+        return ReadData.decode(in);
+      case StreamHandleMap:
+        return StreamHandleMap.decode(in);
+      case BacklogAnnouncement:
+        return BacklogAnnouncement.decode(in);
 
       default:
         throw new IllegalArgumentException("Unexpected message type: " + msgType);

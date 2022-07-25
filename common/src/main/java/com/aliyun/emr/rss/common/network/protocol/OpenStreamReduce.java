@@ -23,20 +23,20 @@ import java.util.Arrays;
 import com.google.common.base.Objects;
 import io.netty.buffer.ByteBuf;
 
-/** Request to read a set of blocks. Returns {@link StreamHandle}. */
-public final class OpenStream extends RequestMessage {
+/** Request to read a set of blocks. Returns {@link StreamHandleReduce}. */
+public final class OpenStreamReduce extends RequestMessage {
   public byte[] shuffleKey;
   public byte[] fileName;
   public int startMapIndex;
   public int endMapIndex;
 
-  public OpenStream(String shuffleKey, String fileName, int startMapIndex, int endMapIndex) {
+  public OpenStreamReduce(String shuffleKey, String fileName, int startMapIndex, int endMapIndex) {
     this(shuffleKey.getBytes(StandardCharsets.UTF_8),
       fileName.getBytes(StandardCharsets.UTF_8),
       startMapIndex, endMapIndex);
   }
 
-  public OpenStream(byte[] shuffleKey, byte[] fileName, int startMapIndex, int endMapIndex) {
+  public OpenStreamReduce(byte[] shuffleKey, byte[] fileName, int startMapIndex, int endMapIndex) {
     this.shuffleKey = shuffleKey;
     this.fileName = fileName;
     this.startMapIndex = startMapIndex;
@@ -44,7 +44,7 @@ public final class OpenStream extends RequestMessage {
   }
 
   @Override
-  public Type type() { return Type.OpenStream; }
+  public Type type() { return Type.OpenStreamReduce; }
 
   @Override
   public int encodedLength() {
@@ -63,14 +63,14 @@ public final class OpenStream extends RequestMessage {
     buf.writeInt(endMapIndex);
   }
 
-  public static OpenStream decode(ByteBuf buf) {
+  public static OpenStreamReduce decode(ByteBuf buf) {
     int shuffleKeySize = buf.readInt();
     byte[] shuffleKey = new byte[shuffleKeySize];
     buf.readBytes(shuffleKey);
     int fileNameSize = buf.readInt();
     byte[] fileName = new byte[fileNameSize];
     buf.readBytes(fileName);
-    return new OpenStream(shuffleKey, fileName, buf.readInt(), buf.readInt());
+    return new OpenStreamReduce(shuffleKey, fileName, buf.readInt(), buf.readInt());
   }
 
   @Override
@@ -80,8 +80,8 @@ public final class OpenStream extends RequestMessage {
 
   @Override
   public boolean equals(Object other) {
-    if (other instanceof OpenStream) {
-      OpenStream o = (OpenStream) other;
+    if (other instanceof OpenStreamReduce) {
+      OpenStreamReduce o = (OpenStreamReduce) other;
       return startMapIndex == o.startMapIndex &&
         endMapIndex == o.endMapIndex &&
         Arrays.equals(shuffleKey, o.shuffleKey) &&
