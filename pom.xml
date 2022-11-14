@@ -23,7 +23,7 @@
 
     <groupId>com.aliyun.emr</groupId>
     <artifactId>emr-shuffle</artifactId>
-    <version>1.0.0</version>
+    <version>tez-SNAPSHOT</version>
     <packaging>pom</packaging>
 
     <name>Aliyun E-MapReduce Shuffle Service Project Parent POM</name>
@@ -48,7 +48,8 @@
         <module>common</module>
         <module>service</module>
         <module>client/java</module>
-        <module>${ess.shuffle.manager}</module>
+        <module>ess-shuffle-manager-tez</module>
+        <module>ess-shuffle-manager-3.0.1</module>
     </modules>
 
     <repositories>
@@ -359,6 +360,16 @@
                 </dependency>
             </dependencies>
         </profile>
+
+        <profile>
+            <id>tez</id>
+            <properties>
+            </properties>
+            <activation>
+                <activeByDefault>false</activeByDefault>
+            </activation>
+        </profile>
+
     </profiles>
 </project>
 

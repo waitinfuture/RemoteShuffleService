@@ -21,7 +21,7 @@
     <parent>
         <groupId>com.aliyun.emr</groupId>
         <artifactId>emr-shuffle</artifactId>
-        <version>1.0.0</version>
+        <version>tez-SNAPSHOT</version>
         <relativePath>../pom.xml</relativePath>
     </parent>
 

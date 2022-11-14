@@ -221,6 +221,9 @@ public class ShuffleClientImpl extends ShuffleClient {
 
     private ConcurrentHashMap<Integer, PartitionLocation> registerShuffle(
         String applicationId, int shuffleId, int numMappers, int numPartitions) {
+        if (!heartBeatStarted) {
+            startHeartbeat(applicationId);
+        }
         int numRetries = 3;
         while (numRetries > 0) {
             try {
