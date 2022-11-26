@@ -528,6 +528,7 @@ class CelebornConf(loadDefaults: Boolean) extends Cloneable with Logging with Se
   def workerExcludedExpireTimeout: Long = get(WORKER_EXCLUDED_EXPIRE_TIMEOUT)
   def shuffleRangeReadFilterEnabled: Boolean = get(SHUFFLE_RANGE_READ_FILTER_ENABLED)
   def shufflePartitionType: PartitionType = PartitionType.valueOf(get(SHUFFLE_PARTITION_TYPE))
+  def requestCommitFilesMaxRetries: Int = get(COMMIT_FILE_REQUEST_MAX_RETRY)
 
   // //////////////////////////////////////////////////////
   //               Shuffle Compression                   //
@@ -1344,6 +1345,15 @@ object CelebornConf extends Logging {
       .timeConf(TimeUnit.MILLISECONDS)
       .createWithDefaultString("3s")
 
+  val COMMIT_FILE_REQUEST_MAX_RETRY: ConfigEntry[Int] =
+    buildConf("celeborn.rpc.requestCommitFiles.maxRetries")
+      .categories("client")
+      .doc("Max retry times for requestCommitFiles RPC.")
+      .version("1.0.0")
+      .intConf
+      .checkValue(v => v > 0, "value must be positive")
+      .createWithDefault(2)
+
   val MASTER_HOST: ConfigEntry[String] =
     buildConf("celeborn.master.host")
       .categories("master")
@@ -1776,8 +1786,7 @@ object CelebornConf extends Logging {
       .categories("worker")
       .doc("Timeout for a Celeborn worker to commit files of a shuffle.")
       .version("0.2.0")
-      .timeConf(TimeUnit.SECONDS)
-      .createWithDefaultString("120s")
+      .fallbackConf(RPC_ASK_TIMEOUT)
 
   val PARTITION_SORTER_SORT_TIMEOUT: ConfigEntry[Long] =
     buildConf("celeborn.worker.partitionSorter.sort.timeout")
