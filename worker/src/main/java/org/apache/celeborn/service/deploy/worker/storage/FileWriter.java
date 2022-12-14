@@ -85,6 +85,8 @@ public final class FileWriter implements DeviceObserver {
 
   private final FlushNotifier notifier = new FlushNotifier();
 
+  private CelebornConf conf;
+
   // //////////////////////////////////////////////////////
   //            map partition                            //
   // //////////////////////////////////////////////////////
@@ -112,6 +114,7 @@ public final class FileWriter implements DeviceObserver {
       PartitionType partitionType,
       boolean rangeReadFilter)
       throws IOException {
+    this.conf = conf;
     this.fileInfo = fileInfo;
     this.flusher = flusher;
     this.flushWorkerIndex = flusher.getWorkerIndex();
@@ -254,6 +257,23 @@ public final class FileWriter implements DeviceObserver {
     }
   }
 
+  public synchronized CompositeByteBuf transferBuffer() throws IOException {
+    if (closed) {
+      String msg = "FileWriter has already closed! fileName " + fileInfo.getFilePath();
+      logger.error(msg);
+      throw new AlreadyClosedException(msg);
+    }
+
+    waitOnNoPending(numPendingWrites);
+
+    if (flushBuffer.readableBytes() > 0) {
+      CompositeByteBuf buf = flushBuffer;
+      flushBuffer = null;
+      return buf;
+    }
+    return null;
+  }
+
   public synchronized long close() throws IOException {
     if (closed) {
       String msg = "FileWriter has already closed! fileName " + fileInfo.getFilePath();
@@ -266,7 +286,7 @@ public final class FileWriter implements DeviceObserver {
       closed = true;
 
       synchronized (this) {
-        if (flushBuffer.readableBytes() > 0) {
+        if (flushBuffer != null && flushBuffer.readableBytes() > 0) {
           flush(true);
         }
         if (!isChunkOffsetValid()) {

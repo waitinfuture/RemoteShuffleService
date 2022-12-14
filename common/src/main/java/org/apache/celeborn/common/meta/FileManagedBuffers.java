@@ -21,21 +21,28 @@ import java.io.File;
 import java.util.BitSet;
 import java.util.List;
 
+import io.netty.buffer.CompositeByteBuf;
 import org.apache.celeborn.common.network.buffer.FileSegmentManagedBuffer;
 import org.apache.celeborn.common.network.buffer.ManagedBuffer;
+import org.apache.celeborn.common.network.buffer.NettyManagedBuffer;
 import org.apache.celeborn.common.network.util.TransportConf;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 public class FileManagedBuffers {
+  private final Logger logger = LoggerFactory.getLogger(FileManagedBuffers.class);
   private final File file;
   private final long[] offsets;
-  private final int numChunks;
+  private int numChunks;
 
   private final BitSet chunkTracker;
   private final TransportConf conf;
 
   private volatile boolean fullyRead = false;
 
-  public FileManagedBuffers(FileInfo fileInfo, TransportConf conf) {
+  private CompositeByteBuf tailBuffer;
+
+  public FileManagedBuffers(FileInfo fileInfo, TransportConf conf, CompositeByteBuf buf) {
     file = fileInfo.getFile();
     numChunks = fileInfo.numChunks();
     if (numChunks > 0) {
@@ -47,6 +54,10 @@ public class FileManagedBuffers {
     } else {
       offsets = new long[1];
       offsets[0] = 0;
+    }
+    if (buf != null) {
+      numChunks++;
+      tailBuffer = buf;
     }
     chunkTracker = new BitSet(numChunks);
     chunkTracker.clear();
@@ -64,23 +75,34 @@ public class FileManagedBuffers {
   }
 
   public ManagedBuffer chunk(int chunkIndex, int offset, int len) {
-    synchronized (chunkTracker) {
-      chunkTracker.set(chunkIndex, true);
-    }
-    // offset of the beginning of the chunk in the file
-    final long chunkOffset = offsets[chunkIndex];
-    final long chunkLength = offsets[chunkIndex + 1] - chunkOffset;
-    assert offset < chunkLength;
-    long length = Math.min(chunkLength - offset, len);
-    if (len + offset >= chunkLength) {
+    if (tailBuffer != null && chunkIndex == numChunks - 1) {
+      logger.info("return tailBuffer " + tailBuffer);
       synchronized (chunkTracker) {
         chunkTracker.set(chunkIndex);
       }
       if (chunkTracker.cardinality() == numChunks) {
         fullyRead = true;
       }
+      return new NettyManagedBuffer(tailBuffer);
+    } else {
+      synchronized (chunkTracker) {
+        chunkTracker.set(chunkIndex, true);
+      }
+      // offset of the beginning of the chunk in the file
+      final long chunkOffset = offsets[chunkIndex];
+      final long chunkLength = offsets[chunkIndex + 1] - chunkOffset;
+      assert offset < chunkLength;
+      long length = Math.min(chunkLength - offset, len);
+      if (len + offset >= chunkLength) {
+        synchronized (chunkTracker) {
+          chunkTracker.set(chunkIndex);
+        }
+        if (chunkTracker.cardinality() == numChunks) {
+          fullyRead = true;
+        }
+      }
+      return new FileSegmentManagedBuffer(conf, file, chunkOffset + offset, length);
     }
-    return new FileSegmentManagedBuffer(conf, file, chunkOffset + offset, length);
   }
 
   public boolean isFullyRead() {

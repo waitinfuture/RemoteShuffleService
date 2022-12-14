@@ -20,10 +20,9 @@ package org.apache.celeborn.service.deploy.worker
 import java.io.{FileNotFoundException, IOException}
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.atomic.AtomicBoolean
-
 import com.google.common.base.Throwables
+import io.netty.buffer.CompositeByteBuf
 import io.netty.util.concurrent.{Future, GenericFutureListener}
-
 import org.apache.celeborn.common.exception.CelebornException
 import org.apache.celeborn.common.internal.Logging
 import org.apache.celeborn.common.meta.{FileInfo, FileManagedBuffers}
@@ -36,6 +35,9 @@ import org.apache.celeborn.common.network.util.{NettyUtils, TransportConf}
 import org.apache.celeborn.common.protocol.PartitionType
 import org.apache.celeborn.service.deploy.worker.storage.{PartitionFilesSorter, StorageManager}
 
+import java.util
+import java.util.concurrent.ConcurrentHashMap
+
 class FetchHandler(val conf: TransportConf) extends BaseMessageHandler with Logging {
   var chunkStreamManager = new ChunkStreamManager()
   var workerSource: WorkerSource = _
@@ -43,6 +45,8 @@ class FetchHandler(val conf: TransportConf) extends BaseMessageHandler with Logg
   var storageManager: StorageManager = _
   var partitionsSorter: PartitionFilesSorter = _
   var registered: AtomicBoolean = _
+  var shuffleTailedBuffer: ConcurrentHashMap[String, util.HashMap[String, CompositeByteBuf]] = _
+
 
   def init(worker: Worker): Unit = {
     this.workerSource = worker.workerSource
@@ -50,6 +54,7 @@ class FetchHandler(val conf: TransportConf) extends BaseMessageHandler with Logg
     this.storageManager = worker.storageManager
     this.partitionsSorter = worker.partitionsSorter
     this.registered = worker.registered
+    this.shuffleTailedBuffer = worker.shuffleTailData
   }
 
   def getRawFileInfo(
@@ -106,9 +111,13 @@ class FetchHandler(val conf: TransportConf) extends BaseMessageHandler with Logg
               request.requestId,
               new NioManagedBuffer(streamHandle.toByteBuffer)))
           } else {
-            val buffers = new FileManagedBuffers(fileInfo, conf)
+            val tailBuffer: CompositeByteBuf = if (shuffleTailedBuffer.containsKey(shuffleKey) && shuffleTailedBuffer.get(shuffleKey).containsKey(fileName)) {
+              shuffleTailedBuffer.get(shuffleKey).get(fileName)
+            } else null
+            logInfo(s"${shuffleKey}, ${fileName}, tailBuffer ${tailBuffer}")
+            val buffers = new FileManagedBuffers(fileInfo, conf, tailBuffer)
             val streamId = chunkStreamManager.registerStream(buffers, client.getChannel)
-            val streamHandle = new StreamHandle(streamId, fileInfo.numChunks())
+            val streamHandle = new StreamHandle(streamId, buffers.numChunks())
             if (fileInfo.numChunks() == 0)
               logDebug(s"StreamId $streamId fileName $fileName startMapIndex" +
                 s" $startMapIndex endMapIndex $endMapIndex is empty.")

@@ -20,10 +20,8 @@ package org.apache.celeborn.service.deploy.worker
 import java.nio.ByteBuffer
 import java.util.concurrent.{ConcurrentHashMap, ThreadPoolExecutor}
 import java.util.concurrent.atomic.{AtomicBoolean, AtomicIntegerArray}
-
 import com.google.common.base.Throwables
-import io.netty.buffer.ByteBuf
-
+import io.netty.buffer.{ByteBuf, CompositeByteBuf}
 import org.apache.celeborn.common.exception.AlreadyClosedException
 import org.apache.celeborn.common.internal.Logging
 import org.apache.celeborn.common.meta.{PartitionLocationInfo, WorkerInfo}
@@ -38,6 +36,8 @@ import org.apache.celeborn.common.protocol.message.StatusCode
 import org.apache.celeborn.common.unsafe.Platform
 import org.apache.celeborn.common.util.PackedPartitionId
 import org.apache.celeborn.service.deploy.worker.storage.{FileWriter, LocalFlusher, StorageManager}
+
+import java.util
 
 class PushDataHandler extends BaseMessageHandler with Logging {
 

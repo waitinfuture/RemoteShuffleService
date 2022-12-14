@@ -22,13 +22,11 @@ import java.lang.{Long => JLong}
 import java.util.{HashMap => JHashMap, HashSet => JHashSet}
 import java.util.concurrent._
 import java.util.concurrent.atomic.{AtomicBoolean, AtomicIntegerArray}
-
 import scala.collection.JavaConverters._
 import scala.collection.mutable
-
 import com.google.common.annotations.VisibleForTesting
+import io.netty.buffer.CompositeByteBuf
 import io.netty.util.HashedWheelTimer
-
 import org.apache.celeborn.common.CelebornConf
 import org.apache.celeborn.common.CelebornConf._
 import org.apache.celeborn.common.exception.CelebornException
@@ -188,6 +186,9 @@ private[celeborn] class Worker(
 
   // (workerInfo -> last connect timeout timestamp)
   val unavailablePeers = new ConcurrentHashMap[WorkerInfo, Long]()
+
+  // tail data
+  val shuffleTailData = new ConcurrentHashMap[String, JHashMap[String, CompositeByteBuf]]()
 
   // Threads
   private val forwardMessageScheduler =
@@ -427,6 +428,7 @@ private[celeborn] class Worker(
       shufflePartitionType.remove(shuffleKey)
       shuffleMapperAttempts.remove(shuffleKey)
       shuffleCommitInfos.remove(shuffleKey)
+      shuffleTailData.remove(shuffleKey)
       workerInfo.releaseSlots(shuffleKey)
       logInfo(s"Cleaned up expired shuffle $shuffleKey")
     }

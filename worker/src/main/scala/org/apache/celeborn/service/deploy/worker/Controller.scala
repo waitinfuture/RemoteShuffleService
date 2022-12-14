@@ -17,21 +17,20 @@
 
 package org.apache.celeborn.service.deploy.worker
 
+import io.netty.buffer.CompositeByteBuf
+
 import java.io.IOException
 import java.util.{ArrayList => jArrayList, HashMap => jHashMap, List => jList, Set => jSet}
 import java.util.concurrent._
 import java.util.concurrent.atomic.{AtomicBoolean, AtomicIntegerArray, AtomicReference}
 import java.util.function.BiFunction
-
 import scala.collection.JavaConverters._
-
 import io.netty.util.{HashedWheelTimer, Timeout, TimerTask}
 import org.roaringbitmap.RoaringBitmap
-
 import org.apache.celeborn.common.CelebornConf
 import org.apache.celeborn.common.identity.UserIdentifier
 import org.apache.celeborn.common.internal.Logging
-import org.apache.celeborn.common.meta.{PartitionLocationInfo, WorkerInfo}
+import org.apache.celeborn.common.meta.{DeviceInfo, PartitionLocationInfo, WorkerInfo}
 import org.apache.celeborn.common.metrics.MetricsSystem
 import org.apache.celeborn.common.protocol.{PartitionLocation, PartitionSplitMode, PartitionType, StorageInfo}
 import org.apache.celeborn.common.protocol.message.ControlMessages._
@@ -39,6 +38,8 @@ import org.apache.celeborn.common.protocol.message.StatusCode
 import org.apache.celeborn.common.rpc._
 import org.apache.celeborn.common.util.Utils
 import org.apache.celeborn.service.deploy.worker.storage.StorageManager
+
+import java.util
 
 private[deploy] class Controller(
     override val rpcEnv: RpcEnv,
@@ -59,6 +60,7 @@ private[deploy] class Controller(
   var asyncReplyPool: ScheduledExecutorService = _
   val minPartitionSizeToEstimate = conf.minPartitionSizeToEstimate
   var shutdown: AtomicBoolean = _
+  var shuffleTailedBuffer: ConcurrentHashMap[String, util.HashMap[String, CompositeByteBuf]] = _
 
   val testRetryCommitFiles = conf.testRetryCommitFiles
 
@@ -74,6 +76,7 @@ private[deploy] class Controller(
     commitThreadPool = worker.commitThreadPool
     asyncReplyPool = worker.asyncReplyPool
     shutdown = worker.shutdown
+    shuffleTailedBuffer = worker.shuffleTailData
   }
 
   override def receiveAndReply(context: RpcCallContext): PartialFunction[Any, Unit] = {
@@ -259,6 +262,28 @@ private[deploy] class Controller(
     var future: CompletableFuture[Void] = null
 
     if (uniqueIds != null) {
+      val newFunc =
+        new util.function.Function[String, util.HashMap[String, CompositeByteBuf]]() {
+          override def apply(s: String): util.HashMap[String, CompositeByteBuf] = {
+            new util.HashMap[String, CompositeByteBuf]()
+          }
+        }
+      val bufferMap = shuffleTailedBuffer.computeIfAbsent(shuffleKey, newFunc)
+      var totalTailSize = 0
+      uniqueIds.asScala.foreach { uniqueId =>
+        val location = (if (master) {
+          partitionLocationInfo.getMasterLocation(shuffleKey, uniqueId)
+        } else {
+          partitionLocationInfo.getSlaveLocation(shuffleKey, uniqueId)
+        }).asInstanceOf[WorkingPartition]
+        val buf = location.getFileWriter.transferBuffer();
+        if (buf != null) {
+          totalTailSize += buf.readableBytes()
+          bufferMap.put(location.getFileName, buf)
+        }
+      }
+      logInfo(s"total tail data size ${totalTailSize}")
+
       uniqueIds.asScala.foreach { uniqueId =>
         val task = CompletableFuture.runAsync(
           new Runnable {
@@ -277,7 +302,10 @@ private[deploy] class Controller(
                 }
 
                 val fileWriter = location.asInstanceOf[WorkingPartition].getFileWriter
-                val bytes = fileWriter.close()
+                val tailData = if (bufferMap.containsKey(location.getFileName)) {
+                  bufferMap.get(location.getFileName)
+                } else null
+                val bytes = fileWriter.close() + (if (tailData != null) tailData.readableBytes() else 0)
                 if (bytes > 0L) {
                   if (fileWriter.getStorageInfo != null) {
                     committedStorageInfos.put(uniqueId, fileWriter.getStorageInfo)
