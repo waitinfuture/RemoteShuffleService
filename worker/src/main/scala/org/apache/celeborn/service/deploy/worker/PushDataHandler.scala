@@ -38,7 +38,6 @@ import org.apache.celeborn.common.protocol.{PartitionLocation, PartitionSplitMod
 import org.apache.celeborn.common.protocol.message.StatusCode
 import org.apache.celeborn.common.unsafe.Platform
 import org.apache.celeborn.common.util.PackedPartitionId
-import org.apache.celeborn.common.write.PushState
 import org.apache.celeborn.service.deploy.worker.congestcontrol.CongestionController
 import org.apache.celeborn.service.deploy.worker.storage.{FileWriter, HdfsFlusher, LocalFlusher, MapPartitionFileWriter, StorageManager}
 
@@ -62,7 +61,6 @@ class PushDataHandler extends BaseMessageHandler with Logging {
   var conf: CelebornConf = _
   @volatile var pushMasterDataTimeoutTested = false
   @volatile var pushSlaveDataTimeoutTested = false
-  var pushState: PushState = _
 
   def init(worker: Worker): Unit = {
     workerSource = worker.workerSource
@@ -81,7 +79,6 @@ class PushDataHandler extends BaseMessageHandler with Logging {
     storageManager = worker.storageManager
     shutdown = worker.shutdown
     conf = worker.conf
-    pushState = new PushState(conf)
 
     logInfo(s"diskReserveSize $diskReserveSize")
   }
@@ -170,7 +167,6 @@ class PushDataHandler extends BaseMessageHandler with Logging {
 
     // Fetch real batchId from body will add more cost and no meaning for replicate.
     val doReplicate = location != null && location.getPeer != null && isMaster
-    val batchId = if (doReplicate) pushState.nextBatchId() else -1
     val softSplit = new AtomicBoolean(false)
 
     if (location == null) {
@@ -271,19 +267,20 @@ class PushDataHandler extends BaseMessageHandler with Logging {
                 s"${StatusCode.PUSH_DATA_CREATE_CONNECTION_FAIL_SLAVE.getMessage}! Peer $peerWorker unavailable for $location!"))
             return
           }
-          pushState.addBatch(batchId, location.getPeer.hostAndPushPort())
 
           // Handle the response from replica
           val wrappedCallback = new RpcResponseCallback() {
             override def onSuccess(response: ByteBuffer): Unit = {
-              // Only master data will push data to slave
-              pushState.removeBatch(batchId, location.getPeer.hostAndPushPort())
               if (response.remaining() > 0) {
                 val resp = ByteBuffer.allocate(response.remaining())
                 resp.put(response)
                 resp.flip()
                 callbackWithTimer.onSuccess(resp)
               } else if (softSplit.get()) {
+                // TODO Currently if the worker is in soft split status, given the guess that the client
+                // will fast stop pushing data to the worker, we won't return congest status. But
+                // in the long term, especially if this issue could frequently happen, we may need to return
+                // congest&softSplit status together
                 callbackWithTimer.onSuccess(
                   ByteBuffer.wrap(Array[Byte](StatusCode.SOFT_SPLIT.getValue)))
               } else {
@@ -308,7 +305,6 @@ class PushDataHandler extends BaseMessageHandler with Logging {
             override def onFailure(e: Throwable): Unit = {
               logError(s"[handlePushData.onFailure] partitionLocation: $location", e)
               workerSource.incCounter(WorkerSource.PushDataFailCount)
-              pushState.removeBatch(batchId, location.getPeer.hostAndPushPort())
               // Throw by slave peer worker
               if (e.getMessage.startsWith(StatusCode.PUSH_DATA_FAIL_SLAVE.getMessage)) {
                 callbackWithTimer.onFailure(e)
@@ -337,7 +333,6 @@ class PushDataHandler extends BaseMessageHandler with Logging {
           } catch {
             case e: Exception =>
               pushData.body().release()
-              pushState.removeBatch(batchId, location.getPeer.hostAndPushPort())
               unavailablePeers.put(peerWorker, System.currentTimeMillis())
               workerSource.incCounter(WorkerSource.PushDataFailCount)
               callbackWithTimer.onFailure(
@@ -351,22 +346,31 @@ class PushDataHandler extends BaseMessageHandler with Logging {
       // The codes here could be executed if
       // 1. the client doesn't enable push data to the replica, the master worker could hit here
       // 2. the client enables push data to the replica, and the replica worker could hit here
-      Option(CongestionController.instance()) match {
-        case Some(congestionController) =>
-          if (congestionController.isUserCongested(fileWriter.getFileInfo.getUserIdentifier)) {
-            if (isMaster) {
-              callbackWithTimer.onSuccess(
-                ByteBuffer.wrap(
-                  Array[Byte](StatusCode.PUSH_DATA_SUCCESS_MASTER_CONGESTED.getValue)))
+      // TODO Currently if the worker is in soft split status, given the guess that the client
+      // will fast stop pushing data to the worker, we won't return congest status. But
+      // in the long term, especially if this issue could frequently happen, we may need to return
+      // congest&softSplit status together
+      if (softSplit.get()) {
+        callbackWithTimer.onSuccess(ByteBuffer.wrap(Array[Byte](StatusCode.SOFT_SPLIT.getValue)))
+      } else {
+        Option(CongestionController.instance()) match {
+          case Some(congestionController) =>
+            if (congestionController.isUserCongested(fileWriter.getFileInfo.getUserIdentifier)) {
+              if (isMaster) {
+                callbackWithTimer.onSuccess(
+                  ByteBuffer.wrap(
+                    Array[Byte](StatusCode.PUSH_DATA_SUCCESS_MASTER_CONGESTED.getValue)))
+              } else {
+                callbackWithTimer.onSuccess(
+                  ByteBuffer.wrap(
+                    Array[Byte](StatusCode.PUSH_DATA_SUCCESS_SLAVE_CONGESTED.getValue)))
+              }
             } else {
-              callbackWithTimer.onSuccess(
-                ByteBuffer.wrap(Array[Byte](StatusCode.PUSH_DATA_SUCCESS_SLAVE_CONGESTED.getValue)))
+              callbackWithTimer.onSuccess(ByteBuffer.wrap(Array[Byte]()))
             }
-          } else {
+          case None =>
             callbackWithTimer.onSuccess(ByteBuffer.wrap(Array[Byte]()))
-          }
-        case None =>
-          callbackWithTimer.onSuccess(ByteBuffer.wrap(Array[Byte]()))
+        }
       }
     }
 
@@ -434,7 +438,6 @@ class PushDataHandler extends BaseMessageHandler with Logging {
 
     // Fetch real batchId from body will add more cost and no meaning for replicate.
     val doReplicate = locations.head != null && locations.head.getPeer != null && isMaster
-    val batchId = if (doReplicate) pushState.nextBatchId() else -1
 
     // find FileWriters responsible for the data
     locations.foreach { loc =>
@@ -525,13 +528,11 @@ class PushDataHandler extends BaseMessageHandler with Logging {
               s"${StatusCode.PUSH_DATA_CREATE_CONNECTION_FAIL_SLAVE.getMessage}! Peer $peerWorker unavailable for $location!"))
             return
           }
-          pushState.addBatch(batchId, location.getPeer.hostAndPushPort())
 
           // Handle the response from replica
           val wrappedCallback = new RpcResponseCallback() {
             override def onSuccess(response: ByteBuffer): Unit = {
               // Only master data enable replication will push data to slave
-              pushState.removeBatch(batchId, locations.head.getPeer.hostAndPushPort())
               if (response.remaining() > 0) {
                 val resp = ByteBuffer.allocate(response.remaining())
                 resp.put(response)
@@ -558,7 +559,6 @@ class PushDataHandler extends BaseMessageHandler with Logging {
 
             override def onFailure(e: Throwable): Unit = {
               workerSource.incCounter(WorkerSource.PushDataFailCount)
-              pushState.removeBatch(batchId, locations.head.getPeer.hostAndPushPort())
               // Throw by slave peer worker
               if (e.getMessage.startsWith(StatusCode.PUSH_DATA_FAIL_SLAVE.getMessage)) {
                 callbackWithTimer.onFailure(e)
@@ -595,7 +595,6 @@ class PushDataHandler extends BaseMessageHandler with Logging {
               pushMergedData.body().release()
               unavailablePeers.put(peerWorker, System.currentTimeMillis())
               workerSource.incCounter(WorkerSource.PushDataFailCount)
-              pushState.removeBatch(batchId, location.getPeer.hostAndPushPort())
               callbackWithTimer.onFailure(
                 new Exception(
                   s"${StatusCode.PUSH_DATA_CREATE_CONNECTION_FAIL_SLAVE.getMessage}! Create connection to peer $peerWorker failed for $location",

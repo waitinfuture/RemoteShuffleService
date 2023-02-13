@@ -1243,7 +1243,7 @@ object CelebornConf extends Logging {
       .categories("client")
       .doc("Celeborn supports the following kind of shuffle writers. 1. hash: hash-based shuffle writer " +
         "works fine when shuffle partition count is normal; 2. sort: sort-based shuffle writer works fine " +
-        "when memory pressure is high or shuffle partition count it huge.")
+        "when memory pressure is high or shuffle partition count is huge.")
       .version("0.2.0")
       .stringConf
       .transform(_.toUpperCase(Locale.ROOT))
@@ -1366,7 +1366,7 @@ object CelebornConf extends Logging {
     buildConf("celeborn.test.fetchFailure")
       .categories("client")
       .version("0.2.0")
-      .doc("Wheter to test fetch chunk failure")
+      .doc("Whether to test fetch chunk failure")
       .booleanConf
       .createWithDefault(false)
 
@@ -2196,6 +2196,7 @@ object CelebornConf extends Logging {
       .version("0.2.0")
       .doc(s"Timeout for a task to push data rpc message. This value should better be more than twice of `${PUSH_TIMEOUT_CHECK_INTERVAL.key}`")
       .timeConf(TimeUnit.MILLISECONDS)
+      .checkValue(_ > 0, "celeborn.push.data.timeout must be positive!")
       .createWithDefaultString("120s")
 
   val TEST_PUSH_MASTER_DATA_TIMEOUT: ConfigEntry[Boolean] =
