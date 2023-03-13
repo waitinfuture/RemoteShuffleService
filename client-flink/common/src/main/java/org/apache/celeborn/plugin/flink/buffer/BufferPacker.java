@@ -40,6 +40,7 @@ public class BufferPacker {
     void accept(T var1, U var2) throws E;
   }
 
+  /** (data, subIdx, Exception) */
   private final BiConsumerWithException<ByteBuf, Integer, InterruptedException> ripeBufferHandler;
 
   private Buffer cachedBuffer;
@@ -142,13 +143,13 @@ public class BufferPacker {
       while (position < totalBytes) {
         BufferHeader bufferHeader;
         if (isFirst) {
-          bufferHeader = BufferUtils.getBufferHeader(buffer, position, isFirst);
+          bufferHeader = BufferUtils.getBufferHeader(buffer, position, true);
           position += BufferUtils.HEADER_LENGTH;
         } else {
           // in the remaining datas, the headlength is BufferUtils.HEADER_LENGTH -
           // BufferUtils.HEADER_LENGTH_PREFIX
           logger.debug("readbuffer: total: {}, position: {}", totalBytes, position);
-          bufferHeader = BufferUtils.getBufferHeader(buffer, position);
+          bufferHeader = BufferUtils.getBufferHeader(buffer, position, false);
           position += BufferUtils.HEADER_LENGTH - BufferUtils.HEADER_LENGTH_PREFIX;
         }
 

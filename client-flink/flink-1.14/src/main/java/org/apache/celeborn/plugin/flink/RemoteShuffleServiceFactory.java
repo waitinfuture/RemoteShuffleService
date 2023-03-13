@@ -37,7 +37,7 @@ import org.apache.flink.runtime.shuffle.ShuffleServiceFactory;
 import org.apache.flink.runtime.util.ConfigurationParserUtils;
 
 import org.apache.celeborn.common.CelebornConf;
-import org.apache.celeborn.plugin.flink.utils.FlinkUtils;
+import org.apache.celeborn.plugin.flink.utils.Utils;
 
 public class RemoteShuffleServiceFactory
     implements ShuffleServiceFactory<
@@ -70,7 +70,7 @@ public class RemoteShuffleServiceFactory
         new NetworkBufferPool(numBuffers, bufferSize, requestSegmentsTimeout);
 
     registerShuffleMetrics(metricGroup, networkBufferPool);
-    CelebornConf celebornConf = FlinkUtils.toCelebornConf(configuration);
+    CelebornConf celebornConf = Utils.toCelebornConf(configuration);
     RemoteShuffleResultPartitionFactory resultPartitionFactory =
         new RemoteShuffleResultPartitionFactory(
             configuration, celebornConf, resultPartitionManager, networkBufferPool, bufferSize);

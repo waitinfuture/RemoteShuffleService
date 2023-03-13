@@ -36,8 +36,8 @@ import org.slf4j.LoggerFactory;
 
 import org.apache.celeborn.client.LifecycleManager;
 import org.apache.celeborn.common.CelebornConf;
-import org.apache.celeborn.plugin.flink.utils.FlinkUtils;
 import org.apache.celeborn.plugin.flink.utils.ThreadUtils;
+import org.apache.celeborn.plugin.flink.utils.Utils;
 
 public class RemoteShuffleMaster implements ShuffleMaster<RemoteShuffleDescriptor> {
   private static final Logger LOG = LoggerFactory.getLogger(RemoteShuffleMaster.class);
@@ -64,9 +64,8 @@ public class RemoteShuffleMaster implements ShuffleMaster<RemoteShuffleDescripto
       synchronized (RemoteShuffleMaster.class) {
         if (lifecycleManager == null) {
           // use first jobID as celeborn shared appId for all other flink jobs
-          celebornAppId = FlinkUtils.toCelebornAppId(jobID);
-          CelebornConf celebornConf =
-              FlinkUtils.toCelebornConf(shuffleMasterContext.getConfiguration());
+          celebornAppId = Utils.toCelebornAppId(jobID);
+          CelebornConf celebornConf = Utils.toCelebornConf(shuffleMasterContext.getConfiguration());
           lifecycleManager = new LifecycleManager(celebornAppId, celebornConf);
         }
       }

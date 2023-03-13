@@ -78,7 +78,7 @@ public class RemoteShuffleInputGateFactory {
               PluginConf.getValue(flinkConf, PluginConf.MIN_MEMORY_PER_GATE)));
     }
 
-    this.numBuffersPerGate = Utils.checkedDownCast(configuredMemorySize / networkBufferSize);
+    this.numBuffersPerGate = Utils.castLongToInt(configuredMemorySize / networkBufferSize);
     if (numBuffersPerGate < MIN_BUFFERS_PER_GATE) {
       throw new IllegalArgumentException(
           String.format(

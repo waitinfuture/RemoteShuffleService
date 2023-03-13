@@ -86,7 +86,7 @@ public class RemoteShuffleResultPartitionFactory {
               PluginConf.MEMORY_PER_RESULT_PARTITION.name, minConfiguredMemorySize));
     }
 
-    this.numBuffersPerPartition = Utils.checkedDownCast(configuredMemorySize / networkBufferSize);
+    this.numBuffersPerPartition = Utils.castLongToInt(configuredMemorySize / networkBufferSize);
     if (numBuffersPerPartition < MIN_BUFFERS_PER_PARTITION) {
       throw new IllegalArgumentException(
           String.format(

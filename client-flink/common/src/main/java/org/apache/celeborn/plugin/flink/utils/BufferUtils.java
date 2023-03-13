@@ -60,18 +60,10 @@ public class BufferUtils {
 
   public static void setBufferHeader(
       ByteBuf byteBuf, Buffer.DataType dataType, boolean isCompressed, int dataLength) {
-    byteBuf.writerIndex(0);
-    byteBuf.writeInt(0);
-    byteBuf.writeInt(0);
-    byteBuf.writeInt(0);
-    byteBuf.writeInt(0);
+    byteBuf.writerIndex(HEADER_LENGTH_PREFIX);
     byteBuf.writeByte(dataType.ordinal());
     byteBuf.writeBoolean(isCompressed);
     byteBuf.writeInt(dataLength);
-  }
-
-  public static BufferHeader getBufferHeader(Buffer buffer, int position) {
-    return getBufferHeader(buffer, position, false);
   }
 
   public static BufferHeader getBufferHeader(Buffer buffer, int position, boolean isFirst) {

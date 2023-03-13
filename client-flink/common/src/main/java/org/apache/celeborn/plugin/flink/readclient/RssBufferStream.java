@@ -84,8 +84,8 @@ public class RssBufferStream {
           @Override
           public void onSuccess(ByteBuffer response) {
             StreamHandle streamHandle = (StreamHandle) Message.decode(response);
-            RssBufferStream.this.streamId = streamHandle.streamId;
-            clientFactory.registerSupplier(RssBufferStream.this.streamId, supplier);
+            streamId = streamHandle.streamId;
+            clientFactory.registerSupplier(streamId, supplier);
             mapShuffleClient
                 .getReadClientHandler()
                 .registerHandler(streamId, messageConsumer, client);
@@ -100,7 +100,7 @@ public class RssBufferStream {
   }
 
   public void addCredit(ReadAddCredit addCredit) {
-    this.client
+    client
         .getChannel()
         .writeAndFlush(addCredit)
         .addListener(
@@ -110,7 +110,7 @@ public class RssBufferStream {
               } else {
                 logger.warn(
                     "Send ReadAddCredit to {} failed, detail {}",
-                    this.client.getSocketAddress().toString(),
+                    client.getSocketAddress().toString(),
                     future.cause());
               }
             });
@@ -146,6 +146,6 @@ public class RssBufferStream {
   }
 
   public void close() {
-    clientFactory.unregisterSupplier(this.getStreamId());
+    clientFactory.unregisterSupplier(getStreamId());
   }
 }

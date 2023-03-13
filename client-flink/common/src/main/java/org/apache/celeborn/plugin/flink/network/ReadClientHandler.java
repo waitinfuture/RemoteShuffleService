@@ -58,7 +58,7 @@ public class ReadClientHandler extends BaseMessageHandler {
       logger.debug("received streamId: {}, msg :{}", streamId, msg);
       handler.accept(msg);
     } else {
-      logger.warn("Unexpected streamId received: {}", streamId);
+      logger.error("Unexpected streamId received: {}", streamId);
     }
   }
 
