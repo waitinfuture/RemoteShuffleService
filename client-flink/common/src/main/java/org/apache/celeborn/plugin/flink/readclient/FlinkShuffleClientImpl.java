@@ -171,7 +171,7 @@ public class FlinkShuffleClientImpl extends ShuffleClientImpl {
       int shuffleId,
       int mapId,
       int attemptId,
-      int partitionId,
+      int subPartitionId,
       ByteBuf data,
       PartitionLocation location,
       Runnable closeCallBack)
@@ -201,19 +201,19 @@ public class FlinkShuffleClientImpl extends ShuffleClientImpl {
     int totalLength = data.readableBytes();
     data.markWriterIndex();
     data.writerIndex(0);
-    data.writeInt(partitionId);
+    data.writeInt(subPartitionId);
     data.writeInt(attemptId);
     data.writeInt(nextBatchId);
     data.writeInt(totalLength - BATCH_HEADER_SIZE);
     data.resetWriterIndex();
     logger.debug(
-        "Do push data byteBuf size {} for app {} shuffle {} map {} attempt {} reduce {} batch {}.",
+        "Do push data byteBuf size {} for app {} shuffle {} map {} attempt {} subPartitionId {} batch {}.",
         totalLength,
         applicationId,
         shuffleId,
         mapId,
         attemptId,
-        partitionId,
+        subPartitionId,
         nextBatchId);
     // check limit
     limitMaxInFlight(mapKey, pushState, location.hostAndPushPort());
@@ -277,11 +277,11 @@ public class FlinkShuffleClientImpl extends ShuffleClientImpl {
       client.pushData(pushData, pushDataTimeout, callback, closeCallBack);
     } catch (Exception e) {
       logger.error(
-          "Exception raised while pushing data byteBuf for shuffle {} map {} attempt {} partitionId {} batch {} location {}.",
+          "Exception raised while pushing data byteBuf for shuffle {} map {} attempt {} subPartitionId {} batch {} location {}.",
           shuffleId,
           mapId,
           attemptId,
-          partitionId,
+          subPartitionId,
           nextBatchId,
           location,
           e);
