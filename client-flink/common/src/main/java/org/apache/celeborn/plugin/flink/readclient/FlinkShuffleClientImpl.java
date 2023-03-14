@@ -106,7 +106,7 @@ public class FlinkShuffleClientImpl extends ShuffleClientImpl {
     this.flinkTransportClientFactory = new FlinkTransportClientFactory(context);
   }
 
-  public RssBufferStream readBufferedPartition(
+  public RssBufferStream readMapPartition(
       String applicationId,
       int shuffleId,
       int partitionId,
@@ -132,28 +132,28 @@ public class FlinkShuffleClientImpl extends ShuffleClientImpl {
 
   @Override
   protected ReduceFileGroups updateFileGroup(
-      String applicationId, String shuffleKey, int shuffleId, int partitionId) throws IOException {
+      String applicationId, String shuffleKey, int shuffleId, int mapPartitionId) throws IOException {
     ReduceFileGroups reduceFileGroups =
         reduceFileGroupsMap.computeIfAbsent(shuffleId, (id) -> new ReduceFileGroups());
     if (reduceFileGroups.partitionIds != null
-        && reduceFileGroups.partitionIds.contains(partitionId)) {
+        && reduceFileGroups.partitionIds.contains(mapPartitionId)) {
       logger.debug(
           "use cached file groups for partition: {}",
-          Utils.makeReducerKey(applicationId, shuffleId, partitionId));
+          Utils.makeReducerKey(applicationId, shuffleId, mapPartitionId));
     } else {
       synchronized (reduceFileGroups) {
         if (reduceFileGroups.partitionIds != null
-            && reduceFileGroups.partitionIds.contains(partitionId)) {
+            && reduceFileGroups.partitionIds.contains(mapPartitionId)) {
           logger.debug(
               "use cached file groups for partition: {}",
-              Utils.makeReducerKey(applicationId, shuffleId, partitionId));
+              Utils.makeReducerKey(applicationId, shuffleId, mapPartitionId));
         } else {
           // refresh file groups
           ReduceFileGroups newGroups = loadFileGroupInternal(applicationId, shuffleKey, shuffleId);
-          if (newGroups == null || !newGroups.partitionIds.contains(partitionId)) {
+          if (newGroups == null || !newGroups.partitionIds.contains(mapPartitionId)) {
             throw new IOException(
                 "shuffle data lost for partition: "
-                    + Utils.makeReducerKey(applicationId, shuffleId, partitionId));
+                    + Utils.makeReducerKey(applicationId, shuffleId, mapPartitionId));
           }
           reduceFileGroups.update(newGroups);
         }

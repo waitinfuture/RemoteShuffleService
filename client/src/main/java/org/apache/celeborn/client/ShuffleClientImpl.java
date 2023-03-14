@@ -1328,7 +1328,6 @@ public class ShuffleClientImpl extends ShuffleClient {
 
   protected ReduceFileGroups loadFileGroupInternal(
       String applicationId, String shuffleKey, int shuffleId) {
-    {
       long getReducerFileGroupStartTime = System.nanoTime();
       try {
         if (driverRssMetaService == null) {
@@ -1369,7 +1368,6 @@ public class ShuffleClientImpl extends ShuffleClient {
         logger.error("Exception raised while call GetReducerFileGroup for {}.", shuffleKey, e);
       }
       return null;
-    }
   }
 
   protected ReduceFileGroups updateFileGroup(

@@ -36,10 +36,10 @@ import org.apache.celeborn.plugin.flink.readclient.RssBufferStream;
 public class RemoteBufferStreamReader extends CreditListener {
   private static Logger logger = LoggerFactory.getLogger(RemoteBufferStreamReader.class);
   private TransferBufferPool bufferPool;
-  private FlinkShuffleClientImpl client;
+  private FlinkShuffleClientImpl shuffleClient;
   private String applicationId;
   private int shuffleId;
-  private int partitionId;
+  private int mapPartitionId;
   private int subPartitionIndexStart;
   private int subPartitionIndexEnd;
   private boolean isOpen;
@@ -50,7 +50,7 @@ public class RemoteBufferStreamReader extends CreditListener {
   private Consumer<RequestMessage> messageConsumer;
 
   public RemoteBufferStreamReader(
-      FlinkShuffleClientImpl client,
+      FlinkShuffleClientImpl shuffleClient,
       ShuffleResourceDescriptor shuffleDescriptor,
       String applicationId,
       int startSubIdx,
@@ -58,10 +58,10 @@ public class RemoteBufferStreamReader extends CreditListener {
       TransferBufferPool bufferPool,
       Consumer<ByteBuf> dataListener,
       Consumer<Throwable> failureListener) {
-    this.client = client;
+    this.shuffleClient = shuffleClient;
     this.applicationId = applicationId;
     this.shuffleId = shuffleDescriptor.getShuffleId();
-    this.partitionId = shuffleDescriptor.getPartitionId();
+    this.mapPartitionId = shuffleDescriptor.getMapPartitionId();
     this.bufferPool = bufferPool;
     this.subPartitionIndexStart = startSubIdx;
     this.subPartitionIndexEnd = endSubIdx;
@@ -81,11 +81,11 @@ public class RemoteBufferStreamReader extends CreditListener {
 
   public void open(int initialCredit) throws IOException {
     try {
-      this.bufferStream =
-          client.readBufferedPartition(
-              applicationId, shuffleId, partitionId, subPartitionIndexStart, subPartitionIndexEnd);
+      bufferStream =
+          shuffleClient.readMapPartition(
+              applicationId, shuffleId, mapPartitionId, subPartitionIndexStart, subPartitionIndexEnd);
       bufferStream.open(
-          RemoteBufferStreamReader.this::requestBuffer, initialCredit, client, messageConsumer);
+          RemoteBufferStreamReader.this::requestBuffer, initialCredit, shuffleClient, messageConsumer);
     } catch (InterruptedException e) {
       throw new RuntimeException("Failed to openStream.", e);
     }
@@ -96,14 +96,14 @@ public class RemoteBufferStreamReader extends CreditListener {
     isOpen = false;
     // need set closed first before remove Handler
     closed = true;
-    if (this.bufferStream != null) {
-      client.getReadClientHandler().removeHandler(this.bufferStream.getStreamId());
+    if (bufferStream != null) {
+      shuffleClient.getReadClientHandler().removeHandler(bufferStream.getStreamId());
       bufferStream.close();
     } else {
       logger.warn(
-          "bufferStream is null when closed, shuffleId: {}, partitionId: {}",
+          "bufferStream is null when closed, shuffleId: {}, mapPartitionId: {}",
           shuffleId,
-          partitionId);
+        mapPartitionId);
     }
   }
 
@@ -113,7 +113,7 @@ public class RemoteBufferStreamReader extends CreditListener {
 
   public void notifyAvailableCredits(int numCredits) {
     if (!closed) {
-      ReadAddCredit addCredit = new ReadAddCredit(this.bufferStream.getStreamId(), numCredits);
+      ReadAddCredit addCredit = new ReadAddCredit(bufferStream.getStreamId(), numCredits);
       bufferStream.addCredit(addCredit);
     }
   }

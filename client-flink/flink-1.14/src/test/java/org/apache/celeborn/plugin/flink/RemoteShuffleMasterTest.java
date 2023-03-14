@@ -92,7 +92,7 @@ public class RemoteShuffleMasterTest {
 
     LOG.info("remoteShuffleDescriptor:", remoteShuffleDescriptor);
     Assert.assertEquals(0, mapPartitionShuffleDescriptor.getShuffleId());
-    Assert.assertEquals(0, mapPartitionShuffleDescriptor.getPartitionId());
+    Assert.assertEquals(0, mapPartitionShuffleDescriptor.getMapPartitionId());
     Assert.assertEquals(0, mapPartitionShuffleDescriptor.getAttemptId());
     Assert.assertEquals(0, mapPartitionShuffleDescriptor.getMapId());
 
@@ -117,7 +117,7 @@ public class RemoteShuffleMasterTest {
         remoteShuffleDescriptor.getShuffleResource().getMapPartitionShuffleDescriptor();
     Assert.assertEquals(0, mapPartitionShuffleDescriptor.getShuffleId());
     Assert.assertEquals(
-        PackedPartitionId.packedPartitionId(1, 1), mapPartitionShuffleDescriptor.getPartitionId());
+        PackedPartitionId.packedPartitionId(1, 1), mapPartitionShuffleDescriptor.getMapPartitionId());
     Assert.assertEquals(1, mapPartitionShuffleDescriptor.getAttemptId());
     Assert.assertEquals(1, mapPartitionShuffleDescriptor.getMapId());
   }

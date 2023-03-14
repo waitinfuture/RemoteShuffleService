@@ -29,13 +29,13 @@ public class ShuffleResourceDescriptor implements Serializable {
   private final int shuffleId;
   private final int mapId;
   private final int attemptId;
-  private final int partitionId;
+  private final int mapPartitionId;
 
   public ShuffleResourceDescriptor(LifecycleManager.ShuffleTask shuffleTask) {
     this.shuffleId = shuffleTask.shuffleId();
     this.mapId = shuffleTask.mapId();
     this.attemptId = shuffleTask.attemptId();
-    this.partitionId = PackedPartitionId.packedPartitionId(mapId, attemptId);
+    this.mapPartitionId = PackedPartitionId.packedPartitionId(mapId, attemptId);
   }
 
   public int getShuffleId() {
@@ -50,8 +50,8 @@ public class ShuffleResourceDescriptor implements Serializable {
     return attemptId;
   }
 
-  public int getPartitionId() {
-    return partitionId;
+  public int getMapPartitionId() {
+    return mapPartitionId;
   }
 
   @Override
@@ -60,7 +60,7 @@ public class ShuffleResourceDescriptor implements Serializable {
     sb.append("shuffleId=").append(shuffleId);
     sb.append(", mapId=").append(mapId);
     sb.append(", attemptId=").append(attemptId);
-    sb.append(", partitionId=").append(partitionId);
+    sb.append(", mapPartitionId=").append(mapPartitionId);
     sb.append('}');
     return sb.toString();
   }
