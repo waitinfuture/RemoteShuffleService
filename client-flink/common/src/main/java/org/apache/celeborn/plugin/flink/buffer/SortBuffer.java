@@ -44,7 +44,7 @@ public interface SortBuffer {
    * order and returns {@link BufferWithSubpartitionId} which contains the copied data and the
    * corresponding channel index.
    */
-  BufferWithSubpartitionId copyIntoSegment(MemorySegment target, BufferRecycler recycler, int offset);
+  BufferWithSubpartitionId copyOut(MemorySegment target, BufferRecycler recycler, int offset);
 
   /** Returns the number of records written to this {@link SortBuffer}. */
   long numRecords();

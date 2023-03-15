@@ -100,7 +100,7 @@ public class PartitionSortedBufferSuitJ {
     while (sortBuffer.hasRemaining()) {
       MemorySegment readBuffer = MemorySegmentFactory.allocateUnpooledSegment(bufferSize);
       SortBuffer.BufferWithSubpartitionId bufferAndChannel =
-          sortBuffer.copyIntoSegment(readBuffer, ignore -> {}, 0);
+          sortBuffer.copyOut(readBuffer, ignore -> {}, 0);
       int subpartition = bufferAndChannel.getSubpartitionId();
       buffersRead[subpartition].add(bufferAndChannel.getBuffer());
       numBytesRead[subpartition] += bufferAndChannel.getBuffer().readableBytes();
@@ -188,7 +188,7 @@ public class PartitionSortedBufferSuitJ {
       SortBuffer sortBuffer, ByteBuffer expectedBuffer, int expectedChannel, int bufferSize) {
     MemorySegment segment = MemorySegmentFactory.allocateUnpooledSegment(bufferSize);
     SortBuffer.BufferWithSubpartitionId bufferWithSubpartitionId =
-        sortBuffer.copyIntoSegment(segment, ignore -> {}, 0);
+        sortBuffer.copyOut(segment, ignore -> {}, 0);
     assertEquals(expectedChannel, bufferWithSubpartitionId.getSubpartitionId());
     assertEquals(expectedBuffer, bufferWithSubpartitionId.getBuffer().getNioBufferReadable());
   }
@@ -275,7 +275,7 @@ public class PartitionSortedBufferSuitJ {
     sortBuffer.append(ByteBuffer.allocate(1), 0, Buffer.DataType.DATA_BUFFER);
 
     assertTrue(sortBuffer.hasRemaining());
-    sortBuffer.copyIntoSegment(
+    sortBuffer.copyOut(
         MemorySegmentFactory.allocateUnpooledSegment(bufferSize), ignore -> {}, 0);
   }
 
@@ -291,7 +291,7 @@ public class PartitionSortedBufferSuitJ {
     sortBuffer.release();
     assertFalse(sortBuffer.hasRemaining());
 
-    sortBuffer.copyIntoSegment(
+    sortBuffer.copyOut(
         MemorySegmentFactory.allocateUnpooledSegment(bufferSize), ignore -> {}, 0);
   }
 
@@ -303,7 +303,7 @@ public class PartitionSortedBufferSuitJ {
     sortBuffer.finish();
 
     assertFalse(sortBuffer.hasRemaining());
-    sortBuffer.copyIntoSegment(
+    sortBuffer.copyOut(
         MemorySegmentFactory.allocateUnpooledSegment(bufferSize), ignore -> {}, 0);
   }
 

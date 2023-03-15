@@ -223,21 +223,21 @@ public class RemoteShuffleResultPartition extends ResultPartition {
       try {
         outputGate.regionStart(isBroadcast);
         while (sortBuffer.hasRemaining()) {
-          MemorySegment segment = outputGate.getBufferPool().requestMemorySegmentBlocking();
+          MemorySegment targetBuffer = outputGate.getBufferPool().requestMemorySegmentBlocking();
           SortBuffer.BufferWithSubpartitionId bufferWithSubpartitionId;
           try {
             bufferWithSubpartitionId =
-                sortBuffer.copyIntoSegment(
-                    segment, outputGate.getBufferPool(), BufferUtils.HEADER_LENGTH);
+                sortBuffer.copyOut(
+                    targetBuffer, outputGate.getBufferPool(), BufferUtils.HEADER_LENGTH);
           } catch (Throwable t) {
-            outputGate.getBufferPool().recycle(segment);
+            outputGate.getBufferPool().recycle(targetBuffer);
             throw new FlinkRuntimeException("Shuffle write failure.", t);
           }
 
           Buffer buffer = bufferWithSubpartitionId.getBuffer();
-          int subpartitionIndex = bufferWithSubpartitionId.getSubpartitionId();
+          int subpartitionId = bufferWithSubpartitionId.getSubpartitionId();
           updateStatistics(bufferWithSubpartitionId.getBuffer());
-          writeCompressedBufferIfPossible(buffer, subpartitionIndex);
+          writeCompressedBufferIfPossible(buffer, subpartitionId);
         }
         outputGate.regionFinish();
       } catch (InterruptedException e) {
@@ -247,7 +247,7 @@ public class RemoteShuffleResultPartition extends ResultPartition {
     releaseSortBuffer(sortBuffer);
   }
 
-  private void writeCompressedBufferIfPossible(Buffer buffer, int targetSubpartition)
+  private void writeCompressedBufferIfPossible(Buffer buffer, int subpartitionId)
       throws InterruptedException {
     Buffer compressedBuffer = null;
     try {
@@ -268,7 +268,7 @@ public class RemoteShuffleResultPartition extends ResultPartition {
         compressedBuffer.recycleBuffer();
       }
     }
-    outputGate.write(buffer, targetSubpartition);
+    outputGate.write(buffer, subpartitionId);
   }
 
   private void updateStatistics(Buffer buffer) {
