@@ -99,9 +99,9 @@ public class PartitionSortedBufferSuitJ {
     // read all data from the sort buffer
     while (sortBuffer.hasRemaining()) {
       MemorySegment readBuffer = MemorySegmentFactory.allocateUnpooledSegment(bufferSize);
-      SortBuffer.BufferWithChannel bufferAndChannel =
+      SortBuffer.BufferWithSubpartitionId bufferAndChannel =
           sortBuffer.copyIntoSegment(readBuffer, ignore -> {}, 0);
-      int subpartition = bufferAndChannel.getChannelIndex();
+      int subpartition = bufferAndChannel.getSubpartitionId();
       buffersRead[subpartition].add(bufferAndChannel.getBuffer());
       numBytesRead[subpartition] += bufferAndChannel.getBuffer().readableBytes();
     }
@@ -187,10 +187,10 @@ public class PartitionSortedBufferSuitJ {
   private void checkReadResult(
       SortBuffer sortBuffer, ByteBuffer expectedBuffer, int expectedChannel, int bufferSize) {
     MemorySegment segment = MemorySegmentFactory.allocateUnpooledSegment(bufferSize);
-    SortBuffer.BufferWithChannel bufferWithChannel =
+    SortBuffer.BufferWithSubpartitionId bufferWithSubpartitionId =
         sortBuffer.copyIntoSegment(segment, ignore -> {}, 0);
-    assertEquals(expectedChannel, bufferWithChannel.getChannelIndex());
-    assertEquals(expectedBuffer, bufferWithChannel.getBuffer().getNioBufferReadable());
+    assertEquals(expectedChannel, bufferWithSubpartitionId.getSubpartitionId());
+    assertEquals(expectedBuffer, bufferWithSubpartitionId.getBuffer().getNioBufferReadable());
   }
 
   @Test(expected = IllegalArgumentException.class)

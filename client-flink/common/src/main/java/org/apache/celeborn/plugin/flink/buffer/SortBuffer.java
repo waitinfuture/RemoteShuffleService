@@ -37,14 +37,14 @@ public interface SortBuffer {
    * of the source buffer is copied to this {@link SortBuffer} successfully, otherwise if returns
    * false, nothing will be copied.
    */
-  boolean append(ByteBuffer source, int targetChannel, Buffer.DataType dataType) throws IOException;
+  boolean append(ByteBuffer source, int subpartitionId, Buffer.DataType dataType) throws IOException;
 
   /**
    * Copies data from this {@link SortBuffer} to the target {@link MemorySegment} in channel index
-   * order and returns {@link BufferWithChannel} which contains the copied data and the
+   * order and returns {@link BufferWithSubpartitionId} which contains the copied data and the
    * corresponding channel index.
    */
-  BufferWithChannel copyIntoSegment(MemorySegment target, BufferRecycler recycler, int offset);
+  BufferWithSubpartitionId copyIntoSegment(MemorySegment target, BufferRecycler recycler, int offset);
 
   /** Returns the number of records written to this {@link SortBuffer}. */
   long numRecords();
@@ -68,15 +68,15 @@ public interface SortBuffer {
   boolean isReleased();
 
   /** Buffer and the corresponding channel index returned to reader. */
-  class BufferWithChannel {
+  class BufferWithSubpartitionId {
 
     private final Buffer buffer;
 
-    private final int channelIndex;
+    private final int subpartitionId;
 
-    BufferWithChannel(Buffer buffer, int channelIndex) {
+    BufferWithSubpartitionId(Buffer buffer, int subpartitionId) {
       this.buffer = checkNotNull(buffer);
-      this.channelIndex = channelIndex;
+      this.subpartitionId = subpartitionId;
     }
 
     /** Get {@link Buffer}. */
@@ -85,8 +85,8 @@ public interface SortBuffer {
     }
 
     /** Get channel index. */
-    public int getChannelIndex() {
-      return channelIndex;
+    public int getSubpartitionId() {
+      return subpartitionId;
     }
   }
 }

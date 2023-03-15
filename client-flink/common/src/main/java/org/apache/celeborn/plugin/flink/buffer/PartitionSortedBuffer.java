@@ -134,14 +134,14 @@ public class PartitionSortedBuffer implements SortBuffer {
       checkArgument(customReadOrder.length == numSubpartitions, "Illegal data read order.");
       System.arraycopy(customReadOrder, 0, this.subpartitionReadOrder, 0, numSubpartitions);
     } else {
-      for (int channel = 0; channel < numSubpartitions; ++channel) {
-        this.subpartitionReadOrder[channel] = channel;
+      for (int i = 0; i < numSubpartitions; ++i) {
+        this.subpartitionReadOrder[i] = i;
       }
     }
   }
 
   @Override
-  public boolean append(ByteBuffer source, int targetChannel, DataType dataType)
+  public boolean append(ByteBuffer source, int subpartitionId, DataType dataType)
       throws IOException {
     checkArgument(source.hasRemaining(), "Cannot append empty data.");
     checkState(!isFinished, "Sort buffer is already finished.");
@@ -155,7 +155,7 @@ public class PartitionSortedBuffer implements SortBuffer {
     }
 
     // write the index entry and record or event data
-    writeIndex(targetChannel, totalBytes, dataType);
+    writeIndex(subpartitionId, totalBytes, dataType);
     writeRecord(source);
 
     ++numTotalRecords;
@@ -199,20 +199,20 @@ public class PartitionSortedBuffer implements SortBuffer {
     }
   }
 
-  private boolean allocateBuffersForRecord(int numRecordBytes) throws IOException {
-    int numBytesRequired = INDEX_ENTRY_SIZE + numRecordBytes;
-    int availableBytes = writeSegmentIndex == buffers.size() ? 0 : bufferSize - writeSegmentOffset;
+  private boolean allocateBuffersForRecord(int recordBytes) throws IOException {
+    int numBytesRequired = INDEX_ENTRY_SIZE + recordBytes;
+    int currentBufferAvailableBytes = writeSegmentIndex == buffers.size() ? 0 : bufferSize - writeSegmentOffset;
 
     // return directly if current available bytes is adequate
-    if (availableBytes >= numBytesRequired) {
+    if (currentBufferAvailableBytes >= numBytesRequired) {
       return true;
     }
 
     // skip the remaining free space if the available bytes is not enough for an index entry
-    if (availableBytes < INDEX_ENTRY_SIZE) {
-      updateWriteSegmentIndexAndOffset(availableBytes);
-      availableBytes = 0;
+    if (currentBufferAvailableBytes < INDEX_ENTRY_SIZE) {
+      updateWriteSegmentIndexAndOffset(currentBufferAvailableBytes);
     }
+    int availableBytes = (buffers.size() - writeSegmentIndex) * bufferSize - writeSegmentOffset;
 
     // allocate exactly enough buffers for the appended record
     do {
@@ -269,7 +269,7 @@ public class PartitionSortedBuffer implements SortBuffer {
   }
 
   @Override
-  public BufferWithChannel copyIntoSegment(
+  public BufferWithSubpartitionId copyIntoSegment(
       MemorySegment target, BufferRecycler recycler, int offset) {
     synchronized (lock) {
       checkState(hasRemaining(), "No data remaining.");
@@ -320,7 +320,7 @@ public class PartitionSortedBuffer implements SortBuffer {
 
       numTotalBytesRead += numBytesCopied;
       Buffer buffer = new NetworkBuffer(target, recycler, bufferDataType, numBytesCopied + offset);
-      return new BufferWithChannel(buffer, channelIndex);
+      return new BufferWithSubpartitionId(buffer, channelIndex);
     }
   }
 

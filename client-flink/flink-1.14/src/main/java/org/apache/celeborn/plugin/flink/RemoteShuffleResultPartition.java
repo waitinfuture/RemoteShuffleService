@@ -224,9 +224,9 @@ public class RemoteShuffleResultPartition extends ResultPartition {
         outputGate.regionStart(isBroadcast);
         while (sortBuffer.hasRemaining()) {
           MemorySegment segment = outputGate.getBufferPool().requestMemorySegmentBlocking();
-          SortBuffer.BufferWithChannel bufferWithChannel;
+          SortBuffer.BufferWithSubpartitionId bufferWithSubpartitionId;
           try {
-            bufferWithChannel =
+            bufferWithSubpartitionId =
                 sortBuffer.copyIntoSegment(
                     segment, outputGate.getBufferPool(), BufferUtils.HEADER_LENGTH);
           } catch (Throwable t) {
@@ -234,9 +234,9 @@ public class RemoteShuffleResultPartition extends ResultPartition {
             throw new FlinkRuntimeException("Shuffle write failure.", t);
           }
 
-          Buffer buffer = bufferWithChannel.getBuffer();
-          int subpartitionIndex = bufferWithChannel.getChannelIndex();
-          updateStatistics(bufferWithChannel.getBuffer());
+          Buffer buffer = bufferWithSubpartitionId.getBuffer();
+          int subpartitionIndex = bufferWithSubpartitionId.getSubpartitionId();
+          updateStatistics(bufferWithSubpartitionId.getBuffer());
           writeCompressedBufferIfPossible(buffer, subpartitionIndex);
         }
         outputGate.regionFinish();
