@@ -207,9 +207,15 @@ public class ShuffleClientImpl extends ShuffleClient {
     PartitionLocation loc = request.loc;
     StatusCode cause = request.cause;
     int partitionId = loc.getId();
-    while (request.reviveStatus == StatusCode.REVIVE_INITIALIZED) {
+    long reviveWaitTime =
+        conf.clientRpcRequestPartitionLocationsRpcAskTimeout().duration().toMillis() + 1000;
+    final long delta = 50;
+    long accumulatedTime = 0;
+    while (request.reviveStatus == StatusCode.REVIVE_INITIALIZED
+        && accumulatedTime <= reviveWaitTime) {
       try {
-        Thread.sleep(10);
+        Thread.sleep(50);
+        accumulatedTime += delta;
       } catch (InterruptedException e) {
         wrappedCallback.onFailure(
             new CelebornIOException(cause + " then revive but " + StatusCode.REVIVE_FAILED));
@@ -311,7 +317,7 @@ public class ShuffleClientImpl extends ShuffleClient {
     final long delta = 50;
     long accumulatedTime = 0;
     int index = 0;
-    while (index < reviveRequests.length && accumulatedTime < reviveWaitTime) {
+    while (index < reviveRequests.length && accumulatedTime <= reviveWaitTime) {
       ReviveRequest request = reviveRequests[index];
       DataBatches.DataBatch batch = batches.get(index);
       if (request.reviveStatus != StatusCode.REVIVE_INITIALIZED) {
@@ -357,6 +363,25 @@ public class ShuffleClientImpl extends ShuffleClient {
       }
     }
 
+    for (int i = index; i < reviveRequests.length; i++) {
+      ReviveRequest request = reviveRequests[index];
+      DataBatches.DataBatch batch = batches.get(i);
+      if (remainReviveTimes > 0) {
+        reviveFailedBatchesMap.add(batch);
+      } else {
+        String errorMsg =
+            String.format(
+                "Revive failed while pushing merged for shuffle %d map %d attempt %d partition %d batch %d location %s.",
+                shuffleId, mapId, attemptId, request.partitionId, oldGroupedBatchId, batch.loc);
+        pushState.exception.compareAndSet(
+            null,
+            new CelebornIOException(
+                errorMsg,
+                new CelebornIOException(cause + " then revive but " + StatusCode.REVIVE_FAILED)));
+        return;
+      }
+    }
+
     for (Map.Entry<String, DataBatches> entry : newDataBatchesMap.entrySet()) {
       String addressPair = entry.getKey();
       DataBatches newDataBatches = entry.getValue();
@@ -373,7 +398,6 @@ public class ShuffleClientImpl extends ShuffleClient {
     if (reviveFailedBatchesMap.isEmpty()) {
       pushState.removeBatch(oldGroupedBatchId, batches.get(0).loc.hostAndPushPort());
     } else {
-
       pushDataRetryPool.submit(
           () ->
               submitRetryPushMergedData(
@@ -1772,7 +1796,6 @@ public class ShuffleClientImpl extends ShuffleClient {
                       }
                     }
 
-                    logger.info("filtered requests size" + filteredRequests.size());
                     if (!filteredRequests.isEmpty()) {
                       length = filteredRequests.size();
                       int[] mapIds = new int[length];
@@ -1801,7 +1824,6 @@ public class ShuffleClientImpl extends ShuffleClient {
                               epochs,
                               locs,
                               causes);
-                      logger.info("results is null ? " + (results == null));
                       if (results == null) {
                         for (ReviveRequest req : filteredRequests) {
                           req.reviveStatus = StatusCode.REVIVE_FAILED;
@@ -1833,7 +1855,6 @@ public class ShuffleClientImpl extends ShuffleClient {
         Set<ReviveRequest> requests =
             shuffleMap.computeIfAbsent(shuffleId, (id) -> ConcurrentHashMap.newKeySet());
         requests.add(request);
-        logger.info("added ReviveRequest, requests " + requests.size());
       }
     }
   }

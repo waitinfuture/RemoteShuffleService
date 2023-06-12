@@ -85,8 +85,8 @@ case class ChangeLocationsCallContext(
         } else {
           statuses(idx) = status
           newLocs(idx) = partitionLocationOpt.getOrElse(new PartitionLocation())
-          count += 1
         }
+        count += 1
       }
     })
     logInfo(
