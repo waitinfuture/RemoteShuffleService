@@ -196,18 +196,27 @@ public class ShuffleClientImpl extends ShuffleClient {
   private void submitRetryPushData(
       String applicationId,
       int shuffleId,
-      int mapId,
-      int attemptId,
       byte[] body,
       int batchId,
-      PartitionLocation loc,
       RpcResponseCallback wrappedCallback,
       PushState pushState,
-      StatusCode cause,
+      ReviveRequest request,
       int remainReviveTimes) {
+    int mapId = request.mapId;
+    int attemptId = request.attemptId;
+    PartitionLocation loc = request.loc;
+    StatusCode cause = request.cause;
     int partitionId = loc.getId();
-    if (!revive(
-        applicationId, shuffleId, mapId, attemptId, partitionId, loc.getEpoch(), loc, cause)) {
+    while (request.reviveStatus == StatusCode.REVIVE_INITIALIZED) {
+      try {
+        Thread.sleep(10);
+      } catch (InterruptedException e) {
+        wrappedCallback.onFailure(
+          new CelebornIOException(cause + " then revive but " + StatusCode.REVIVE_FAILED));
+        return;
+      }
+    }
+    if (request.reviveStatus != StatusCode.SUCCESS) {
       wrappedCallback.onFailure(
           new CelebornIOException(cause + " then revive but " + StatusCode.REVIVE_FAILED));
     } else if (mapperEnded(shuffleId, mapId, attemptId)) {
@@ -850,14 +859,11 @@ public class ShuffleClientImpl extends ShuffleClient {
                           submitRetryPushData(
                               applicationId,
                               shuffleId,
-                              mapId,
-                              attemptId,
                               body,
                               nextBatchId,
-                              loc,
                               this,
                               pushState,
-                              StatusCode.HARD_SPLIT,
+                              reviveRequest,
                               remainReviveTimes));
                 } else if (reason == StatusCode.PUSH_DATA_SUCCESS_MASTER_CONGESTED.getValue()) {
                   logger.debug(
@@ -926,19 +932,18 @@ public class ShuffleClientImpl extends ShuffleClient {
                 if (!pushStatusIsBlacklisted(cause)) {
                   remainReviveTimes = remainReviveTimes - 1;
                 }
+                ReviveRequest reviveRequest = new ReviveRequest(mapId, attemptId, partitionId, loc.getEpoch(), loc, StatusCode.HARD_SPLIT);
+                reviveManager.addRequest(applicationId, shuffleId, reviveRequest);
                 pushDataRetryPool.submit(
                     () ->
                         submitRetryPushData(
                             applicationId,
                             shuffleId,
-                            mapId,
-                            attemptId,
                             body,
                             nextBatchId,
-                            loc,
                             this,
                             pushState,
-                            cause,
+                            reviveRequest,
                             remainReviveTimes));
               } else {
                 pushState.removeBatch(nextBatchId, loc.hostAndPushPort());
