@@ -584,7 +584,7 @@ class LifecycleManager(appId: String, val conf: CelebornConf) extends RpcEndpoin
         logWarning(s"[handleReviveBatch] Mapper ended, mapId ${mapIds.get(
           idx)}, current attemptId ${attemptIds.get(idx)}, " +
           s"ended attemptId ${commitManager.getMapperAttempts(shuffleId)(mapIds.get(idx))}, shuffleId $shuffleId.")
-        contextWrapper.markMapperEnd(idx)
+        contextWrapper.markMapperEnd(mapIds.get(idx))
       } else {
         changePartitionManager.handleRequestPartitionLocation(
           contextWrapper,

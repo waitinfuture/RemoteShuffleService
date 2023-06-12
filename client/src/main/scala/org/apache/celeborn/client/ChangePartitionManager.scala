@@ -20,10 +20,8 @@ package org.apache.celeborn.client
 import java.util
 import java.util.{Set => JSet}
 import java.util.concurrent.{ConcurrentHashMap, ScheduledExecutorService, ScheduledFuture, TimeUnit}
-
 import scala.collection.JavaConverters._
 import scala.concurrent.duration.DurationInt
-
 import org.apache.celeborn.common.CelebornConf
 import org.apache.celeborn.common.internal.Logging
 import org.apache.celeborn.common.meta.WorkerInfo
@@ -32,7 +30,10 @@ import org.apache.celeborn.common.protocol.message.ControlMessages.WorkerResourc
 import org.apache.celeborn.common.protocol.message.StatusCode
 import org.apache.celeborn.common.util.{JavaUtils, ThreadUtils, Utils}
 
+import java.util.concurrent.atomic.AtomicLong
+
 case class ChangePartitionRequest(
+    uuid: Long,
     context: RequestLocationCallContext,
     applicationId: String,
     shuffleId: Int,
@@ -69,6 +70,8 @@ class ChangePartitionManager(
     }
 
   private var batchHandleChangePartition: Option[ScheduledFuture[_]] = _
+
+  private val atomicLong = new AtomicLong()
 
   def start(): Unit = {
     batchHandleChangePartition = batchHandleChangePartitionSchedulerThread.map {
@@ -142,6 +145,7 @@ class ChangePartitionManager(
       cause: Option[StatusCode] = None): Unit = {
 
     val changePartition = ChangePartitionRequest(
+      atomicLong.getAndAdd(1),
       context,
       applicationId,
       shuffleId,

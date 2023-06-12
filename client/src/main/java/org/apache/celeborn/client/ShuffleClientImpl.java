@@ -235,7 +235,7 @@ public class ShuffleClientImpl extends ShuffleClient {
       pushState.removeBatch(batchId, loc.hostAndPushPort());
     } else if (request.reviveStatus != StatusCode.SUCCESS) {
       wrappedCallback.onFailure(
-        new CelebornIOException(cause + " then revive but " + StatusCode.REVIVE_FAILED));
+        new CelebornIOException(cause + " then revive but " + StatusCode.REVIVE_FAILED + ", revive status " + request.reviveStatus));
     }
     else {
       PartitionLocation newLoc = reducePartitionMap.get(shuffleId).get(partitionId);

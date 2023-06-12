@@ -76,7 +76,6 @@ case class ChangeLocationsCallContext(
       partitionId: Int,
       status: StatusCode,
       partitionLocationOpt: Option[PartitionLocation]): Unit = this.synchronized {
-    logInfo(s"reply, shuffleId ${shuffleId}, partitionId ${partitionId}")
     0 until mapIds.size() foreach (idx => {
       if (mapIds.get(idx) == mapId && attemptIds.get(idx) == attemptId && partitionIds.get(
           idx) == partitionId) {
@@ -85,12 +84,12 @@ case class ChangeLocationsCallContext(
         } else {
           statuses(idx) = status
           newLocs(idx) = partitionLocationOpt.getOrElse(new PartitionLocation())
+          count += 1
         }
-        count += 1
       }
     })
     logInfo(
-      s"after reply, shuffleId ${shuffleId}, mapIds.size is ${mapIds.size()}, count is ${count},")
+      s"after reply, shuffleId ${shuffleId}, mapId ${mapId}, attemptId ${attemptId}, partitionId ${partitionId}, mapIds.size is ${mapIds.size()}, count is ${count},")
 
     if (count == mapIds.size()) {
       doReply()
