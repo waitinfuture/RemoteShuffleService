@@ -563,12 +563,18 @@ class LifecycleManager(appId: String, val conf: CelebornConf) extends RpcEndpoin
       oldEpochs: util.List[Integer],
       oldPartitions: util.List[PartitionLocation],
       causes: util.List[StatusCode]): Unit = {
-    val contextWrapper = ChangeLocationsCallContext(shuffleId, context, mapIds, attemptIds, partitionIds)
+    val contextWrapper =
+      ChangeLocationsCallContext(shuffleId, context, mapIds, attemptIds, partitionIds)
     // If shuffle not registered, reply ShuffleNotRegistered and return
     if (!registeredShuffle.contains(shuffleId)) {
       logError(s"[handleReviveBatch] shuffle $shuffleId not registered!")
       0 until mapIds.size() foreach (idx => {
-        contextWrapper.reply(mapIds.get(idx), attemptIds.get(idx), partitionIds.get(idx), StatusCode.SHUFFLE_NOT_REGISTERED, None)
+        contextWrapper.reply(
+          mapIds.get(idx),
+          attemptIds.get(idx),
+          partitionIds.get(idx),
+          StatusCode.SHUFFLE_NOT_REGISTERED,
+          None)
       })
       return
     }

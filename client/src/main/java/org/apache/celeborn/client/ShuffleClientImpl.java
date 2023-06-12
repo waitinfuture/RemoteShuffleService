@@ -273,6 +273,25 @@ public class ShuffleClientImpl extends ShuffleClient {
     }
   }
 
+  public ReviveRequest[] addAndGetReviveRequests(
+      String appId,
+      int shuffleId,
+      int mapId,
+      int attemptId,
+      ArrayList<DataBatches.DataBatch> batches,
+      StatusCode cause) {
+    ReviveRequest[] reviveRequests = new ReviveRequest[batches.size()];
+    for (int i = 0; i < batches.size(); i++) {
+      DataBatches.DataBatch batch = batches.get(i);
+      PartitionLocation loc = batch.loc;
+      ReviveRequest reviveRequest =
+          new ReviveRequest(mapId, attemptId, loc.getId(), loc.getEpoch(), loc, cause);
+      reviveManager.addRequest(appId, shuffleId, reviveRequest);
+      reviveRequests[i] = reviveRequest;
+    }
+    return reviveRequests;
+  }
+
   private void submitRetryPushMergedData(
       PushState pushState,
       String applicationId,
@@ -282,56 +301,59 @@ public class ShuffleClientImpl extends ShuffleClient {
       ArrayList<DataBatches.DataBatch> batches,
       StatusCode cause,
       Integer oldGroupedBatchId,
+      ReviveRequest[] reviveRequests,
       int remainReviveTimes) {
     HashMap<String, DataBatches> newDataBatchesMap = new HashMap<>();
     ArrayList<DataBatches.DataBatch> reviveFailedBatchesMap = new ArrayList<>();
-    for (DataBatches.DataBatch batch : batches) {
-      int partitionId = batch.loc.getId();
-      if (!revive(
-          applicationId,
-          shuffleId,
-          mapId,
-          attemptId,
-          partitionId,
-          batch.loc.getEpoch(),
-          batch.loc,
-          cause)) {
 
-        if (remainReviveTimes > 0) {
-          reviveFailedBatchesMap.add(batch);
+    long reviveWaitTime =
+        conf.clientRpcRequestPartitionLocationsRpcAskTimeout().duration().toMillis() + 1000;
+    final long delta = 50;
+    long accumulatedTime = 0;
+    int index = 0;
+    while (index < reviveRequests.length && accumulatedTime < reviveWaitTime) {
+      ReviveRequest request = reviveRequests[index];
+      DataBatches.DataBatch batch = batches.get(index);
+      if (request.reviveStatus != StatusCode.REVIVE_INITIALIZED) {
+        if (request.reviveStatus == StatusCode.SUCCESS) {
+          PartitionLocation newLoc = reducePartitionMap.get(shuffleId).get(request.partitionId);
+          DataBatches newDataBatches =
+              newDataBatchesMap.computeIfAbsent(genAddressPair(newLoc), (s) -> new DataBatches());
+          newDataBatches.addDataBatch(newLoc, batch.batchId, batch.body);
+        } else if (mapperEnded(shuffleId, mapId, attemptId)) {
+          logger.debug(
+              "Revive for push merged data success, but the mapper already ended for shuffle {} map {} attempt {} partition {} batch {}.",
+              shuffleId,
+              mapId,
+              attemptId,
+              request.partitionId,
+              oldGroupedBatchId);
         } else {
-          String errorMsg =
-              String.format(
-                  "Revive failed while pushing merged for shuffle %d map %d attempt %d partition %d batch %d location %s.",
-                  shuffleId, mapId, attemptId, partitionId, oldGroupedBatchId, batch.loc);
-          pushState.exception.compareAndSet(
-              null,
-              new CelebornIOException(
-                  errorMsg,
-                  new CelebornIOException(cause + " then revive but " + StatusCode.REVIVE_FAILED)));
-          return;
+          if (remainReviveTimes > 0) {
+            reviveFailedBatchesMap.add(batch);
+          } else {
+            String errorMsg =
+                String.format(
+                    "Revive failed while pushing merged for shuffle %d map %d attempt %d partition %d batch %d location %s.",
+                    shuffleId, mapId, attemptId, request.partitionId, oldGroupedBatchId, batch.loc);
+            pushState.exception.compareAndSet(
+                null,
+                new CelebornIOException(
+                    errorMsg,
+                    new CelebornIOException(
+                        cause + " then revive but " + StatusCode.REVIVE_FAILED)));
+            return;
+          }
         }
-      } else if (mapperEnded(shuffleId, mapId, attemptId)) {
-        logger.debug(
-            "Revive for push merged data success, but the mapper already ended for shuffle {} map {} attempt {} partition {} batch {}.",
-            shuffleId,
-            mapId,
-            attemptId,
-            partitionId,
-            oldGroupedBatchId);
+
+        index++;
       } else {
-        PartitionLocation newLoc = reducePartitionMap.get(shuffleId).get(partitionId);
-        logger.info(
-            "Revive for push merged data success, new location for shuffle {} map {} attempt {} partition {} batch {} is location {}.",
-            shuffleId,
-            mapId,
-            attemptId,
-            partitionId,
-            oldGroupedBatchId,
-            newLoc);
-        DataBatches newDataBatches =
-            newDataBatchesMap.computeIfAbsent(genAddressPair(newLoc), (s) -> new DataBatches());
-        newDataBatches.addDataBatch(newLoc, batch.batchId, batch.body);
+        try {
+          Thread.sleep(delta);
+        } catch (InterruptedException e) {
+          logger.warn("Interrupted while waiting for ReviveBatch result!");
+        }
+        accumulatedTime += delta;
       }
     }
 
@@ -351,6 +373,7 @@ public class ShuffleClientImpl extends ShuffleClient {
     if (reviveFailedBatchesMap.isEmpty()) {
       pushState.removeBatch(oldGroupedBatchId, batches.get(0).loc.hostAndPushPort());
     } else {
+
       pushDataRetryPool.submit(
           () ->
               submitRetryPushMergedData(
@@ -362,6 +385,8 @@ public class ShuffleClientImpl extends ShuffleClient {
                   reviveFailedBatchesMap,
                   cause,
                   oldGroupedBatchId,
+                  addAndGetReviveRequests(
+                      applicationId, shuffleId, mapId, attemptId, reviveFailedBatchesMap, cause),
                   remainReviveTimes - 1));
     }
   }
@@ -1265,6 +1290,13 @@ public class ShuffleClientImpl extends ShuffleClient {
                             batches,
                             StatusCode.HARD_SPLIT,
                             groupedBatchId,
+                            addAndGetReviveRequests(
+                                applicationId,
+                                shuffleId,
+                                mapId,
+                                attemptId,
+                                batches,
+                                StatusCode.HARD_SPLIT),
                             remainReviveTimes));
               } else if (reason == StatusCode.PUSH_DATA_SUCCESS_MASTER_CONGESTED.getValue()) {
                 logger.debug(
@@ -1335,6 +1367,7 @@ public class ShuffleClientImpl extends ShuffleClient {
                 tmpRemainReviveTimes = tmpRemainReviveTimes - 1;
               }
               int finalRemainReviveTimes = tmpRemainReviveTimes;
+
               pushDataRetryPool.submit(
                   () ->
                       submitRetryPushMergedData(
@@ -1346,6 +1379,8 @@ public class ShuffleClientImpl extends ShuffleClient {
                           batches,
                           cause,
                           groupedBatchId,
+                          addAndGetReviveRequests(
+                              applicationId, shuffleId, mapId, attemptId, batches, cause),
                           finalRemainReviveTimes));
             } else {
               pushState.removeBatch(groupedBatchId, hostPort);

@@ -232,12 +232,13 @@ class ChangePartitionManager(
           location -> Option(requestsMap.remove(location.getId))
         }
       }.foreach { case (newLocation, requests) =>
-        requests.map(_.asScala.toList.foreach(req => req.context.reply(
-          req.mapId,
-          req.attemptId,
-          newLocation.getId,
-          StatusCode.SUCCESS,
-          Option(newLocation))))
+        requests.map(_.asScala.toList.foreach(req =>
+          req.context.reply(
+            req.mapId,
+            req.attemptId,
+            newLocation.getId,
+            StatusCode.SUCCESS,
+            Option(newLocation))))
       }
     }
 
