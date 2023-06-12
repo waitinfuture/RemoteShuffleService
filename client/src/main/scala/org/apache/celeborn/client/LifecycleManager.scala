@@ -835,7 +835,7 @@ class LifecycleManager(appId: String, val conf: CelebornConf) extends RpcEndpoin
       }
       val msg = ReleaseSlots(applicationId, shuffleId, workerIds, workerSlotsPerDisk)
       requestMasterReleaseSlots(msg)
-      logInfo(s"Released slots for reserve buffer failed workers " +
+      logDebug(s"Released slots for reserve buffer failed workers " +
         s"${workerIds.asScala.mkString(",")}" + s"${slots.asScala.mkString(",")}" +
         s"${Utils.makeShuffleKey(applicationId, shuffleId)}, ")
     }
