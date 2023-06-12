@@ -584,7 +584,7 @@ public class ShuffleClientImpl extends ShuffleClient {
     }
 
     try {
-      PbChangeLocationResponse response =
+      PbChangeLocationsResponse response =
           driverRssMetaService.askSync(
               Revive$.MODULE$.apply(
                   applicationId,
@@ -596,11 +596,11 @@ public class ShuffleClientImpl extends ShuffleClient {
                   oldLocation,
                   cause),
               conf.clientRpcRequestPartitionLocationRpcAskTimeout(),
-              ClassTag$.MODULE$.apply(PbChangeLocationResponse.class));
+              ClassTag$.MODULE$.apply(PbChangeLocationsResponse.class));
       // per partitionKey only serve single PartitionLocation in Client Cache.
-      StatusCode respStatus = Utils.toStatusCode(response.getStatus());
+      StatusCode respStatus = Utils.toStatusCode(response.getStatuses(0));
       if (StatusCode.SUCCESS.equals(respStatus)) {
-        map.put(partitionId, PbSerDeUtils.fromPbPartitionLocation(response.getLocation()));
+        map.put(partitionId, PbSerDeUtils.fromPbPartitionLocation(response.getLocations(0)));
         return true;
       } else if (StatusCode.MAP_ENDED.equals(respStatus)) {
         logger.debug(
@@ -636,7 +636,7 @@ public class ShuffleClientImpl extends ShuffleClient {
       int shuffleId,
       int[] mapIds,
       int[] attemptIds,
-      int[] ids,
+      int[] partitionIds,
       int[] epochs,
       PartitionLocation[] oldLocations,
       StatusCode[] causes) {
@@ -648,14 +648,14 @@ public class ShuffleClientImpl extends ShuffleClient {
       PbChangeLocationsResponse response =
           driverRssMetaService.askSync(
               ReviveBatch$.MODULE$.apply(
-                  applicationId, shuffleId, mapIds, attemptIds, ids, epochs, oldLocations, causes),
+                  applicationId, shuffleId, mapIds, attemptIds, partitionIds, epochs, oldLocations, causes),
               conf.clientRpcRequestPartitionLocationsRpcAskTimeout(),
               ClassTag$.MODULE$.apply(PbChangeLocationsResponse.class));
 
-      for (int i = 0; i < response.getIdsCount(); i++) {
+      for (int i = 0; i < response.getMapIdsCount(); i++) {
         int mapId = response.getMapIds(i);
         int attemptId = response.getAttemptIds(i);
-        int partitionId = response.getIds(i);
+        int partitionId = response.getPartitionIds(i);
         StatusCode statusCode = Utils.toStatusCode(response.getStatuses(i));
         PartitionLocation loc = PbSerDeUtils.fromPbPartitionLocation(response.getLocations(i));
 
@@ -676,7 +676,7 @@ public class ShuffleClientImpl extends ShuffleClient {
       logger.error(
           "Exception raised while reviving for shuffle {} reduce {} epoch {}.",
           shuffleId,
-          ids,
+          partitionIds,
           epochs,
           e);
       return null;
@@ -1720,6 +1720,7 @@ public class ShuffleClientImpl extends ShuffleClient {
                       }
                     }
 
+                    logger.info("filtered requests size" + filteredRequests.size());
                     if (!filteredRequests.isEmpty()) {
                       length = filteredRequests.size();
                       int[] mapIds = new int[length];
@@ -1728,19 +1729,21 @@ public class ShuffleClientImpl extends ShuffleClient {
                       int[] epochs = new int[length];
                       StatusCode[] causes = new StatusCode[length];
                       PartitionLocation[] locs = new PartitionLocation[length];
-                      for (int i = 0; i < 0; i++) {
+                      for (int i = 0; i < length; i++) {
                         mapIds[i] = filteredRequests.get(i).mapId;
                         attemptIds[i] = filteredRequests.get(i).attemptId;
                         partitionIds[i] = filteredRequests.get(i).partitionId;
                         epochs[i] = filteredRequests.get(i).epoch;
                         causes[i] = filteredRequests.get(i).cause;
                         locs[i] = filteredRequests.get(i).loc;
+                        logger.error("[ReviveManager.run] loc is null ? " + (locs[i] == null));
 
                       }
 
                       // Call reviveBatch. Return null means Exception
                       Map<Integer, Map<Integer, Map<Integer, StatusCode>>> results = reviveBatch(
                         appId, shuffleId, mapIds, attemptIds, partitionIds, epochs, locs, causes);
+                      logger.info("results is null ? " + (results == null));
                       if (results == null) {
                         for (ReviveRequest req : filteredRequests) {
                           req.reviveStatus = StatusCode.REVIVE_FAILED;
@@ -1768,12 +1771,14 @@ public class ShuffleClientImpl extends ShuffleClient {
         int shuffleId,
         ReviveRequest request) {
       blacklistByCause(request.cause, request.loc);
+      logger.error("[addRequest] loc is null? " + (request.loc == null));
       synchronized (this) {
         ConcurrentHashMap<Integer, Set<ReviveRequest>> shuffleMap =
             pendingRequests.computeIfAbsent(appId, (id) -> new ConcurrentHashMap());
         Set<ReviveRequest> requests =
             shuffleMap.computeIfAbsent(shuffleId, (id) -> ConcurrentHashMap.newKeySet());
         requests.add(request);
+        logger.info("added ReviveRequest, requests " + requests.size());
       }
     }
   }

@@ -238,7 +238,7 @@ message PbChangeLocationResponse {
 message PbChangeLocationsResponse {
   repeated int32 mapIds = 1;
   repeated int32 attemptIds = 2;
-  repeated int32 ids = 3;
+  repeated int32 partitionIds = 3;
   repeated int32 statuses = 4;
   repeated PbPartitionLocation locations = 5;
 }

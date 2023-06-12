@@ -211,26 +211,26 @@ object ControlMessages extends Logging {
 
   object ReviveBatch {
     def apply(
-        appId: String,
-        shuffleId: Int,
-        mapId: Array[Int],
-        attemptId: Array[Int],
-        partitionId: Array[Int],
-        epoch: Array[Int],
-        oldPartition: Array[PartitionLocation],
-        cause: Array[StatusCode]): PbReviveBatch = {
+               appId: String,
+               shuffleId: Int,
+               mapIds: Array[Int],
+               attemptIds: Array[Int],
+               partitionIds: Array[Int],
+               epochs: Array[Int],
+               oldPartitions: Array[PartitionLocation],
+               causes: Array[StatusCode]): PbReviveBatch = {
       val builder = PbReviveBatch.newBuilder()
       builder
         .setApplicationId(appId)
         .setShuffleId(shuffleId)
 
-      0 until partitionId.length foreach (idx => {
-        builder.addMapId(mapId(idx))
-          .addAttemptId(attemptId(idx))
-          .addPartitionId(partitionId(idx))
-          .addEpoch(epoch(idx))
-          .addOldPartition(PbSerDeUtils.toPbPartitionLocation(oldPartition(idx)))
-          .addStatus(cause(idx).getValue)
+      0 until partitionIds.length foreach (idx => {
+        builder.addMapId(mapIds(idx))
+          .addAttemptId(attemptIds(idx))
+          .addPartitionId(partitionIds(idx))
+          .addEpoch(epochs(idx))
+          .addOldPartition(PbSerDeUtils.toPbPartitionLocation(oldPartitions(idx)))
+          .addStatus(causes(idx).getValue)
       })
 
       builder.build()
@@ -269,12 +269,14 @@ object ControlMessages extends Logging {
   object ChangeLocationsResponse {
     def apply(mapIds: util.List[Integer],
               attemptIds: util.List[Integer],
+              partitionIds: util.List[Integer],
               statuses: Array[StatusCode],
               newLocs: Array[PartitionLocation]
                ): PbChangeLocationsResponse = {
       val builder = PbChangeLocationsResponse.newBuilder()
       builder.addAllMapIds(mapIds)
       builder.addAllAttemptIds(attemptIds)
+      builder.addAllPartitionIds(partitionIds)
       0 until statuses.length foreach(idx => {
         builder.addStatuses(statuses(idx).getValue)
           .addLocations(PbSerDeUtils.toPbPartitionLocation(newLocs(idx)))
@@ -584,6 +586,9 @@ object ControlMessages extends Logging {
 
     case pb: PbChangeLocationResponse =>
       new TransportMessage(MessageType.CHANGE_LOCATION_RESPONSE, pb.toByteArray)
+
+    case pb: PbChangeLocationsResponse =>
+      new TransportMessage(MessageType.CHANGE_LOCATIONS_RESPONSE, pb.toByteArray)
 
     case MapperEnd(applicationId, shuffleId, mapId, attemptId, numMappers, partitionId) =>
       val payload = PbMapperEnd.newBuilder()
@@ -960,6 +965,9 @@ object ControlMessages extends Logging {
 
       case CHANGE_LOCATION_RESPONSE =>
         PbChangeLocationResponse.parseFrom(message.getPayload)
+
+      case CHANGE_LOCATIONS_RESPONSE =>
+        PbChangeLocationsResponse.parseFrom(message.getPayload)
 
       case MAPPER_END =>
         val pbMapperEnd = PbMapperEnd.parseFrom(message.getPayload)

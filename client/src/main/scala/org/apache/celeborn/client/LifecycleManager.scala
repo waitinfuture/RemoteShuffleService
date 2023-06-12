@@ -244,7 +244,7 @@ class LifecycleManager(appId: String, val conf: CelebornConf) extends RpcEndpoin
       val epoch = pb.getEpoch
       val oldPartition = PbSerDeUtils.fromPbPartitionLocation(pb.getOldPartition)
       val cause = Utils.toStatusCode(pb.getStatus)
-      logTrace(s"Received Revive request, " +
+      logInfo(s"Received Revive request, " +
         s"$applicationId, $shuffleId, $mapId, $attemptId, ,$partitionId," +
         s" $epoch, $oldPartition, $cause.")
       handleReviveBatch(
@@ -263,19 +263,20 @@ class LifecycleManager(appId: String, val conf: CelebornConf) extends RpcEndpoin
       val shuffleId = pb.getShuffleId
       val mapIds = pb.getMapIdList
       val attemptIds = pb.getAttemptIdList
-      val ids = pb.getPartitionIdList
+      val partitionIds = pb.getPartitionIdList
       val epochs = pb.getEpochList
-      val oldPartitions = new util.ArrayList[PartitionLocation](ids.size());
+      val oldPartitions = new util.ArrayList[PartitionLocation](partitionIds.size());
       pb.getOldPartitionList.asScala.foreach(x => oldPartitions.add(PbSerDeUtils.fromPbPartitionLocation(x)))
-      val causes = new util.ArrayList[StatusCode](ids.size());
-      pb.getStatusList.asScala.foreach(x => Utils.toStatusCode(x))
+      val causes = new util.ArrayList[StatusCode](partitionIds.size());
+      pb.getStatusList.asScala.foreach(x => causes.add(Utils.toStatusCode(x)))
+      logInfo(s"Received ReviveBatch request, shuffleId ${shuffleId}, partitionIds ${partitionIds.asScala.mkString(",")}")
       handleReviveBatch(
         context,
         applicationId,
         shuffleId,
         mapIds,
         attemptIds,
-        ids,
+        partitionIds,
         epochs,
         oldPartitions,
         causes)
@@ -292,8 +293,6 @@ class LifecycleManager(appId: String, val conf: CelebornConf) extends RpcEndpoin
         ChangeLocationCallContext(context),
         applicationId,
         shuffleId,
-        -1,
-        -1,
         partitionId,
         epoch,
         oldPartition)
@@ -384,8 +383,6 @@ class LifecycleManager(appId: String, val conf: CelebornConf) extends RpcEndpoin
           ApplyNewLocationCallContext(context),
           applicationId,
           shuffleId,
-          -1,
-          -1,
           partitionId,
           -1,
           null)
@@ -566,8 +563,6 @@ class LifecycleManager(appId: String, val conf: CelebornConf) extends RpcEndpoin
           contextWrapper,
           applicationId,
           shuffleId,
-          mapIds.get(idx),
-          attemptIds.get(idx),
           partitionIds.get(idx),
           oldEpochs.get(idx),
           oldPartitions.get(idx),
