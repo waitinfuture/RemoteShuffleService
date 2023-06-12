@@ -217,15 +217,13 @@ public class ShuffleClientImpl extends ShuffleClient {
         Thread.sleep(50);
         accumulatedTime += delta;
       } catch (InterruptedException e) {
+        logger.error("Interrupted while waiting for Revive result!");
         wrappedCallback.onFailure(
             new CelebornIOException(cause + " then revive but " + StatusCode.REVIVE_FAILED));
         return;
       }
     }
-    if (request.reviveStatus != StatusCode.SUCCESS) {
-      wrappedCallback.onFailure(
-          new CelebornIOException(cause + " then revive but " + StatusCode.REVIVE_FAILED));
-    } else if (mapperEnded(shuffleId, mapId, attemptId)) {
+    if (mapperEnded(shuffleId, mapId, attemptId)) {
       logger.debug(
           "Revive for push data success, but the mapper already ended for shuffle {} map {} attempt {} partition {} batch {} location {}.",
           shuffleId,
@@ -235,9 +233,13 @@ public class ShuffleClientImpl extends ShuffleClient {
           batchId,
           loc);
       pushState.removeBatch(batchId, loc.hostAndPushPort());
-    } else {
+    } else if (request.reviveStatus != StatusCode.SUCCESS) {
+      wrappedCallback.onFailure(
+        new CelebornIOException(cause + " then revive but " + StatusCode.REVIVE_FAILED));
+    }
+    else {
       PartitionLocation newLoc = reducePartitionMap.get(shuffleId).get(partitionId);
-      logger.info(
+      logger.debug(
           "Revive for push data success, new location for shuffle {} map {} attempt {} partition {} batch {} is location {}.",
           shuffleId,
           mapId,
@@ -998,7 +1000,7 @@ public class ShuffleClientImpl extends ShuffleClient {
                 }
                 ReviveRequest reviveRequest =
                     new ReviveRequest(
-                        mapId, attemptId, partitionId, loc.getEpoch(), loc, StatusCode.HARD_SPLIT);
+                        mapId, attemptId, partitionId, loc.getEpoch(), loc, cause);
                 reviveManager.addRequest(applicationId, shuffleId, reviveRequest);
                 pushDataRetryPool.submit(
                     () ->
