@@ -298,8 +298,6 @@ class LifecycleManager(appId: String, val conf: CelebornConf) extends RpcEndpoin
         ChangeLocationCallContext(context),
         applicationId,
         shuffleId,
-        -1,
-        -1,
         partitionId,
         epoch,
         oldPartition)
@@ -390,8 +388,6 @@ class LifecycleManager(appId: String, val conf: CelebornConf) extends RpcEndpoin
           ApplyNewLocationCallContext(context),
           applicationId,
           shuffleId,
-          -1,
-          -1,
           partitionId,
           -1,
           null)
@@ -570,8 +566,6 @@ class LifecycleManager(appId: String, val conf: CelebornConf) extends RpcEndpoin
       logError(s"[handleReviveBatch] shuffle $shuffleId not registered!")
       0 until mapIds.size() foreach (idx => {
         contextWrapper.reply(
-          mapIds.get(idx),
-          attemptIds.get(idx),
           partitionIds.get(idx),
           StatusCode.SHUFFLE_NOT_REGISTERED,
           None)
@@ -590,8 +584,6 @@ class LifecycleManager(appId: String, val conf: CelebornConf) extends RpcEndpoin
           contextWrapper,
           applicationId,
           shuffleId,
-          mapIds.get(idx),
-          attemptIds.get(idx),
           partitionIds.get(idx),
           oldEpochs.get(idx),
           oldPartitions.get(idx),
@@ -831,7 +823,7 @@ class LifecycleManager(appId: String, val conf: CelebornConf) extends RpcEndpoin
       }
     if (!destroyResource.isEmpty) {
       destroySlotsWithRetry(applicationId, shuffleId, destroyResource)
-      logInfo(s"Destroyed peer partitions for reserve buffer failed workers " +
+      logDebug(s"Destroyed peer partitions for reserve buffer failed workers " +
         s"${Utils.makeShuffleKey(applicationId, shuffleId)}, $destroyResource")
 
       val workerIds = new util.ArrayList[String]()

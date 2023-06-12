@@ -33,12 +33,10 @@ import org.apache.celeborn.common.util.{JavaUtils, ThreadUtils, Utils}
 import java.util.concurrent.atomic.AtomicLong
 
 case class ChangePartitionRequest(
-    uuid: Long,
+//    uuid: Long,
     context: RequestLocationCallContext,
     applicationId: String,
     shuffleId: Int,
-    mapId: Int,
-    attemptId: Int,
     partitionId: Int,
     epoch: Int,
     oldPartition: PartitionLocation,
@@ -70,8 +68,6 @@ class ChangePartitionManager(
     }
 
   private var batchHandleChangePartition: Option[ScheduledFuture[_]] = _
-
-  private val atomicLong = new AtomicLong()
 
   def start(): Unit = {
     batchHandleChangePartition = batchHandleChangePartitionSchedulerThread.map {
@@ -137,20 +133,15 @@ class ChangePartitionManager(
       context: RequestLocationCallContext,
       applicationId: String,
       shuffleId: Int,
-      mapId: Int,
-      attemptId: Int,
       partitionId: Int,
       oldEpoch: Int,
       oldPartition: PartitionLocation,
       cause: Option[StatusCode] = None): Unit = {
 
     val changePartition = ChangePartitionRequest(
-      atomicLong.getAndAdd(1),
       context,
       applicationId,
       shuffleId,
-      mapId,
-      attemptId,
       partitionId,
       oldEpoch,
       oldPartition,
@@ -166,15 +157,17 @@ class ChangePartitionManager(
 
     requests.synchronized {
       if (requests.containsKey(partitionId)) {
-        requests.get(partitionId).add(changePartition)
-        logTrace(s"[handleRequestPartitionLocation] For $shuffleId, request for same partition" +
-          s"$partitionId-$oldEpoch exists, register context.")
+        if (!requests.get(partitionId).contains(changePartition)) {
+          requests.get(partitionId).add(changePartition)
+          logTrace(s"[handleRequestPartitionLocation] For $shuffleId, request for same partition" +
+            s"$partitionId-$oldEpoch exists, register context.")
+        }
         return
       } else {
         // If new slot for the partition has been allocated, reply and return.
         // Else register and allocate for it.
         getLatestPartition(shuffleId, partitionId, oldEpoch).foreach { latestLoc =>
-          context.reply(mapId, attemptId, partitionId, StatusCode.SUCCESS, Some(latestLoc))
+          context.reply(partitionId, StatusCode.SUCCESS, Some(latestLoc))
           logDebug(s"New partition found, old partition $partitionId-$oldEpoch return it." +
             s" shuffleId: $shuffleId $latestLoc")
           return
@@ -238,8 +231,6 @@ class ChangePartitionManager(
       }.foreach { case (newLocation, requests) =>
         requests.map(_.asScala.toList.foreach(req =>
           req.context.reply(
-            req.mapId,
-            req.attemptId,
             newLocation.getId,
             StatusCode.SUCCESS,
             Option(newLocation))))
@@ -257,7 +248,7 @@ class ChangePartitionManager(
         }
       }.foreach { requests =>
         requests.map(_.asScala.toList.foreach(req =>
-          req.context.reply(req.mapId, req.attemptId, req.partitionId, status, None)))
+          req.context.reply(req.partitionId, status, None)))
       }
     }
 

@@ -27,8 +27,6 @@ import org.apache.celeborn.common.rpc.RpcCallContext
 
 trait RequestLocationCallContext {
   def reply(
-      mapId: Int,
-      attemptId: Int,
       partitionId: Int,
       status: StatusCode,
       partitionLocationOpt: Option[PartitionLocation]): Unit
@@ -36,8 +34,6 @@ trait RequestLocationCallContext {
 
 case class ChangeLocationCallContext(context: RpcCallContext) extends RequestLocationCallContext {
   override def reply(
-      mapId: Int,
-      attemptId: Int,
       partitionId: Int,
       status: StatusCode,
       partitionLocationOpt: Option[PartitionLocation]): Unit = {
@@ -71,16 +67,13 @@ case class ChangeLocationsCallContext(
   }
 
   override def reply(
-      mapId: Int,
-      attemptId: Int,
       partitionId: Int,
       status: StatusCode,
       partitionLocationOpt: Option[PartitionLocation]): Unit = this.synchronized {
     0 until mapIds.size() foreach (idx => {
-      if (mapIds.get(idx) == mapId && attemptIds.get(idx) == attemptId && partitionIds.get(
-          idx) == partitionId) {
+      if (partitionIds.get(idx) == partitionId) {
         if (statuses(idx) != null) {
-          logInfo("this partition has already been replied!")
+//          logInfo("this partition has already been replied!")
         } else {
           statuses(idx) = status
           newLocs(idx) = partitionLocationOpt.getOrElse(new PartitionLocation())
@@ -88,8 +81,8 @@ case class ChangeLocationsCallContext(
         }
       }
     })
-    logInfo(
-      s"after reply, shuffleId ${shuffleId}, mapId ${mapId}, attemptId ${attemptId}, partitionId ${partitionId}, mapIds.size is ${mapIds.size()}, count is ${count},")
+//    logInfo(
+//      s"after reply, shuffleId ${shuffleId}, partitionId ${partitionId}, mapIds.size is ${mapIds.size()}, count is ${count},")
 
     if (count == mapIds.size()) {
       doReply()
@@ -104,8 +97,6 @@ case class ChangeLocationsCallContext(
 
 case class ApplyNewLocationCallContext(context: RpcCallContext) extends RequestLocationCallContext {
   override def reply(
-      mapId: Int,
-      attemptId: Int,
       partitionId: Int,
       status: StatusCode,
       partitionLocationOpt: Option[PartitionLocation]): Unit = {
