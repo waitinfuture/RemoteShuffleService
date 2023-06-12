@@ -20,13 +20,10 @@ package org.apache.celeborn.client
 import java.util
 import java.util.{function, HashSet => JHashSet, List => JList, Set => JSet}
 import java.util.concurrent.{ConcurrentHashMap, ScheduledFuture, TimeUnit}
-
 import scala.collection.JavaConverters._
 import scala.collection.mutable
 import scala.util.Random
-
 import com.google.common.annotations.VisibleForTesting
-
 import org.apache.celeborn.client.LifecycleManager.{ShuffleAllocatedWorkers, ShuffleFailedWorkers}
 import org.apache.celeborn.client.listener.WorkerStatusListener
 import org.apache.celeborn.common.CelebornConf
@@ -40,6 +37,7 @@ import org.apache.celeborn.common.protocol.message.ControlMessages._
 import org.apache.celeborn.common.protocol.message.StatusCode
 import org.apache.celeborn.common.rpc._
 import org.apache.celeborn.common.util.{JavaUtils, PbSerDeUtils, ThreadUtils, Utils}
+import sun.awt.CausedFocusEvent.Cause
 // Can Remove this if celeborn don't support scala211 in future
 import org.apache.celeborn.common.util.FunctionConverter._
 
@@ -249,7 +247,7 @@ class LifecycleManager(appId: String, val conf: CelebornConf) extends RpcEndpoin
       logTrace(s"Received Revive request, " +
         s"$applicationId, $shuffleId, $mapId, $attemptId, ,$partitionId," +
         s" $epoch, $oldPartition, $cause.")
-      handleRevive(
+      handleReviveBatch(
         context,
         applicationId,
         shuffleId,
@@ -259,6 +257,28 @@ class LifecycleManager(appId: String, val conf: CelebornConf) extends RpcEndpoin
         epoch,
         oldPartition,
         cause)
+
+    case pb: PbReviveBatch =>
+      val applicationId = pb.getApplicationId
+      val shuffleId = pb.getShuffleId
+      val mapIds = pb.getMapIdList
+      val attemptIds = pb.getAttemptIdList
+      val ids = pb.getPartitionIdList
+      val epochs = pb.getEpochList
+      val oldPartitions = new util.ArrayList[PartitionLocation](ids.size());
+      pb.getOldPartitionList.asScala.foreach(x => oldPartitions.add(PbSerDeUtils.fromPbPartitionLocation(x)))
+      val causes = new util.ArrayList[StatusCode](ids.size());
+      pb.getStatusList.asScala.foreach(x => Utils.toStatusCode(x))
+      handleReviveBatch(
+        context,
+        applicationId,
+        shuffleId,
+        mapIds,
+        attemptIds,
+        ids,
+        epochs,
+        oldPartitions,
+        causes)
 
     case pb: PbPartitionSplit =>
       val applicationId = pb.getApplicationId
@@ -272,6 +292,8 @@ class LifecycleManager(appId: String, val conf: CelebornConf) extends RpcEndpoin
         ChangeLocationCallContext(context),
         applicationId,
         shuffleId,
+        -1,
+        -1,
         partitionId,
         epoch,
         oldPartition)
@@ -362,6 +384,8 @@ class LifecycleManager(appId: String, val conf: CelebornConf) extends RpcEndpoin
           ApplyNewLocationCallContext(context),
           applicationId,
           shuffleId,
+          -1,
+          -1,
           partitionId,
           -1,
           null)
@@ -488,47 +512,71 @@ class LifecycleManager(appId: String, val conf: CelebornConf) extends RpcEndpoin
     }
   }
 
-  private def handleRevive(
+  private def handleReviveBatch(
+                                 context: RpcCallContext,
+                                 applicationId: String,
+                                 shuffleId: Int,
+                                 mapId: Integer,
+                                 attemptId: Integer,
+                                 partitionId: Integer,
+                                 oldEpoch: Integer,
+                                 oldPartition: PartitionLocation,
+                                 cause: StatusCode): Unit = {
+    val mapIds = new util.ArrayList[Integer](1);
+    mapIds.add(mapId);
+    val attemptIds = new util.ArrayList[Integer](1);
+    attemptIds.add(attemptId);
+    val partitionIds = new util.ArrayList[Integer](1);
+    partitionIds.add(partitionId);
+    val epochs = new util.ArrayList[Integer](1);
+    epochs.add(oldEpoch);
+    val locs = new util.ArrayList[PartitionLocation](1);
+    locs.add(oldPartition);
+    val causes = new util.ArrayList[StatusCode](1);
+    causes.add(cause);
+
+    handleReviveBatch(context, applicationId, shuffleId, mapIds, attemptIds, partitionIds, epochs, locs, causes)
+  }
+
+  private def handleReviveBatch(
       context: RpcCallContext,
       applicationId: String,
       shuffleId: Int,
-      mapId: Int,
-      attemptId: Int,
-      partitionId: Int,
-      oldEpoch: Int,
-      oldPartition: PartitionLocation,
-      cause: StatusCode): Unit = {
+      mapIds: util.List[Integer],
+      attemptIds: util.List[Integer],
+      partitionIds: util.List[Integer],
+      oldEpochs: util.List[Integer],
+      oldPartitions: util.List[PartitionLocation],
+      causes: util.List[StatusCode]): Unit = {
+    val contextWrapper = ChangeLocationsCallContext(context, mapIds, attemptIds, partitionIds)
     // If shuffle not registered, reply ShuffleNotRegistered and return
     if (!registeredShuffle.contains(shuffleId)) {
-      logError(s"[handleRevive] shuffle $shuffleId not registered!")
-      context.reply(ChangeLocationResponse(StatusCode.SHUFFLE_NOT_REGISTERED, None))
+      logError(s"[handleReviveBatch] shuffle $shuffleId not registered!")
+      partitionIds.asScala.foreach(id => contextWrapper.reply(id, StatusCode.SHUFFLE_NOT_REGISTERED, None))
       return
     }
 
-    if (getPartitionType(shuffleId) == PartitionType.MAP) {
-      logError(s"[handleRevive] shuffle $shuffleId revived filed, because map partition don't support revive!")
-      context.reply(ChangeLocationResponse(StatusCode.REVIVE_FAILED, None))
-      return
-    }
+    0 until mapIds.size() foreach(idx => {
+      if (commitManager.isMapperEnded(shuffleId, mapIds.get(idx))) {
+        logWarning(s"[handleReviveBatch] Mapper ended, mapId ${mapIds.get(idx)}, current attemptId ${attemptIds.get(idx)}, " +
+          s"ended attemptId ${commitManager.getMapperAttempts(shuffleId)(mapIds.get(idx))}, shuffleId $shuffleId.")
+        contextWrapper.markMapperEnd(idx)
+      } else {
+        changePartitionManager.handleRequestPartitionLocation(
+          contextWrapper,
+          applicationId,
+          shuffleId,
+          mapIds.get(idx),
+          attemptIds.get(idx),
+          partitionIds.get(idx),
+          oldEpochs.get(idx),
+          oldPartitions.get(idx),
+          Some(causes.get(idx)))
+      }
+    })
 
-    if (commitManager.isMapperEnded(shuffleId, mapId)) {
-      logWarning(s"[handleRevive] Mapper ended, mapId $mapId, current attemptId $attemptId, " +
-        s"ended attemptId ${commitManager.getMapperAttempts(shuffleId)(mapId)}, shuffleId $shuffleId.")
-      context.reply(ChangeLocationResponse(StatusCode.MAP_ENDED, None))
-      return
-    }
-
-    logWarning(s"Do Revive for shuffle ${Utils.makeShuffleKey(applicationId, shuffleId)}, " +
-      s"oldPartition: $oldPartition, cause: $cause")
-
-    changePartitionManager.handleRequestPartitionLocation(
-      ChangeLocationCallContext(context),
-      applicationId,
-      shuffleId,
-      partitionId,
-      oldEpoch,
-      oldPartition,
-      Some(cause))
+    logDebug(s"Do Revive for shuffle ${Utils.makeShuffleKey(applicationId, shuffleId)}, " +
+      s"oldPartition: ${oldPartitions.asScala.mkString(",")}, cause: ${causes.asScala.mkString(",")}")
   }
 
   private def handleMapperEnd(

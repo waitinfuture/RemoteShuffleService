@@ -65,6 +65,8 @@ public class PartitionLocation implements Serializable {
   private RoaringBitmap mapIdBitMap;
   private transient String _hostPushPort;
 
+  public PartitionLocation() {}
+
   public PartitionLocation(PartitionLocation loc) {
     this.id = loc.id;
     this.epoch = loc.epoch;

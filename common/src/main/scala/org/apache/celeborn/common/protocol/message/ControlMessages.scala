@@ -28,7 +28,7 @@ import org.apache.celeborn.common.identity.UserIdentifier
 import org.apache.celeborn.common.internal.Logging
 import org.apache.celeborn.common.meta.{DiskInfo, WorkerInfo}
 import org.apache.celeborn.common.network.protocol.TransportMessage
-import org.apache.celeborn.common.protocol._
+import org.apache.celeborn.common.protocol.{PbReviveBatch, _}
 import org.apache.celeborn.common.protocol.MessageType._
 import org.apache.celeborn.common.quota.ResourceConsumption
 import org.apache.celeborn.common.util.{PbSerDeUtils, Utils}
@@ -209,6 +209,34 @@ object ControlMessages extends Logging {
         .build()
   }
 
+  object ReviveBatch {
+    def apply(
+        appId: String,
+        shuffleId: Int,
+        mapId: Array[Int],
+        attemptId: Array[Int],
+        partitionId: Array[Int],
+        epoch: Array[Int],
+        oldPartition: Array[PartitionLocation],
+        cause: Array[StatusCode]): PbReviveBatch = {
+      val builder = PbReviveBatch.newBuilder()
+      builder
+        .setApplicationId(appId)
+        .setShuffleId(shuffleId)
+
+      0 until partitionId.length foreach (idx => {
+        builder.addMapId(mapId(idx))
+          .addAttemptId(attemptId(idx))
+          .addPartitionId(partitionId(idx))
+          .addEpoch(epoch(idx))
+          .addOldPartition(PbSerDeUtils.toPbPartitionLocation(oldPartition(idx)))
+          .addStatus(cause(idx).getValue)
+      })
+
+      builder.build()
+    }
+  }
+
   object PartitionSplit {
     def apply(
         appId: String,
@@ -234,6 +262,23 @@ object ControlMessages extends Logging {
       partitionLocationOpt.foreach { partitionLocation =>
         builder.setLocation(PbSerDeUtils.toPbPartitionLocation(partitionLocation))
       }
+      builder.build()
+    }
+  }
+
+  object ChangeLocationsResponse {
+    def apply(mapIds: util.List[Integer],
+              attemptIds: util.List[Integer],
+              statuses: Array[StatusCode],
+              newLocs: Array[PartitionLocation]
+               ): PbChangeLocationsResponse = {
+      val builder = PbChangeLocationsResponse.newBuilder()
+      builder.addAllMapIds(mapIds)
+      builder.addAllAttemptIds(attemptIds)
+      0 until statuses.length foreach(idx => {
+        builder.addStatuses(statuses(idx).getValue)
+          .addLocations(PbSerDeUtils.toPbPartitionLocation(newLocs(idx)))
+      })
       builder.build()
     }
   }
@@ -533,6 +578,9 @@ object ControlMessages extends Logging {
 
     case pb: PbRevive =>
       new TransportMessage(MessageType.REVIVE, pb.toByteArray)
+
+    case pb: PbReviveBatch =>
+      new TransportMessage(MessageType.REVIVE_BATCH, pb.toByteArray)
 
     case pb: PbChangeLocationResponse =>
       new TransportMessage(MessageType.CHANGE_LOCATION_RESPONSE, pb.toByteArray)
@@ -906,6 +954,9 @@ object ControlMessages extends Logging {
 
       case REVIVE =>
         PbRevive.parseFrom(message.getPayload)
+
+      case REVIVE_BATCH =>
+        PbReviveBatch.parseFrom(message.getPayload)
 
       case CHANGE_LOCATION_RESPONSE =>
         PbChangeLocationResponse.parseFrom(message.getPayload)

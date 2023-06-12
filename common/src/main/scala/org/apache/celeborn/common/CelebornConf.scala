@@ -694,6 +694,11 @@ class CelebornConf(loadDefaults: Boolean) extends Cloneable with Logging with Se
       get(CLIENT_RPC_REQUEST_PARTITION_LOCATION_RPC_ASK_TIMEOUT).milli,
       CLIENT_RPC_REQUEST_PARTITION_LOCATION_RPC_ASK_TIMEOUT.key)
 
+  def clientRpcRequestPartitionLocationsRpcAskTimeout: RpcTimeout =
+    new RpcTimeout(
+      get(CLIENT_RPC_REQUEST_PARTITION_LOCATIONS_RPC_ASK_TIMEOUT).milli,
+      CLIENT_RPC_REQUEST_PARTITION_LOCATIONS_RPC_ASK_TIMEOUT.key)
+
   def clientRpcGetReducerFileGroupRpcAskTimeout: RpcTimeout =
     new RpcTimeout(
       get(CLIENT_RPC_GET_REDUCER_FILE_GROUP_RPC_ASK_TIMEOUT).milli,
@@ -3013,6 +3018,14 @@ object CelebornConf extends Logging {
       .doc(s"Timeout for ask operations during requesting change partition location, such as reviving or spliting partition. " +
         s"During this process, there are `${CLIENT_RESERVE_SLOTS_MAX_RETRIES.key}` times for retry opportunities for reserving slots. " +
         s"User can customize this value according to your setting. " +
+        s"By default, the value is the max timeout value `${NETWORK_IO_CONNECTION_TIMEOUT.key}`.")
+      .fallbackConf(NETWORK_IO_CONNECTION_TIMEOUT)
+
+  val CLIENT_RPC_REQUEST_PARTITION_LOCATIONS_RPC_ASK_TIMEOUT: ConfigEntry[Long] =
+    buildConf("celeborn.client.rpc.requestPartitions.askTimeout")
+      .categories("client")
+      .version("0.3.0")
+      .doc(s"Timeout for ask operations during requesting ReviveBatch. " +
         s"By default, the value is the max timeout value `${NETWORK_IO_CONNECTION_TIMEOUT.key}`.")
       .fallbackConf(NETWORK_IO_CONNECTION_TIMEOUT)
 

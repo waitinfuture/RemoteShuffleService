@@ -17,23 +17,74 @@
 
 package org.apache.celeborn.client
 
+import java.util
+
 import org.apache.celeborn.common.protocol.PartitionLocation
-import org.apache.celeborn.common.protocol.message.ControlMessages.{ChangeLocationResponse, RegisterShuffleResponse}
+import org.apache.celeborn.common.protocol.message.ControlMessages.{ChangeLocationResponse, ChangeLocationsResponse, RegisterShuffleResponse}
 import org.apache.celeborn.common.protocol.message.StatusCode
 import org.apache.celeborn.common.rpc.RpcCallContext
 
 trait RequestLocationCallContext {
-  def reply(status: StatusCode, partitionLocationOpt: Option[PartitionLocation]): Unit
+  def reply(id: Int, status: StatusCode, partitionLocationOpt: Option[PartitionLocation]): Unit
 }
 
 case class ChangeLocationCallContext(context: RpcCallContext) extends RequestLocationCallContext {
-  override def reply(status: StatusCode, partitionLocationOpt: Option[PartitionLocation]): Unit = {
+  override def reply(
+      id: Int,
+      status: StatusCode,
+      partitionLocationOpt: Option[PartitionLocation]): Unit = {
     context.reply(ChangeLocationResponse(status, partitionLocationOpt))
   }
 }
 
+case class ChangeLocationsCallContext(context: RpcCallContext, mapIds: util.List[Integer], attemptId: util.List[Integer],
+                                      partitionIds: util.List[Integer])
+  extends RequestLocationCallContext {
+  val statuses = Array[StatusCode](mapIds.size())
+  val newLocs = Array[PartitionLocation](mapIds.size())
+  @volatile var count = 0
+
+  def markMapperEnd(mapId: Int): Unit = this.synchronized {
+      0 until mapIds.size() foreach (idx => {
+        if (mapIds.get(idx) == mapId) {
+          statuses(idx) = StatusCode.MAP_ENDED
+          newLocs(idx) = new PartitionLocation()
+          count += 1
+        }
+      })
+    if (count == mapIds.size()) {
+      doReply();
+    }
+  }
+
+  override def reply(
+      id: Int,
+      status: StatusCode,
+      partitionLocationOpt: Option[PartitionLocation]): Unit = this.synchronized {
+    0 until mapIds.size() foreach (idx => {
+      if (partitionIds.get(idx) == id) {
+        statuses(idx) = status;
+        newLocs(idx) = partitionLocationOpt.getOrElse(new PartitionLocation())
+        count += 1
+      }
+    })
+
+    if (count == mapIds.size()) {
+      doReply()
+    }
+  }
+
+  private def doReply(): Unit = this.synchronized {
+    context.reply(ChangeLocationsResponse(mapIds, attemptId, partitionIds, statuses, newLocs))
+    count = 0
+  }
+}
+
 case class ApplyNewLocationCallContext(context: RpcCallContext) extends RequestLocationCallContext {
-  override def reply(status: StatusCode, partitionLocationOpt: Option[PartitionLocation]): Unit = {
+  override def reply(
+      id: Int,
+      status: StatusCode,
+      partitionLocationOpt: Option[PartitionLocation]): Unit = {
     partitionLocationOpt match {
       case Some(partitionLocation) =>
         context.reply(RegisterShuffleResponse(status, Array(partitionLocation)))

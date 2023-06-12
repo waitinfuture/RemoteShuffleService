@@ -20,10 +20,7 @@ package org.apache.celeborn.client;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.*;
-import java.util.concurrent.Callable;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.TimeUnit;
+import java.util.concurrent.*;
 
 import scala.reflect.ClassTag$;
 
@@ -110,6 +107,8 @@ public class ShuffleClientImpl extends ShuffleClient {
           return Compressor.getCompressor(conf);
         }
       };
+
+  ReviveManager reviveManager = new ReviveManager();
 
   protected static class ReduceFileGroups {
     public Map<Integer, Set<PartitionLocation>> partitionGroups;
@@ -498,36 +497,31 @@ public class ShuffleClientImpl extends ShuffleClient {
     }
   }
 
-  private boolean waitRevivedLocation(
-      ConcurrentHashMap<Integer, PartitionLocation> map, int partitionId, int epoch) {
+  private boolean checkRevivedLocation(int shuffleId, int partitionId, int epoch, boolean wait) {
+    ConcurrentHashMap<Integer, PartitionLocation> map = reducePartitionMap.get(shuffleId);
     PartitionLocation currentLocation = map.get(partitionId);
     if (currentLocation != null && currentLocation.getEpoch() > epoch) {
       return true;
     }
-
-    long sleepTimeMs = RND.nextInt(50);
-    if (sleepTimeMs > 30) {
-      try {
-        TimeUnit.MILLISECONDS.sleep(sleepTimeMs);
-      } catch (InterruptedException e) {
-        logger.error("Waiting revived location was interrupted.", e);
-        Thread.currentThread().interrupt();
+    if (wait) {
+      long sleepTimeMs = RND.nextInt(50);
+      if (sleepTimeMs > 30) {
+        try {
+          TimeUnit.MILLISECONDS.sleep(sleepTimeMs);
+        } catch (InterruptedException e) {
+          logger.error("Waiting revived location was interrupted.", e);
+          Thread.currentThread().interrupt();
+        }
       }
-    }
 
-    currentLocation = map.get(partitionId);
-    return currentLocation != null && currentLocation.getEpoch() > epoch;
+      currentLocation = map.get(partitionId);
+      return currentLocation != null && currentLocation.getEpoch() > epoch;
+    } else {
+      return false;
+    }
   }
 
-  private boolean revive(
-      String applicationId,
-      int shuffleId,
-      int mapId,
-      int attemptId,
-      int partitionId,
-      int epoch,
-      PartitionLocation oldLocation,
-      StatusCode cause) {
+  private void blacklistByCause(StatusCode cause, PartitionLocation oldLocation) {
     // Add ShuffleClient side blacklist
     if (shuffleClientPushBlacklistEnabled) {
       if (cause == StatusCode.PUSH_DATA_CREATE_CONNECTION_FAIL_MASTER) {
@@ -544,9 +538,22 @@ public class ShuffleClientImpl extends ShuffleClient {
         blacklist.add(oldLocation.getPeer().hostAndPushPort());
       }
     }
+  }
+
+  private boolean revive(
+      String applicationId,
+      int shuffleId,
+      int mapId,
+      int attemptId,
+      int partitionId,
+      int epoch,
+      PartitionLocation oldLocation,
+      StatusCode cause) {
+    blacklistByCause(cause, oldLocation);
 
     ConcurrentHashMap<Integer, PartitionLocation> map = reducePartitionMap.get(shuffleId);
-    if (waitRevivedLocation(map, partitionId, epoch)) {
+
+    if (checkRevivedLocation(shuffleId, partitionId, epoch, true)) {
       logger.debug(
           "Revive already success for shuffle {} map {} attempt {} partition {} epoch {}, just return true(Assume revive successfully).",
           shuffleId,
@@ -608,6 +615,62 @@ public class ShuffleClientImpl extends ShuffleClient {
           epoch,
           e);
       return false;
+    }
+  }
+
+  /**
+   *
+   * @return mapId -> attemptId -> partitionId -> StatusCode
+   */
+  private Map<Integer, Map<Integer, Map<Integer, StatusCode>>> reviveBatch(
+      String applicationId,
+      int shuffleId,
+      int[] mapIds,
+      int[] attemptIds,
+      int[] ids,
+      int[] epochs,
+      PartitionLocation[] oldLocations,
+      StatusCode[] causes) {
+    Map<Integer, Map<Integer, Map<Integer, StatusCode>>> results = new HashMap<>();
+
+    ConcurrentHashMap<Integer, PartitionLocation> map = reducePartitionMap.get(shuffleId);
+
+    try {
+      PbChangeLocationsResponse response =
+          driverRssMetaService.askSync(
+              ReviveBatch$.MODULE$.apply(
+                  applicationId, shuffleId, mapIds, attemptIds, ids, epochs, oldLocations, causes),
+              conf.clientRpcRequestPartitionLocationsRpcAskTimeout(),
+              ClassTag$.MODULE$.apply(PbChangeLocationsResponse.class));
+
+      for (int i = 0; i < response.getIdsCount(); i++) {
+        int mapId = response.getMapIds(i);
+        int attemptId = response.getAttemptIds(i);
+        int partitionId = response.getIds(i);
+        StatusCode statusCode = Utils.toStatusCode(response.getStatuses(i));
+        PartitionLocation loc = PbSerDeUtils.fromPbPartitionLocation(response.getLocations(i));
+
+        if (StatusCode.SUCCESS.equals(statusCode)) {
+          map.put(partitionId, loc);
+        } else if (StatusCode.MAP_ENDED.equals(statusCode)) {
+          String mapKey = Utils.makeMapKey(shuffleId, mapId, attemptId);
+          mapperEndMap.computeIfAbsent(shuffleId, (id) -> ConcurrentHashMap.newKeySet()).add(mapKey);
+        }
+
+        Map<Integer, Map<Integer, StatusCode>> attemptIdMap = results.computeIfAbsent(mapId, (id) -> new HashMap<>());
+        Map<Integer, StatusCode> partitionIdMap = attemptIdMap.computeIfAbsent(attemptId, (id) -> new HashMap<>());
+        partitionIdMap.put(partitionId, statusCode);
+      }
+
+      return results;
+    } catch (Exception e) {
+      logger.error(
+          "Exception raised while reviving for shuffle {} reduce {} epoch {}.",
+          shuffleId,
+          ids,
+          epochs,
+          e);
+      return null;
     }
   }
 
@@ -780,6 +843,8 @@ public class ShuffleClientImpl extends ShuffleClient {
                       attemptId,
                       partitionId,
                       nextBatchId);
+                  ReviveRequest reviveRequest = new ReviveRequest(mapId, attemptId, partitionId, loc.getEpoch(), loc, StatusCode.HARD_SPLIT);
+                  reviveManager.addRequest(applicationId, shuffleId, reviveRequest);
                   pushDataRetryPool.submit(
                       () ->
                           submitRetryPushData(
@@ -1577,5 +1642,134 @@ public class ShuffleClientImpl extends ShuffleClient {
   @VisibleForTesting
   public TransportClientFactory getDataClientFactory() {
     return dataClientFactory;
+  }
+
+  class ReviveRequest {
+    public int mapId;
+    public int attemptId;
+    public int partitionId;
+    public int epoch;
+    public PartitionLocation loc;
+    public StatusCode cause;
+    public volatile StatusCode reviveStatus;
+
+    public ReviveRequest(
+        int mapId,
+        int attemptId,
+        int partitionId,
+        int epoch,
+        PartitionLocation loc,
+        StatusCode cause) {
+      this.mapId = mapId;
+      this.attemptId = attemptId;
+      this.partitionId = partitionId;
+      this.epoch = epoch;
+      this.loc = loc;
+      this.cause = cause;
+      reviveStatus = StatusCode.REVIVE_INITIALIZED;
+    }
+  }
+
+  class ReviveManager {
+    // appid -> shuffleId -> requests
+    ConcurrentHashMap<String, ConcurrentHashMap<Integer, Set<ReviveRequest>>> pendingRequests =
+        new ConcurrentHashMap<>();
+    ConcurrentHashMap<String, ConcurrentHashMap<Integer, Set<ReviveRequest>>> inProcessRequests =
+        null;
+    private ScheduledExecutorService reviveRequestScheduler =
+        ThreadUtils.newDaemonSingleThreadScheduledExecutor("worker-forward-message-scheduler");
+
+    public ReviveManager() {
+      reviveRequestScheduler.scheduleAtFixedRate(
+          new Runnable() {
+            @Override
+            public void run() {
+              synchronized (this) {
+                inProcessRequests = pendingRequests;
+                pendingRequests = new ConcurrentHashMap<>();
+              }
+              if (!inProcessRequests.isEmpty()) {
+                for (Map.Entry<String, ConcurrentHashMap<Integer, Set<ReviveRequest>>> entry :
+                    inProcessRequests.entrySet()) {
+                  String appId = entry.getKey();
+                  ConcurrentHashMap<Integer, Set<ReviveRequest>> shuffleMap = entry.getValue();
+                  for (Map.Entry<Integer, Set<ReviveRequest>> shuffleEntry :
+                      shuffleMap.entrySet()) {
+                    // Call reviveBatch for requests in the same (appId, shuffleId)
+                    int shuffleId = shuffleEntry.getKey();
+                    Set<ReviveRequest> requests = shuffleEntry.getValue();
+                    int length = requests.size();
+                    ArrayList<ReviveRequest> filteredRequests = new ArrayList<>(length);
+
+                    // Insert request that is not MapperEnded and with the max epoch
+                    // into filteredRequests
+                    Iterator<ReviveRequest> iter = requests.iterator();
+                    while (iter.hasNext()) {
+                      ReviveRequest req = iter.next();
+                      if (checkRevivedLocation(shuffleId, req.partitionId, req.epoch, false)) {
+                        req.reviveStatus = StatusCode.SUCCESS;
+                      } else if (mapperEnded(shuffleId, req.mapId, req.attemptId)) {
+                        req.reviveStatus = StatusCode.MAP_ENDED;
+                      } else {
+                        filteredRequests.add(req);
+                      }
+                    }
+
+                    if (!filteredRequests.isEmpty()) {
+                      length = filteredRequests.size();
+                      int[] mapIds = new int[length];
+                      int[] attemptIds = new int[length];
+                      int[] partitionIds = new int[length];
+                      int[] epochs = new int[length];
+                      StatusCode[] causes = new StatusCode[length];
+                      PartitionLocation[] locs = new PartitionLocation[length];
+                      for (int i = 0; i < 0; i++) {
+                        mapIds[i] = filteredRequests.get(i).mapId;
+                        attemptIds[i] = filteredRequests.get(i).attemptId;
+                        partitionIds[i] = filteredRequests.get(i).partitionId;
+                        epochs[i] = filteredRequests.get(i).epoch;
+                        causes[i] = filteredRequests.get(i).cause;
+                        locs[i] = filteredRequests.get(i).loc;
+
+                      }
+
+                      // Call reviveBatch. Return null means Exception
+                      Map<Integer, Map<Integer, Map<Integer, StatusCode>>> results = reviveBatch(
+                        appId, shuffleId, mapIds, attemptIds, partitionIds, epochs, locs, causes);
+                      if (results == null) {
+                        for (ReviveRequest req : filteredRequests) {
+                          req.reviveStatus = StatusCode.REVIVE_FAILED;
+                        }
+                      } else {
+                        for (ReviveRequest req : filteredRequests) {
+                          req.reviveStatus = results.get(req.mapId).get(req.attemptId).get(req.partitionId);
+                        }
+                      }
+                    } // End !filteredRequests.isEmpty()
+                  } // End foreach shuffleMap.entrySet()
+                } // End foreach inProcessRequests.entrySet()
+              }
+
+              inProcessRequests.clear();
+            }
+          },
+          100,
+          100,
+          TimeUnit.MILLISECONDS);
+    }
+
+    public void addRequest(
+        String appId,
+        int shuffleId,
+        ReviveRequest request) {
+      blacklistByCause(request.cause, request.loc);
+      synchronized (this) {
+        ConcurrentHashMap<Integer, Set<ReviveRequest>> shuffleMap =
+            pendingRequests.computeIfAbsent(appId, (id) -> new ConcurrentHashMap());
+        Set<ReviveRequest> requests =
+            shuffleMap.computeIfAbsent(shuffleId, (id) -> ConcurrentHashMap.newKeySet());
+        requests.add(request);
+      }
+    }
   }
 }
