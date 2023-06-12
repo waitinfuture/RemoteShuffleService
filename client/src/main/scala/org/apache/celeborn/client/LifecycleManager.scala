@@ -20,10 +20,14 @@ package org.apache.celeborn.client
 import java.util
 import java.util.{function, HashSet => JHashSet, List => JList, Set => JSet}
 import java.util.concurrent.{ConcurrentHashMap, ScheduledFuture, TimeUnit}
+
 import scala.collection.JavaConverters._
 import scala.collection.mutable
 import scala.util.Random
+
 import com.google.common.annotations.VisibleForTesting
+import sun.awt.CausedFocusEvent.Cause
+
 import org.apache.celeborn.client.LifecycleManager.{ShuffleAllocatedWorkers, ShuffleFailedWorkers}
 import org.apache.celeborn.client.listener.WorkerStatusListener
 import org.apache.celeborn.common.CelebornConf
@@ -37,7 +41,6 @@ import org.apache.celeborn.common.protocol.message.ControlMessages._
 import org.apache.celeborn.common.protocol.message.StatusCode
 import org.apache.celeborn.common.rpc._
 import org.apache.celeborn.common.util.{JavaUtils, PbSerDeUtils, ThreadUtils, Utils}
-import sun.awt.CausedFocusEvent.Cause
 // Can Remove this if celeborn don't support scala211 in future
 import org.apache.celeborn.common.util.FunctionConverter._
 
@@ -266,10 +269,12 @@ class LifecycleManager(appId: String, val conf: CelebornConf) extends RpcEndpoin
       val partitionIds = pb.getPartitionIdList
       val epochs = pb.getEpochList
       val oldPartitions = new util.ArrayList[PartitionLocation](partitionIds.size());
-      pb.getOldPartitionList.asScala.foreach(x => oldPartitions.add(PbSerDeUtils.fromPbPartitionLocation(x)))
+      pb.getOldPartitionList.asScala.foreach(x =>
+        oldPartitions.add(PbSerDeUtils.fromPbPartitionLocation(x)))
       val causes = new util.ArrayList[StatusCode](partitionIds.size());
       pb.getStatusList.asScala.foreach(x => causes.add(Utils.toStatusCode(x)))
-      logInfo(s"Received ReviveBatch request, shuffleId ${shuffleId}, partitionIds ${partitionIds.asScala.mkString(",")}")
+      logInfo(
+        s"Received ReviveBatch request, shuffleId ${shuffleId}, partitionIds ${partitionIds.asScala.mkString(",")}")
       handleReviveBatch(
         context,
         applicationId,
@@ -510,15 +515,15 @@ class LifecycleManager(appId: String, val conf: CelebornConf) extends RpcEndpoin
   }
 
   private def handleReviveBatch(
-                                 context: RpcCallContext,
-                                 applicationId: String,
-                                 shuffleId: Int,
-                                 mapId: Integer,
-                                 attemptId: Integer,
-                                 partitionId: Integer,
-                                 oldEpoch: Integer,
-                                 oldPartition: PartitionLocation,
-                                 cause: StatusCode): Unit = {
+      context: RpcCallContext,
+      applicationId: String,
+      shuffleId: Int,
+      mapId: Integer,
+      attemptId: Integer,
+      partitionId: Integer,
+      oldEpoch: Integer,
+      oldPartition: PartitionLocation,
+      cause: StatusCode): Unit = {
     val mapIds = new util.ArrayList[Integer](1);
     mapIds.add(mapId);
     val attemptIds = new util.ArrayList[Integer](1);
@@ -532,7 +537,16 @@ class LifecycleManager(appId: String, val conf: CelebornConf) extends RpcEndpoin
     val causes = new util.ArrayList[StatusCode](1);
     causes.add(cause);
 
-    handleReviveBatch(context, applicationId, shuffleId, mapIds, attemptIds, partitionIds, epochs, locs, causes)
+    handleReviveBatch(
+      context,
+      applicationId,
+      shuffleId,
+      mapIds,
+      attemptIds,
+      partitionIds,
+      epochs,
+      locs,
+      causes)
   }
 
   private def handleReviveBatch(
@@ -549,13 +563,15 @@ class LifecycleManager(appId: String, val conf: CelebornConf) extends RpcEndpoin
     // If shuffle not registered, reply ShuffleNotRegistered and return
     if (!registeredShuffle.contains(shuffleId)) {
       logError(s"[handleReviveBatch] shuffle $shuffleId not registered!")
-      partitionIds.asScala.foreach(id => contextWrapper.reply(id, StatusCode.SHUFFLE_NOT_REGISTERED, None))
+      partitionIds.asScala.foreach(id =>
+        contextWrapper.reply(id, StatusCode.SHUFFLE_NOT_REGISTERED, None))
       return
     }
 
-    0 until mapIds.size() foreach(idx => {
+    0 until mapIds.size() foreach (idx => {
       if (commitManager.isMapperEnded(shuffleId, mapIds.get(idx))) {
-        logWarning(s"[handleReviveBatch] Mapper ended, mapId ${mapIds.get(idx)}, current attemptId ${attemptIds.get(idx)}, " +
+        logWarning(s"[handleReviveBatch] Mapper ended, mapId ${mapIds.get(
+          idx)}, current attemptId ${attemptIds.get(idx)}, " +
           s"ended attemptId ${commitManager.getMapperAttempts(shuffleId)(mapIds.get(idx))}, shuffleId $shuffleId.")
         contextWrapper.markMapperEnd(idx)
       } else {

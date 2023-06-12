@@ -211,14 +211,14 @@ object ControlMessages extends Logging {
 
   object ReviveBatch {
     def apply(
-               appId: String,
-               shuffleId: Int,
-               mapIds: Array[Int],
-               attemptIds: Array[Int],
-               partitionIds: Array[Int],
-               epochs: Array[Int],
-               oldPartitions: Array[PartitionLocation],
-               causes: Array[StatusCode]): PbReviveBatch = {
+        appId: String,
+        shuffleId: Int,
+        mapIds: Array[Int],
+        attemptIds: Array[Int],
+        partitionIds: Array[Int],
+        epochs: Array[Int],
+        oldPartitions: Array[PartitionLocation],
+        causes: Array[StatusCode]): PbReviveBatch = {
       val builder = PbReviveBatch.newBuilder()
       builder
         .setApplicationId(appId)
@@ -267,17 +267,17 @@ object ControlMessages extends Logging {
   }
 
   object ChangeLocationsResponse {
-    def apply(mapIds: util.List[Integer],
-              attemptIds: util.List[Integer],
-              partitionIds: util.List[Integer],
-              statuses: Array[StatusCode],
-              newLocs: Array[PartitionLocation]
-               ): PbChangeLocationsResponse = {
+    def apply(
+        mapIds: util.List[Integer],
+        attemptIds: util.List[Integer],
+        partitionIds: util.List[Integer],
+        statuses: Array[StatusCode],
+        newLocs: Array[PartitionLocation]): PbChangeLocationsResponse = {
       val builder = PbChangeLocationsResponse.newBuilder()
       builder.addAllMapIds(mapIds)
       builder.addAllAttemptIds(attemptIds)
       builder.addAllPartitionIds(partitionIds)
-      0 until statuses.length foreach(idx => {
+      0 until statuses.length foreach (idx => {
         builder.addStatuses(statuses(idx).getValue)
           .addLocations(PbSerDeUtils.toPbPartitionLocation(newLocs(idx)))
       })

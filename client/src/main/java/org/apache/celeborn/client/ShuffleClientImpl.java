@@ -212,7 +212,7 @@ public class ShuffleClientImpl extends ShuffleClient {
         Thread.sleep(10);
       } catch (InterruptedException e) {
         wrappedCallback.onFailure(
-          new CelebornIOException(cause + " then revive but " + StatusCode.REVIVE_FAILED));
+            new CelebornIOException(cause + " then revive but " + StatusCode.REVIVE_FAILED));
         return;
       }
     }
@@ -627,10 +627,7 @@ public class ShuffleClientImpl extends ShuffleClient {
     }
   }
 
-  /**
-   *
-   * @return mapId -> attemptId -> partitionId -> StatusCode
-   */
+  /** @return mapId -> attemptId -> partitionId -> StatusCode */
   private Map<Integer, Map<Integer, Map<Integer, StatusCode>>> reviveBatch(
       String applicationId,
       int shuffleId,
@@ -648,7 +645,14 @@ public class ShuffleClientImpl extends ShuffleClient {
       PbChangeLocationsResponse response =
           driverRssMetaService.askSync(
               ReviveBatch$.MODULE$.apply(
-                  applicationId, shuffleId, mapIds, attemptIds, partitionIds, epochs, oldLocations, causes),
+                  applicationId,
+                  shuffleId,
+                  mapIds,
+                  attemptIds,
+                  partitionIds,
+                  epochs,
+                  oldLocations,
+                  causes),
               conf.clientRpcRequestPartitionLocationsRpcAskTimeout(),
               ClassTag$.MODULE$.apply(PbChangeLocationsResponse.class));
 
@@ -663,11 +667,15 @@ public class ShuffleClientImpl extends ShuffleClient {
           map.put(partitionId, loc);
         } else if (StatusCode.MAP_ENDED.equals(statusCode)) {
           String mapKey = Utils.makeMapKey(shuffleId, mapId, attemptId);
-          mapperEndMap.computeIfAbsent(shuffleId, (id) -> ConcurrentHashMap.newKeySet()).add(mapKey);
+          mapperEndMap
+              .computeIfAbsent(shuffleId, (id) -> ConcurrentHashMap.newKeySet())
+              .add(mapKey);
         }
 
-        Map<Integer, Map<Integer, StatusCode>> attemptIdMap = results.computeIfAbsent(mapId, (id) -> new HashMap<>());
-        Map<Integer, StatusCode> partitionIdMap = attemptIdMap.computeIfAbsent(attemptId, (id) -> new HashMap<>());
+        Map<Integer, Map<Integer, StatusCode>> attemptIdMap =
+            results.computeIfAbsent(mapId, (id) -> new HashMap<>());
+        Map<Integer, StatusCode> partitionIdMap =
+            attemptIdMap.computeIfAbsent(attemptId, (id) -> new HashMap<>());
         partitionIdMap.put(partitionId, statusCode);
       }
 
@@ -852,7 +860,14 @@ public class ShuffleClientImpl extends ShuffleClient {
                       attemptId,
                       partitionId,
                       nextBatchId);
-                  ReviveRequest reviveRequest = new ReviveRequest(mapId, attemptId, partitionId, loc.getEpoch(), loc, StatusCode.HARD_SPLIT);
+                  ReviveRequest reviveRequest =
+                      new ReviveRequest(
+                          mapId,
+                          attemptId,
+                          partitionId,
+                          loc.getEpoch(),
+                          loc,
+                          StatusCode.HARD_SPLIT);
                   reviveManager.addRequest(applicationId, shuffleId, reviveRequest);
                   pushDataRetryPool.submit(
                       () ->
@@ -932,7 +947,9 @@ public class ShuffleClientImpl extends ShuffleClient {
                 if (!pushStatusIsBlacklisted(cause)) {
                   remainReviveTimes = remainReviveTimes - 1;
                 }
-                ReviveRequest reviveRequest = new ReviveRequest(mapId, attemptId, partitionId, loc.getEpoch(), loc, StatusCode.HARD_SPLIT);
+                ReviveRequest reviveRequest =
+                    new ReviveRequest(
+                        mapId, attemptId, partitionId, loc.getEpoch(), loc, StatusCode.HARD_SPLIT);
                 reviveManager.addRequest(applicationId, shuffleId, reviveRequest);
                 pushDataRetryPool.submit(
                     () ->
@@ -1737,12 +1754,19 @@ public class ShuffleClientImpl extends ShuffleClient {
                         causes[i] = filteredRequests.get(i).cause;
                         locs[i] = filteredRequests.get(i).loc;
                         logger.error("[ReviveManager.run] loc is null ? " + (locs[i] == null));
-
                       }
 
                       // Call reviveBatch. Return null means Exception
-                      Map<Integer, Map<Integer, Map<Integer, StatusCode>>> results = reviveBatch(
-                        appId, shuffleId, mapIds, attemptIds, partitionIds, epochs, locs, causes);
+                      Map<Integer, Map<Integer, Map<Integer, StatusCode>>> results =
+                          reviveBatch(
+                              appId,
+                              shuffleId,
+                              mapIds,
+                              attemptIds,
+                              partitionIds,
+                              epochs,
+                              locs,
+                              causes);
                       logger.info("results is null ? " + (results == null));
                       if (results == null) {
                         for (ReviveRequest req : filteredRequests) {
@@ -1750,7 +1774,8 @@ public class ShuffleClientImpl extends ShuffleClient {
                         }
                       } else {
                         for (ReviveRequest req : filteredRequests) {
-                          req.reviveStatus = results.get(req.mapId).get(req.attemptId).get(req.partitionId);
+                          req.reviveStatus =
+                              results.get(req.mapId).get(req.attemptId).get(req.partitionId);
                         }
                       }
                     } // End !filteredRequests.isEmpty()
@@ -1766,10 +1791,7 @@ public class ShuffleClientImpl extends ShuffleClient {
           TimeUnit.MILLISECONDS);
     }
 
-    public void addRequest(
-        String appId,
-        int shuffleId,
-        ReviveRequest request) {
+    public void addRequest(String appId, int shuffleId, ReviveRequest request) {
       blacklistByCause(request.cause, request.loc);
       logger.error("[addRequest] loc is null? " + (request.loc == null));
       synchronized (this) {
