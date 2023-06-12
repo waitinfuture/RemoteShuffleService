@@ -1753,7 +1753,6 @@ public class ShuffleClientImpl extends ShuffleClient {
                         epochs[i] = filteredRequests.get(i).epoch;
                         causes[i] = filteredRequests.get(i).cause;
                         locs[i] = filteredRequests.get(i).loc;
-                        logger.error("[ReviveManager.run] loc is null ? " + (locs[i] == null));
                       }
 
                       // Call reviveBatch. Return null means Exception
@@ -1793,7 +1792,6 @@ public class ShuffleClientImpl extends ShuffleClient {
 
     public void addRequest(String appId, int shuffleId, ReviveRequest request) {
       blacklistByCause(request.cause, request.loc);
-      logger.error("[addRequest] loc is null? " + (request.loc == null));
       synchronized (this) {
         ConcurrentHashMap<Integer, Set<ReviveRequest>> shuffleMap =
             pendingRequests.computeIfAbsent(appId, (id) -> new ConcurrentHashMap());

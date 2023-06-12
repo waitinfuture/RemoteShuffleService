@@ -36,6 +36,8 @@ case class ChangePartitionRequest(
     context: RequestLocationCallContext,
     applicationId: String,
     shuffleId: Int,
+    mapId: Int,
+    attemptId: Int,
     partitionId: Int,
     epoch: Int,
     oldPartition: PartitionLocation,
@@ -132,6 +134,8 @@ class ChangePartitionManager(
       context: RequestLocationCallContext,
       applicationId: String,
       shuffleId: Int,
+      mapId: Int,
+      attemptId: Int,
       partitionId: Int,
       oldEpoch: Int,
       oldPartition: PartitionLocation,
@@ -141,6 +145,8 @@ class ChangePartitionManager(
       context,
       applicationId,
       shuffleId,
+      mapId,
+      attemptId,
       partitionId,
       oldEpoch,
       oldPartition,
@@ -164,7 +170,7 @@ class ChangePartitionManager(
         // If new slot for the partition has been allocated, reply and return.
         // Else register and allocate for it.
         getLatestPartition(shuffleId, partitionId, oldEpoch).foreach { latestLoc =>
-          context.reply(partitionId, StatusCode.SUCCESS, Some(latestLoc))
+          context.reply(mapId, attemptId, partitionId, StatusCode.SUCCESS, Some(latestLoc))
           logDebug(s"New partition found, old partition $partitionId-$oldEpoch return it." +
             s" shuffleId: $shuffleId $latestLoc")
           return
@@ -226,7 +232,9 @@ class ChangePartitionManager(
           location -> Option(requestsMap.remove(location.getId))
         }
       }.foreach { case (newLocation, requests) =>
-        requests.map(_.asScala.toList.foreach(_.context.reply(
+        requests.map(_.asScala.toList.foreach(req => req.context.reply(
+          req.mapId,
+          req.attemptId,
           newLocation.getId,
           StatusCode.SUCCESS,
           Option(newLocation))))
@@ -244,7 +252,7 @@ class ChangePartitionManager(
         }
       }.foreach { requests =>
         requests.map(_.asScala.toList.foreach(req =>
-          req.context.reply(req.partitionId, status, None)))
+          req.context.reply(req.mapId, req.attemptId, req.partitionId, status, None)))
       }
     }
 

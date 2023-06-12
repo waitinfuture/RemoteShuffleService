@@ -26,12 +26,14 @@ import org.apache.celeborn.common.protocol.message.StatusCode
 import org.apache.celeborn.common.rpc.RpcCallContext
 
 trait RequestLocationCallContext {
-  def reply(id: Int, status: StatusCode, partitionLocationOpt: Option[PartitionLocation]): Unit
+  def reply(mapId: Int, attemptId: Int, partitionId: Int, status: StatusCode, partitionLocationOpt: Option[PartitionLocation]): Unit
 }
 
 case class ChangeLocationCallContext(context: RpcCallContext) extends RequestLocationCallContext {
   override def reply(
-      id: Int,
+      mapId: Int,
+      attemptId: Int,
+      partitionId: Int,
       status: StatusCode,
       partitionLocationOpt: Option[PartitionLocation]): Unit = {
     context.reply(ChangeLocationResponse(status, partitionLocationOpt))
@@ -47,6 +49,7 @@ case class ChangeLocationsCallContext(
   extends RequestLocationCallContext with Logging {
   val statuses = new Array[StatusCode](mapIds.size())
   val newLocs = new Array[PartitionLocation](mapIds.size())
+  0 until statuses.length foreach(idx => statuses(idx) = null)
   @volatile var count = 0
 
   def markMapperEnd(mapId: Int): Unit = this.synchronized {
@@ -63,18 +66,24 @@ case class ChangeLocationsCallContext(
   }
 
   override def reply(
+      mapId: Int,
+      attemptId: Int,
       partitionId: Int,
       status: StatusCode,
       partitionLocationOpt: Option[PartitionLocation]): Unit = this.synchronized {
-    logInfo(s"reply, shuffleId${shuffleId}, partitionId ${partitionId}")
+    logInfo(s"reply, shuffleId ${shuffleId}, partitionId ${partitionId}")
     0 until mapIds.size() foreach (idx => {
-      if (partitionIds.get(idx) == partitionId) {
-        statuses(idx) = status;
-        newLocs(idx) = partitionLocationOpt.getOrElse(new PartitionLocation())
-        count += 1
+      if (mapIds.get(idx) == mapId && attemptIds.get(idx) == attemptId && partitionIds.get(idx) == partitionId) {
+        if (statuses(idx) != null) {
+          logInfo("this partition has already been replied!")
+        } else {
+          statuses(idx) = status
+          newLocs(idx) = partitionLocationOpt.getOrElse(new PartitionLocation())
+          count += 1
+        }
       }
     })
-    logInfo(s"after reply, count is ${count}, mapIds.size is ${mapIds.size()}")
+    logInfo(s"after reply, shuffleId ${shuffleId}, mapIds.size is ${mapIds.size()}, count is ${count},")
 
     if (count == mapIds.size()) {
       doReply()
@@ -83,13 +92,15 @@ case class ChangeLocationsCallContext(
 
   private def doReply(): Unit = this.synchronized {
     context.reply(ChangeLocationsResponse(mapIds, attemptIds, partitionIds, statuses, newLocs))
-    count = 0
+//    count = 0
   }
 }
 
 case class ApplyNewLocationCallContext(context: RpcCallContext) extends RequestLocationCallContext {
   override def reply(
-      id: Int,
+      mapId: Int,
+      attemptId: Int,
+      partitionId: Int,
       status: StatusCode,
       partitionLocationOpt: Option[PartitionLocation]): Unit = {
     partitionLocationOpt match {
