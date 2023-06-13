@@ -81,8 +81,8 @@ case class ChangeLocationsCallContext(
         }
       }
     })
-//    logInfo(
-//      s"after reply, shuffleId ${shuffleId}, partitionId ${partitionId}, mapIds.size is ${mapIds.size()}, count is ${count},")
+    logInfo(
+      s"after reply, shuffleId ${shuffleId}, partitionId ${partitionId}, mapIds.size is ${mapIds.size()}, count is ${count}, epoch is ${partitionLocationOpt.get.getEpoch}")
 
     if (count == mapIds.size()) {
       doReply()
