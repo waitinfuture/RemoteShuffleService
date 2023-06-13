@@ -678,8 +678,8 @@ public class ShuffleClientImpl extends ShuffleClient {
     }
   }
 
-  /** @return mapId -> attemptId -> partitionId -> StatusCode */
-  private Map<Integer, Map<Integer, Map<Integer, StatusCode>>> reviveBatch(
+  /** @return partitionId -> StatusCode */
+  private Map<Integer, StatusCode> reviveBatch(
       String applicationId,
       int shuffleId,
       int[] mapIds,
@@ -688,7 +688,7 @@ public class ShuffleClientImpl extends ShuffleClient {
       int[] epochs,
       PartitionLocation[] oldLocations,
       StatusCode[] causes) {
-    Map<Integer, Map<Integer, Map<Integer, StatusCode>>> results = new HashMap<>();
+    Map<Integer, StatusCode> results = new HashMap<>();
 
     ConcurrentHashMap<Integer, PartitionLocation> map = reducePartitionMap.get(shuffleId);
 
@@ -723,11 +723,7 @@ public class ShuffleClientImpl extends ShuffleClient {
               .add(mapKey);
         }
 
-        Map<Integer, Map<Integer, StatusCode>> attemptIdMap =
-            results.computeIfAbsent(mapId, (id) -> new HashMap<>());
-        Map<Integer, StatusCode> partitionIdMap =
-            attemptIdMap.computeIfAbsent(attemptId, (id) -> new HashMap<>());
-        partitionIdMap.put(partitionId, statusCode);
+        results.put(partitionId, statusCode);
       }
 
       return results;
@@ -1782,7 +1778,9 @@ public class ShuffleClientImpl extends ShuffleClient {
                     int shuffleId = shuffleEntry.getKey();
                     Set<ReviveRequest> requests = shuffleEntry.getValue();
                     int length = requests.size();
+                    Set<String> inflight = new HashSet<>();
                     ArrayList<ReviveRequest> filteredRequests = new ArrayList<>(length);
+                    ArrayList<ReviveRequest> requestsToSend = new ArrayList<>(length);
 
                     // Insert request that is not MapperEnded and with the max epoch
                     // into filteredRequests
@@ -1795,11 +1793,15 @@ public class ShuffleClientImpl extends ShuffleClient {
                         req.reviveStatus = StatusCode.MAP_ENDED;
                       } else {
                         filteredRequests.add(req);
+                        if (!inflight.contains(req.loc.getUniqueId())) {
+                          requestsToSend.add(req);
+                          inflight.add(req.loc.getUniqueId());
+                        }
                       }
                     }
 
-                    if (!filteredRequests.isEmpty()) {
-                      length = filteredRequests.size();
+                    if (!requestsToSend.isEmpty()) {
+                      length = requestsToSend.size();
                       int[] mapIds = new int[length];
                       int[] attemptIds = new int[length];
                       int[] partitionIds = new int[length];
@@ -1807,16 +1809,16 @@ public class ShuffleClientImpl extends ShuffleClient {
                       StatusCode[] causes = new StatusCode[length];
                       PartitionLocation[] locs = new PartitionLocation[length];
                       for (int i = 0; i < length; i++) {
-                        mapIds[i] = filteredRequests.get(i).mapId;
-                        attemptIds[i] = filteredRequests.get(i).attemptId;
-                        partitionIds[i] = filteredRequests.get(i).partitionId;
-                        epochs[i] = filteredRequests.get(i).epoch;
-                        causes[i] = filteredRequests.get(i).cause;
-                        locs[i] = filteredRequests.get(i).loc;
+                        mapIds[i] = requestsToSend.get(i).mapId;
+                        attemptIds[i] = requestsToSend.get(i).attemptId;
+                        partitionIds[i] = requestsToSend.get(i).partitionId;
+                        epochs[i] = requestsToSend.get(i).epoch;
+                        causes[i] = requestsToSend.get(i).cause;
+                        locs[i] = requestsToSend.get(i).loc;
                       }
 
                       // Call reviveBatch. Return null means Exception
-                      Map<Integer, Map<Integer, Map<Integer, StatusCode>>> results =
+                      Map<Integer, StatusCode> results =
                           reviveBatch(
                               appId,
                               shuffleId,
@@ -1833,7 +1835,7 @@ public class ShuffleClientImpl extends ShuffleClient {
                       } else {
                         for (ReviveRequest req : filteredRequests) {
                           req.reviveStatus =
-                              results.get(req.mapId).get(req.attemptId).get(req.partitionId);
+                              results.get(req.partitionId);
                         }
                       }
                     } // End !filteredRequests.isEmpty()
