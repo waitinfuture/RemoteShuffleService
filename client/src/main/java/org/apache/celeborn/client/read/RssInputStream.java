@@ -242,6 +242,7 @@ public abstract class RssInputStream extends InputStream {
 
     private void excludeFailedLocation(PartitionLocation location, Exception e) {
       if (pushReplicateEnabled && fetchBlacklistEnabled && isCriticalCause(e)) {
+        logger.info("added to fetch blacklist, loc {}, cause ", location.hostAndPushPort(), e );
         fetchExcludedWorkers.put(location.hostAndFetchPort(), System.currentTimeMillis());
       }
     }

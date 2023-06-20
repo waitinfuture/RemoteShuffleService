@@ -165,6 +165,7 @@ class ChangePartitionManager(
         // Else register and allocate for it.
         getLatestPartition(shuffleId, partitionId, oldEpoch).foreach { latestLoc =>
           context.reply(
+            partitionId,
             StatusCode.SUCCESS,
             Some(latestLoc),
             lifecycleManager.workerStatusTracker.workerAvailable(oldPartition))
@@ -229,12 +230,12 @@ class ChangePartitionManager(
           location -> Option(requestsMap.remove(location.getId))
         }
       }.foreach { case (newLocation, requests) =>
-        requests.foreach(_.asScala.foreach { req =>
+        requests.map(_.asScala.toList.foreach(req =>
           req.context.reply(
+            req.partitionId,
             StatusCode.SUCCESS,
             Option(newLocation),
-            lifecycleManager.workerStatusTracker.workerAvailable(req.oldPartition))
-        })
+            lifecycleManager.workerStatusTracker.workerAvailable(req.oldPartition))))
       }
     }
 
@@ -250,6 +251,7 @@ class ChangePartitionManager(
       }.foreach { requests =>
         requests.map(_.asScala.toList.foreach(req =>
           req.context.reply(
+            req.partitionId,
             status,
             None,
             lifecycleManager.workerStatusTracker.workerAvailable(req.oldPartition))))
