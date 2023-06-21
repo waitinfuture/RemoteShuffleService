@@ -19,11 +19,8 @@ package org.apache.celeborn.common.protocol.message
 
 import java.util
 import java.util.UUID
-
 import scala.collection.JavaConverters._
-
 import org.roaringbitmap.RoaringBitmap
-
 import org.apache.celeborn.common.identity.UserIdentifier
 import org.apache.celeborn.common.internal.Logging
 import org.apache.celeborn.common.meta.{DiskInfo, WorkerInfo}
@@ -32,6 +29,8 @@ import org.apache.celeborn.common.protocol._
 import org.apache.celeborn.common.protocol.MessageType._
 import org.apache.celeborn.common.quota.ResourceConsumption
 import org.apache.celeborn.common.util.{PbSerDeUtils, Utils}
+
+import java.util.concurrent.atomic.AtomicLong
 
 sealed trait Message extends Serializable
 
@@ -188,14 +187,17 @@ object ControlMessages extends Logging {
     extends MasterMessage
 
   object Revive {
+    val atomicId = new AtomicLong()
     def apply(
         appId: String,
         shuffleId: Int,
         mapIds: util.Set[Integer],
-        reviveRequests: util.Collection[ReviveRequest]): PbRevive = {
+        reviveRequests: util.Collection[ReviveRequest],
+        uniqueId: Long): PbRevive = {
       val builder = PbRevive.newBuilder()
         .setApplicationId(appId)
         .setShuffleId(shuffleId)
+        .setUniqueId(uniqueId)
         .addAllMapId(mapIds)
 
       reviveRequests.asScala.foreach(req => {
@@ -210,29 +212,6 @@ object ControlMessages extends Logging {
       })
 
       builder.build()
-    }
-
-    def apply(
-        appId: String,
-        shuffleId: Int,
-        mapId: Int,
-        partitionId: Int,
-        epoch: Int,
-        oldPartition: PartitionLocation,
-        cause: StatusCode): PbRevive = {
-      val partitionInfoBuilder = PbRevivePartitionInfo.newBuilder()
-        .setPartitionId(partitionId)
-        .setEpoch(epoch)
-        .setStatus(cause.getValue)
-      if (oldPartition != null) {
-        partitionInfoBuilder.setPartition(PbSerDeUtils.toPbPartitionLocation(oldPartition))
-      }
-      val builder = PbRevive.newBuilder()
-      builder.setApplicationId(appId)
-        .setShuffleId(shuffleId)
-        .addMapId(mapId)
-        .addPartitionInfo(partitionInfoBuilder.build())
-        .build()
     }
   }
 

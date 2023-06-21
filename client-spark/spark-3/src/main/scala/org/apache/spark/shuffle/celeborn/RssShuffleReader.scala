@@ -42,6 +42,7 @@ class RssShuffleReader[K, C](
 
   private val dep = handle.dependency
   private val rssShuffleClient = ShuffleClient.get(
+    handle.appUniqueId,
     handle.rssMetaServiceHost,
     handle.rssMetaServicePort,
     conf,

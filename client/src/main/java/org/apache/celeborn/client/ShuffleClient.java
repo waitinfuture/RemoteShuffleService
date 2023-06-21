@@ -51,7 +51,7 @@ public abstract class ShuffleClient {
 
   protected ShuffleClient() {}
 
-  public static ShuffleClient get(
+  public static ShuffleClient get(String appId,
       String driverHost, int port, CelebornConf conf, UserIdentifier userIdentifier) {
     if (null == _instance || !initialized) {
       synchronized (ShuffleClient.class) {
@@ -61,12 +61,12 @@ public abstract class ShuffleClient {
           // ShuffleClient is building a singleton, it may cause the MetaServiceEndpoint to not be
           // assigned. An Executor will only construct a ShuffleClient singleton once. At this time,
           // when communicating with MetaService, it will cause a NullPointerException.
-          _instance = new ShuffleClientImpl(conf, userIdentifier);
+          _instance = new ShuffleClientImpl(appId, conf, userIdentifier);
           _instance.setupMetaServiceRef(driverHost, port);
           initialized = true;
         } else if (!initialized) {
           _instance.shutdown();
-          _instance = new ShuffleClientImpl(conf, userIdentifier);
+          _instance = new ShuffleClientImpl(appId, conf, userIdentifier);
           _instance.setupMetaServiceRef(driverHost, port);
           initialized = true;
         }

@@ -20,6 +20,7 @@ package org.apache.celeborn.common.protocol;
 import org.apache.celeborn.common.protocol.message.StatusCode;
 
 public class ReviveRequest {
+  public int shuffleId;
   public int mapId;
   public int attemptId;
   public int partitionId;
@@ -27,14 +28,17 @@ public class ReviveRequest {
   public PartitionLocation loc;
   public StatusCode cause;
   public volatile int reviveStatus;
+  public volatile long reviveId;
 
   public ReviveRequest(
+    int shuffleId,
       int mapId,
       int attemptId,
       int partitionId,
       int epoch,
       PartitionLocation loc,
       StatusCode cause) {
+    this.shuffleId = shuffleId;
     this.mapId = mapId;
     this.attemptId = attemptId;
     this.partitionId = partitionId;

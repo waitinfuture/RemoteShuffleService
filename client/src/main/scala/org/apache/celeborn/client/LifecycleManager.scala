@@ -259,7 +259,7 @@ class LifecycleManager(appId: String, val conf: CelebornConf) extends RpcEndpoin
         causes.add(Utils.toStatusCode(info.getStatus))
       }
       logInfo(
-        s"Received Revive request, shuffleId $shuffleId, partitions ${partitionIds.size()}, partitionIds ${partitionIds.asScala.mkString(",")}")
+        s"Received Revive request, reviveId ${pb.getUniqueId} shuffleId $shuffleId, partitions ${partitionIds.size()}, partitionIds ${partitionIds.asScala.mkString(",")}")
       handleRevive(
         context,
         applicationId,
@@ -268,7 +268,8 @@ class LifecycleManager(appId: String, val conf: CelebornConf) extends RpcEndpoin
         partitionIds,
         epochs,
         oldPartitions,
-        causes)
+        causes,
+        pb.getUniqueId)
 
     case pb: PbPartitionSplit =>
       val applicationId = pb.getApplicationId
@@ -279,7 +280,7 @@ class LifecycleManager(appId: String, val conf: CelebornConf) extends RpcEndpoin
       logTrace(s"Received split request, " +
         s"$applicationId, $shuffleId, $partitionId, $epoch, $oldPartition")
       changePartitionManager.handleRequestPartitionLocation(
-        ChangeLocationsCallContext(context, 1),
+        ChangeLocationsCallContext(context, 1, 0),
         applicationId,
         shuffleId,
         partitionId,
@@ -512,9 +513,10 @@ class LifecycleManager(appId: String, val conf: CelebornConf) extends RpcEndpoin
       partitionIds: util.List[Integer],
       oldEpochs: util.List[Integer],
       oldPartitions: util.List[PartitionLocation],
-      causes: util.List[StatusCode]): Unit = {
+      causes: util.List[StatusCode],
+      uniqueId: Long): Unit = {
     val contextWrapper =
-      ChangeLocationsCallContext(context, partitionIds.size())
+      ChangeLocationsCallContext(context, partitionIds.size(), uniqueId)
     // If shuffle not registered, reply ShuffleNotRegistered and return
     if (!registeredShuffle.contains(shuffleId)) {
       logError(s"[handleRevive] shuffle $shuffleId not registered!")
@@ -753,9 +755,14 @@ class LifecycleManager(appId: String, val conf: CelebornConf) extends RpcEndpoin
             logWarning(s"Cannot find workInfo for $shuffleId from previous success workResource:" +
               s" ${destroyWorkerInfo.readableAddress()}, init according to partition info")
             try {
-              destroyWorkerInfo.endpoint = rpcEnv.setupEndpointRef(
-                RpcAddress.apply(destroyWorkerInfo.host, destroyWorkerInfo.rpcPort),
-                WORKER_EP)
+              if (workerStatusTracker.workerAvailable(destroyWorkerInfo)) {
+                destroyWorkerInfo.endpoint = rpcEnv.setupEndpointRef(
+                  RpcAddress.apply(destroyWorkerInfo.host, destroyWorkerInfo.rpcPort),
+                  WORKER_EP)
+              } else {
+                logInfo(s"${destroyWorkerInfo.toUniqueId()} is excluded, set destroyWorkerInfo to null")
+                destroyWorkerInfo = null
+              }
             } catch {
               case t: Throwable =>
                 logError(
