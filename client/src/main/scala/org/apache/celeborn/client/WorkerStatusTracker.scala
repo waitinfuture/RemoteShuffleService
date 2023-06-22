@@ -126,7 +126,7 @@ class WorkerStatusTracker(
       val shuttingDownMsg = shuttingWorkers.asScala.map(_.readableAddress()).mkString("\n")
       logInfo(
         s"""
-           |Reporting Worker Failure:
+           |before Reporting Worker Failure:
            |$failedWorkerMsg
            |Current blacklist:
            |$blacklistMsg
@@ -144,6 +144,14 @@ class WorkerStatusTracker(
           blacklist.put(worker, (statusCode, blacklist.get(worker)._2))
         case _ => // Not cover
       }
+      val shuttingDownMsg2 = shuttingWorkers.asScala.map(_.readableAddress()).mkString("\n")
+      logInfo(
+        s"""
+           |after Reporting Worker Failure:
+           |Current blacklist:
+           |$blacklistMsg
+           |Current shutting down:
+           |$shuttingDownMsg2""".stripMargin)
     }
   }
 
@@ -153,7 +161,7 @@ class WorkerStatusTracker(
 
   def handleHeartbeatResponse(res: HeartbeatFromApplicationResponse): Unit = {
     if (res.statusCode == StatusCode.SUCCESS) {
-      logDebug(s"Received Blacklist from Master, blacklist: ${res.blacklist} " +
+      logInfo(s"Received Blacklist from Master, blacklist: ${res.blacklist} " +
         s"unknown workers: ${res.unknownWorkers}, shutdown workers: ${res.shuttingWorkers}")
       val current = System.currentTimeMillis()
 
@@ -200,7 +208,7 @@ class WorkerStatusTracker(
         }
       }
 
-      logDebug(s"Current blacklist $blacklist")
+      logInfo(s"Current blacklist $blacklist, Current shuttingDown ${shuttingWorkers.asScala.map(_.readableAddress()).mkString("\n")}")
     }
   }
 }

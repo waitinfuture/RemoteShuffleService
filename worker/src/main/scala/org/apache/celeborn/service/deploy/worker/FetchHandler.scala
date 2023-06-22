@@ -233,7 +233,6 @@ class FetchHandler(val conf: TransportConf) extends BaseMessageHandler with Logg
           req.streamChunkSlice.offset,
           req.streamChunkSlice.len)
         chunkStreamManager.chunkBeingSent(req.streamChunkSlice.streamId)
-        logInfo(s"Sending chunk ${req.streamChunkSlice.streamId}, ${req.streamChunkSlice.chunkIndex}, ${req.streamChunkSlice.offset}, ${req.streamChunkSlice.len}")
         client.getChannel.writeAndFlush(new ChunkFetchSuccess(req.streamChunkSlice, buf))
           .addListener(new GenericFutureListener[Future[_ >: Void]] {
             override def operationComplete(future: Future[_ >: Void]): Unit = {
@@ -241,7 +240,6 @@ class FetchHandler(val conf: TransportConf) extends BaseMessageHandler with Logg
               if (fetchTimeMetric != null) {
                 fetchTimeMetric.update(System.nanoTime() - fetchBeginTime)
               }
-              logInfo(s"Sent chunk ${req.streamChunkSlice.streamId}, ${req.streamChunkSlice.chunkIndex}, ${req.streamChunkSlice.offset}, ${req.streamChunkSlice.len}")
               workerSource.stopTimer(WorkerSource.FetchChunkTime, req.toString)
             }
           })

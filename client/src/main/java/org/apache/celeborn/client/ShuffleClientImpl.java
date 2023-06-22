@@ -709,6 +709,7 @@ public class ShuffleClientImpl extends ShuffleClient {
           stageEnded(shuffleId);
           return results;
         } else if (StatusCode.SHUFFLE_NOT_REGISTERED.getValue() == statusCode) {
+          logger.error("SHUFFLE_NOT_REGISTERED!");
           return null;
         }
         results.put(partitionId, statusCode);
