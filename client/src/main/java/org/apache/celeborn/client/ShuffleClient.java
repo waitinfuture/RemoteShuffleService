@@ -51,8 +51,8 @@ public abstract class ShuffleClient {
 
   protected ShuffleClient() {}
 
-  public static ShuffleClient get(String appId,
-      String driverHost, int port, CelebornConf conf, UserIdentifier userIdentifier) {
+  public static ShuffleClient get(
+      String appId, String driverHost, int port, CelebornConf conf, UserIdentifier userIdentifier) {
     if (null == _instance || !initialized) {
       synchronized (ShuffleClient.class) {
         if (null == _instance) {

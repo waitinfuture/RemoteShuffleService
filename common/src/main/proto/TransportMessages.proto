@@ -219,7 +219,6 @@ message PbRevive {
   int32 shuffleId = 2;
   repeated int32 mapId = 3;
   repeated PbRevivePartitionInfo partitionInfo = 4;
-  int64 uniqueId = 5;
 }
 
 message PbChangeLocationPartitionInfo {

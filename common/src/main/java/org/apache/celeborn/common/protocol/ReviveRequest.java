@@ -28,10 +28,9 @@ public class ReviveRequest {
   public PartitionLocation loc;
   public StatusCode cause;
   public volatile int reviveStatus;
-  public volatile long reviveId;
 
   public ReviveRequest(
-    int shuffleId,
+      int shuffleId,
       int mapId,
       int attemptId,
       int partitionId,

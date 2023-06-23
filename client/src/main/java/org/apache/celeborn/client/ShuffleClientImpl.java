@@ -20,8 +20,10 @@ package org.apache.celeborn.client;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.*;
-import java.util.concurrent.*;
-import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.TimeUnit;
 
 import scala.reflect.ClassTag$;
 
@@ -118,8 +120,6 @@ public class ShuffleClientImpl extends ShuffleClient {
 
   private final ReviveManager reviveManager = new ReviveManager(this);
 
-  AtomicLong reviveId = new AtomicLong();
-
   protected static class ReduceFileGroups {
     public Map<Integer, Set<PartitionLocation>> partitionGroups;
     public int[] mapAttempts;
@@ -187,9 +187,6 @@ public class ShuffleClientImpl extends ShuffleClient {
     partitionSplitPool =
         ThreadUtils.newDaemonCachedThreadPool(
             "celeborn-shuffle-split", pushSplitPartitionThreads, 60);
-
-    Random rand = new Random();
-    reviveId.set(Math.abs(rand.nextLong()) / 1000 * 1000);
   }
 
   private boolean checkPushBlacklisted(
@@ -253,8 +250,7 @@ public class ShuffleClientImpl extends ShuffleClient {
                   + " then revive but "
                   + StatusCode.REVIVE_FAILED
                   + ", revive status "
-                  + request.reviveStatus
-          + ", reviveId " + request.reviveId));
+                  + request.reviveStatus));
     } else {
       PartitionLocation newLoc = reducePartitionMap.get(shuffleId).get(partitionId);
       logger.info(
@@ -343,12 +339,12 @@ public class ShuffleClientImpl extends ShuffleClient {
       if (request.reviveStatus != StatusCode.REVIVE_INITIALIZED.getValue()) {
         if (mapperEnded(shuffleId, mapId)) {
           logger.debug(
-            "Revive for push merged data success, but the mapper already ended for shuffle {} map {} attempt {} partition {} batch {}.",
-            shuffleId,
-            mapId,
-            attemptId,
-            request.partitionId,
-            oldGroupedBatchId);
+              "Revive for push merged data success, but the mapper already ended for shuffle {} map {} attempt {} partition {} batch {}.",
+              shuffleId,
+              mapId,
+              attemptId,
+              request.partitionId,
+              oldGroupedBatchId);
         } else if (request.reviveStatus == StatusCode.SUCCESS.getValue()) {
           PartitionLocation newLoc = reducePartitionMap.get(shuffleId).get(request.partitionId);
           DataBatches newDataBatches =
@@ -606,22 +602,16 @@ public class ShuffleClientImpl extends ShuffleClient {
     if (shuffleClientPushBlacklistEnabled && oldLocation != null) {
       if (cause == StatusCode.PUSH_DATA_CREATE_CONNECTION_FAIL_MASTER) {
         blacklist.add(oldLocation.hostAndPushPort());
-        logger.info("cause is " + cause + ", add to blacklist, address " + oldLocation.hostAndPushPort());
       } else if (cause == StatusCode.PUSH_DATA_CONNECTION_EXCEPTION_MASTER) {
         blacklist.add(oldLocation.hostAndPushPort());
-        logger.info("cause is " + cause + ", add to blacklist, address " + oldLocation.hostAndPushPort());
       } else if (cause == StatusCode.PUSH_DATA_TIMEOUT_MASTER) {
         blacklist.add(oldLocation.hostAndPushPort());
-        logger.info("cause is " + cause + ", add to blacklist, address " + oldLocation.hostAndPushPort());
       } else if (cause == StatusCode.PUSH_DATA_CREATE_CONNECTION_FAIL_SLAVE) {
         blacklist.add(oldLocation.getPeer().hostAndPushPort());
-        logger.info("cause is " + cause + ", add to blacklist, address " + oldLocation.hostAndPushPort());
       } else if (cause == StatusCode.PUSH_DATA_CONNECTION_EXCEPTION_SLAVE) {
         blacklist.add(oldLocation.getPeer().hostAndPushPort());
-        logger.info("cause is " + cause + ", add to blacklist, address " + oldLocation.getPeer().hostAndPushPort());
       } else if (cause == StatusCode.PUSH_DATA_TIMEOUT_SLAVE) {
         blacklist.add(oldLocation.getPeer().hostAndPushPort());
-        logger.info("cause is " + cause + ", add to blacklist, address " + oldLocation.getPeer().hostAndPushPort());
       }
     }
   }
@@ -640,8 +630,8 @@ public class ShuffleClientImpl extends ShuffleClient {
     Set<Integer> mapIds = new HashSet<>();
     mapIds.add(mapId);
     List<ReviveRequest> requests = new ArrayList<>();
-    ReviveRequest req = new ReviveRequest(shuffleId, mapId, attemptId, partitionId, epoch, oldLocation, cause);
-    req.reviveId = reviveId.get();
+    ReviveRequest req =
+        new ReviveRequest(shuffleId, mapId, attemptId, partitionId, epoch, oldLocation, cause);
     requests.add(req);
     Map<Integer, Integer> results = reviveBatch(applicationId, shuffleId, mapIds, requests);
 
@@ -673,17 +663,14 @@ public class ShuffleClientImpl extends ShuffleClient {
 
     Map<Integer, PartitionLocation> oldLocMap = new HashMap<>();
     Iterator<ReviveRequest> iter = requests.iterator();
-    long reviveId = -1;
     while (iter.hasNext()) {
       ReviveRequest req = iter.next();
       oldLocMap.put(req.partitionId, req.loc);
-      reviveId = req.reviveId;
     }
     try {
-      logger.info("Send Revive request, reviveId {}", reviveId);
       PbChangeLocationResponse response =
           driverRssMetaService.askSync(
-              Revive$.MODULE$.apply(applicationId, shuffleId, mapIds, requests, reviveId),
+              Revive$.MODULE$.apply(applicationId, shuffleId, mapIds, requests),
               conf.clientRpcRequestPartitionLocationRpcAskTimeout(),
               ClassTag$.MODULE$.apply(PbChangeLocationResponse.class));
 
@@ -903,7 +890,7 @@ public class ShuffleClientImpl extends ShuffleClient {
                       nextBatchId);
                   ReviveRequest reviveRequest =
                       new ReviveRequest(
-                        shuffleId,
+                          shuffleId,
                           mapId,
                           attemptId,
                           partitionId,
@@ -990,7 +977,8 @@ public class ShuffleClientImpl extends ShuffleClient {
                   remainReviveTimes = remainReviveTimes - 1;
                 }
                 ReviveRequest reviveRequest =
-                    new ReviveRequest(shuffleId, mapId, attemptId, partitionId, loc.getEpoch(), loc, cause);
+                    new ReviveRequest(
+                        shuffleId, mapId, attemptId, partitionId, loc.getEpoch(), loc, cause);
                 reviveManager.addRequest(applicationId, shuffleId, reviveRequest);
                 pushDataRetryPool.submit(
                     () ->

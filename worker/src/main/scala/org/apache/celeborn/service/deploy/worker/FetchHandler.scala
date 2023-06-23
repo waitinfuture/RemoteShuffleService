@@ -211,7 +211,7 @@ class FetchHandler(val conf: TransportConf) extends BaseMessageHandler with Logg
   }
 
   def handleChunkFetchRequest(client: TransportClient, req: ChunkFetchRequest): Unit = {
-    logError(s"Received req from ${NettyUtils.getRemoteAddress(client.getChannel)}" +
+    logTrace(s"Received req from ${NettyUtils.getRemoteAddress(client.getChannel)}" +
       s" to fetch block ${req.streamChunkSlice}")
 
     val chunksBeingTransferred = chunkStreamManager.chunksBeingTransferred

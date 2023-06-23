@@ -126,7 +126,7 @@ class WorkerStatusTracker(
       val shuttingDownMsg = shuttingWorkers.asScala.map(_.readableAddress()).mkString("\n")
       logInfo(
         s"""
-           |before Reporting Worker Failure:
+           |Reporting Worker Failure:
            |$failedWorkerMsg
            |Current blacklist:
            |$blacklistMsg
@@ -144,14 +144,6 @@ class WorkerStatusTracker(
           blacklist.put(worker, (statusCode, blacklist.get(worker)._2))
         case _ => // Not cover
       }
-      val shuttingDownMsg2 = shuttingWorkers.asScala.map(_.readableAddress()).mkString("\n")
-      logInfo(
-        s"""
-           |after Reporting Worker Failure:
-           |Current blacklist:
-           |$blacklistMsg
-           |Current shutting down:
-           |$shuttingDownMsg2""".stripMargin)
     }
   }
 
@@ -208,7 +200,8 @@ class WorkerStatusTracker(
         }
       }
 
-      logInfo(s"Current blacklist $blacklist, Current shuttingDown ${shuttingWorkers.asScala.map(_.readableAddress()).mkString("\n")}")
+      logInfo(s"Current blacklist $blacklist, Current shuttingDown ${shuttingWorkers.asScala.map(
+        _.readableAddress()).mkString("\n")}")
     }
   }
 }

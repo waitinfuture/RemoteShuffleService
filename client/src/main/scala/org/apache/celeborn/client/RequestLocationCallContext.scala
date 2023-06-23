@@ -36,8 +36,7 @@ trait RequestLocationCallContext {
 
 case class ChangeLocationsCallContext(
     context: RpcCallContext,
-    partitionCount: Int,
-    uniqueId: Long)
+    partitionCount: Int)
   extends RequestLocationCallContext with Logging {
   val endedMapIds = new util.HashSet[Integer]()
   val newLocs =

@@ -258,8 +258,6 @@ class LifecycleManager(appId: String, val conf: CelebornConf) extends RpcEndpoin
         }
         causes.add(Utils.toStatusCode(info.getStatus))
       }
-      logInfo(
-        s"Received Revive request, reviveId ${pb.getUniqueId} shuffleId $shuffleId, partitions ${partitionIds.size()}, partitionIds ${partitionIds.asScala.mkString(",")}")
       handleRevive(
         context,
         applicationId,
@@ -268,8 +266,7 @@ class LifecycleManager(appId: String, val conf: CelebornConf) extends RpcEndpoin
         partitionIds,
         epochs,
         oldPartitions,
-        causes,
-        pb.getUniqueId)
+        causes)
 
     case pb: PbPartitionSplit =>
       val applicationId = pb.getApplicationId
@@ -280,7 +277,7 @@ class LifecycleManager(appId: String, val conf: CelebornConf) extends RpcEndpoin
       logTrace(s"Received split request, " +
         s"$applicationId, $shuffleId, $partitionId, $epoch, $oldPartition")
       changePartitionManager.handleRequestPartitionLocation(
-        ChangeLocationsCallContext(context, 1, 0),
+        ChangeLocationsCallContext(context, 1),
         applicationId,
         shuffleId,
         partitionId,
@@ -513,10 +510,9 @@ class LifecycleManager(appId: String, val conf: CelebornConf) extends RpcEndpoin
       partitionIds: util.List[Integer],
       oldEpochs: util.List[Integer],
       oldPartitions: util.List[PartitionLocation],
-      causes: util.List[StatusCode],
-      uniqueId: Long): Unit = {
+      causes: util.List[StatusCode]): Unit = {
     val contextWrapper =
-      ChangeLocationsCallContext(context, partitionIds.size(), uniqueId)
+      ChangeLocationsCallContext(context, partitionIds.size())
     // If shuffle not registered, reply ShuffleNotRegistered and return
     if (!registeredShuffle.contains(shuffleId)) {
       logError(s"[handleRevive] shuffle $shuffleId not registered!")
@@ -760,7 +756,8 @@ class LifecycleManager(appId: String, val conf: CelebornConf) extends RpcEndpoin
                   RpcAddress.apply(destroyWorkerInfo.host, destroyWorkerInfo.rpcPort),
                   WORKER_EP)
               } else {
-                logInfo(s"${destroyWorkerInfo.toUniqueId()} is excluded, set destroyWorkerInfo to null")
+                logInfo(
+                  s"${destroyWorkerInfo.toUniqueId()} is unavailable, set destroyWorkerInfo to null")
                 destroyWorkerInfo = null
               }
             } catch {
