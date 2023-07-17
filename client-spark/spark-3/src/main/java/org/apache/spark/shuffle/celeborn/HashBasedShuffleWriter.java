@@ -18,10 +18,12 @@
 package org.apache.spark.shuffle.celeborn;
 
 import java.io.IOException;
+import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.atomic.LongAdder;
 
 import javax.annotation.Nullable;
 
+import org.apache.celeborn.client.write.PushTask;
 import scala.Option;
 import scala.Product2;
 import scala.reflect.ClassTag;

@@ -77,7 +77,7 @@ public class TransportClientFactory implements Closeable {
 
   private final Class<? extends Channel> socketChannelClass;
   private EventLoopGroup workerGroup;
-  protected ByteBufAllocator pooledAllocator;
+  public ByteBufAllocator pooledAllocator;
 
   public TransportClientFactory(TransportContext context) {
     this.context = Preconditions.checkNotNull(context);
