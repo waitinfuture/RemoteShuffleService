@@ -476,10 +476,10 @@ object ControlMessages extends Logging {
   // TODO change message type to GeneratedMessageV3
   def toTransportMessage(message: Any): TransportMessage = message match {
     case _: PbCheckForWorkerTimeoutOrBuilder =>
-      new TransportMessage(MessageType.CHECK_WORKER_TIMEOUT, null)
+      new TransportMessage(MessageType.CHECK_FOR_WORKER_TIMEOUT, null)
 
     case CheckForApplicationTimeOut =>
-      new TransportMessage(MessageType.CHECK_APPLICATION_TIMEOUT, null)
+      new TransportMessage(MessageType.CHECK_FOR_APPLICATION_TIMEOUT, null)
 
     case CheckForHDFSExpiredDirsTimeout =>
       new TransportMessage(MessageType.CHECK_FOR_HDFS_EXPIRED_DIRS_TIMEOUT, null)
@@ -537,7 +537,7 @@ object ControlMessages extends Logging {
         .addAllExpiredShuffleKeys(expiredShuffleKeys)
         .setRegistered(registered)
         .build().toByteArray
-      new TransportMessage(MessageType.HEARTBEAT_FROM_WORKER_RESPONSE, payload)
+      new TransportMessage(MessageType.HEARTBEAT_RESPONSE, payload)
 
     case pb: PbRegisterShuffle =>
       new TransportMessage(MessageType.REGISTER_SHUFFLE, pb.toByteArray)
@@ -603,7 +603,7 @@ object ControlMessages extends Logging {
       new TransportMessage(MessageType.REQUEST_SLOTS_RESPONSE, payload)
 
     case pb: PbRevive =>
-      new TransportMessage(MessageType.CHANGE_LOCATION, pb.toByteArray)
+      new TransportMessage(MessageType.REVIVE, pb.toByteArray)
 
     case pb: PbChangeLocationResponse =>
       new TransportMessage(MessageType.CHANGE_LOCATION_RESPONSE, pb.toByteArray)
@@ -923,7 +923,7 @@ object ControlMessages extends Logging {
           pbHeartbeatFromWorker.getHighWorkload,
           pbHeartbeatFromWorker.getRequestId)
 
-      case HEARTBEAT_FROM_WORKER_RESPONSE_VALUE =>
+      case HEARTBEAT_RESPONSE_VALUE =>
         val pbHeartbeatFromWorkerResponse =
           PbHeartbeatFromWorkerResponse.parseFrom(message.getPayload)
         val expiredShuffleKeys = new util.HashSet[String]()
@@ -966,7 +966,7 @@ object ControlMessages extends Logging {
           PbSerDeUtils.fromPbWorkerResource(
             pbRequestSlotsResponse.getWorkerResourceMap))
 
-      case CHANGE_LOCATION_VALUE =>
+      case REVIVE_VALUE =>
         PbRevive.parseFrom(message.getPayload)
 
       case CHANGE_LOCATION_RESPONSE_VALUE =>
@@ -1163,10 +1163,10 @@ object ControlMessages extends Logging {
       case ONE_WAY_MESSAGE_RESPONSE_VALUE =>
         OneWayMessageResponse
 
-      case CHECK_WORKER_TIMEOUT_VALUE =>
+      case CHECK_FOR_WORKER_TIMEOUT_VALUE =>
         pbCheckForWorkerTimeout
 
-      case CHECK_APPLICATION_TIMEOUT_VALUE =>
+      case CHECK_FOR_APPLICATION_TIMEOUT_VALUE =>
         CheckForApplicationTimeOut
 
       case CHECK_FOR_HDFS_EXPIRED_DIRS_TIMEOUT_VALUE =>
