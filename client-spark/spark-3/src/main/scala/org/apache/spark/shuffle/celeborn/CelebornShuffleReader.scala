@@ -228,27 +228,57 @@ class CelebornShuffleReader[K, C](
       } else null
     }
 
+    val streams = new ConcurrentHashMap[Integer, CelebornInputStream]()
+    (startPartition until endPartition).map(partitionId => {
+      streamCreatorPool.submit(new Runnable {
+        override def run(): Unit = {
+          if (exceptionRef.get() == null) {
+            try {
+              val start = System.currentTimeMillis()
+              val inputStream = createInputStream(partitionId)
+              val duration = System.currentTimeMillis() - start
+              streams.put(partitionId, inputStream)
+              logInfo(s"Create inputstream costs ${duration}ms")
+            } catch {
+              case e: IOException =>
+                logError(s"Exception caught when readPartition $partitionId!", e)
+                exceptionRef.compareAndSet(null, e)
+              case e: Throwable =>
+                logError(s"Non IOException caught when readPartition $partitionId!", e)
+                exceptionRef.compareAndSet(null, new CelebornIOException(e))
+            }
+          }
+        }
+      })
+    })
+    logInfo("Submitted Creating inputStreams")
+
     val recordIter = (startPartition until endPartition).iterator.map(partitionId => {
       if (handle.numMappers > 0) {
         val startFetchWait = System.nanoTime()
-        val inputStream: CelebornInputStream = createInputStream(partitionId)
-        if (exceptionRef.get() != null) {
-          exceptionRef.get() match {
-            case ce @ (_: CelebornIOException | _: PartitionUnRetryAbleException) =>
-              if (throwsFetchFailure &&
-                shuffleClient.reportShuffleFetchFailure(handle.shuffleId, shuffleId)) {
-                throw new FetchFailedException(
-                  null,
-                  handle.shuffleId,
-                  -1,
-                  -1,
-                  partitionId,
-                  SparkUtils.FETCH_FAILURE_ERROR_MSG + handle.shuffleId + "/" + shuffleId,
-                  ce)
-              } else
-                throw ce
-            case e => throw e
+        var inputStream: CelebornInputStream = streams.get(partitionId)
+        while (inputStream == null) {
+          if (exceptionRef.get() != null) {
+            exceptionRef.get() match {
+              case ce@(_: CelebornIOException | _: PartitionUnRetryAbleException) =>
+                if (throwsFetchFailure &&
+                  shuffleClient.reportShuffleFetchFailure(handle.shuffleId, shuffleId)) {
+                  throw new FetchFailedException(
+                    null,
+                    handle.shuffleId,
+                    -1,
+                    -1,
+                    partitionId,
+                    SparkUtils.FETCH_FAILURE_ERROR_MSG + handle.shuffleId + "/" + shuffleId,
+                    ce)
+                } else
+                  throw ce
+              case e => throw e
+            }
           }
+          logInfo("inputStream is null, sleeping...")
+          Thread.sleep(50)
+          inputStream = streams.get(partitionId)
         }
         metricsCallback.incReadTime(
           TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startFetchWait))

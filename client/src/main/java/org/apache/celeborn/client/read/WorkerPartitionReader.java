@@ -20,11 +20,15 @@ package org.apache.celeborn.client.read;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
 import io.netty.buffer.ByteBuf;
 import io.netty.util.ReferenceCounted;
+import javafx.util.Pair;
+import org.apache.celeborn.common.util.ThreadUtils;
+import org.apache.hadoop.util.ThreadUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -46,6 +50,7 @@ import org.apache.celeborn.common.protocol.StreamType;
 import org.apache.celeborn.common.util.ExceptionUtils;
 
 public class WorkerPartitionReader implements PartitionReader {
+  static ThreadPoolExecutor closeStreamPool = ThreadUtils.newDaemonFixedThreadPool(1, "celeborn-close-stream");
   private final Logger logger = LoggerFactory.getLogger(WorkerPartitionReader.class);
   private PartitionLocation location;
   private final TransportClientFactory clientFactory;
@@ -192,7 +197,12 @@ public class WorkerPartitionReader implements PartitionReader {
                   .setStreamId(streamHandler.getStreamId())
                   .build()
                   .toByteArray());
-      client.sendRpc(bufferStreamEnd.toByteBuffer());
+      closeStreamPool.submit(new Runnable() {
+        @Override
+        public void run() {
+          client.sendRpc(bufferStreamEnd.toByteBuffer());
+        }
+      });
     }
   }
 

@@ -223,7 +223,14 @@ public abstract class CelebornInputStream extends InputStream {
       this.shuffleId = shuffleId;
       this.shuffleClient = shuffleClient;
 
-      moveToNextReader(false);
+      if (RAND.nextBoolean()) {
+        moveToNextReader(true);
+        init();
+        firstChunk = false;
+        logger.debug("Creating InputStream finished, currentChunk bytes {}", currentChunk.readableBytes());
+      } else {
+        moveToNextReader(false);
+      }
     }
 
     private boolean skipLocation(int startMapIndex, int endMapIndex, PartitionLocation location) {
@@ -289,6 +296,7 @@ public abstract class CelebornInputStream extends InputStream {
       }
       if (fetchChunk) {
         currentChunk = getNextChunk();
+        logger.debug("currentChunk readable bytes {}", currentChunk.readableBytes());
       }
     }
 
