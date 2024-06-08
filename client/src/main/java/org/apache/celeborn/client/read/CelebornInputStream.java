@@ -25,6 +25,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.LongAdder;
 
+import com.google.common.base.Preconditions;
 import scala.Tuple2;
 
 import com.google.common.util.concurrent.Uninterruptibles;
@@ -62,7 +63,8 @@ public abstract class CelebornInputStream extends InputStream {
       int shuffleId,
       int partitionId,
       ExceptionMaker exceptionMaker,
-      MetricsCallback metricsCallback)
+      MetricsCallback metricsCallback,
+      boolean chunkPrefetchEnabled)
       throws IOException {
     if (locations == null || locations.size() == 0) {
       return emptyInputStream;
@@ -83,7 +85,8 @@ public abstract class CelebornInputStream extends InputStream {
           shuffleId,
           partitionId,
           exceptionMaker,
-          metricsCallback);
+          metricsCallback,
+        chunkPrefetchEnabled);
     }
   }
 
@@ -187,7 +190,8 @@ public abstract class CelebornInputStream extends InputStream {
         int shuffleId,
         int partitionId,
         ExceptionMaker exceptionMaker,
-        MetricsCallback metricsCallback)
+        MetricsCallback metricsCallback,
+        boolean chunkPrefetchEnabled)
         throws IOException {
       this.conf = conf;
       this.clientFactory = clientFactory;
@@ -223,13 +227,9 @@ public abstract class CelebornInputStream extends InputStream {
       this.shuffleId = shuffleId;
       this.shuffleClient = shuffleClient;
 
-      if (RAND.nextBoolean()) {
-        moveToNextReader(true);
-        init();
-        firstChunk = false;
-        logger.debug("Creating InputStream finished, currentChunk bytes {}", currentChunk.readableBytes());
-      } else {
-        moveToNextReader(false);
+      moveToNextReader(false);
+      if (chunkPrefetchEnabled) {
+        fillBuffer();
       }
     }
 
@@ -610,6 +610,7 @@ public abstract class CelebornInputStream extends InputStream {
           close();
           return false;
         }
+        Preconditions.checkArgument(position == limit);
 
         boolean hasData = false;
         while (currentChunk.isReadable() || moveToNextChunk()) {

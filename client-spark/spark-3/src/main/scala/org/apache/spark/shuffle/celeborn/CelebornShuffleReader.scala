@@ -66,6 +66,9 @@ class CelebornShuffleReader[K, C](
   private val exceptionRef = new AtomicReference[IOException]
   private val throwsFetchFailure = handle.throwsFetchFailure
 
+  private val chunkPrefetchEnabled = conf.clientChunkPrefetchEnabled
+  private val inputStreamCreationWindow = conf.clientInputStreamCreationWindow
+
   override def read(): Iterator[Product2[K, C]] = {
 
     val serializerInstance = newSerializerInstance(dep)
@@ -188,7 +191,9 @@ class CelebornShuffleReader[K, C](
     val end = System.currentTimeMillis()
     logInfo(s"BatchOpenStream for $partCnt cost ${end - startTime}ms")
 
-    def createInputStream(partitionId: Int): CelebornInputStream = {
+    val streams = new ConcurrentHashMap[Integer, CelebornInputStream]()
+
+    def createInputStream(partitionId: Int): Unit = {
       val locations =
         if (fileGroups.partitionGroups.containsKey(partitionId)) {
           new util.ArrayList(fileGroups.partitionGroups.get(partitionId))
@@ -203,7 +208,7 @@ class CelebornShuffleReader[K, C](
         } else null
       if (exceptionRef.get() == null) {
         try {
-          shuffleClient.readPartition(
+          val inputStream = shuffleClient.readPartition(
             shuffleId,
             handle.shuffleId,
             partitionId,
@@ -214,44 +219,27 @@ class CelebornShuffleReader[K, C](
             locations,
             streamHandlers,
             fileGroups.mapAttempts,
-            metricsCallback)
+            metricsCallback,
+            chunkPrefetchEnabled)
+          streams.put(partitionId, inputStream)
         } catch {
           case e: IOException =>
             logError(s"Exception caught when readPartition $partitionId!", e)
             exceptionRef.compareAndSet(null, e)
-            null
           case e: Throwable =>
             logError(s"Non IOException caught when readPartition $partitionId!", e)
             exceptionRef.compareAndSet(null, new CelebornIOException(e))
-            null
         }
-      } else null
+      }
     }
 
-    val streams = new ConcurrentHashMap[Integer, CelebornInputStream]()
-    (startPartition until endPartition).map(partitionId => {
+    (startPartition until Math.max(startPartition + inputStreamCreationWindow, endPartition)).map(partitionId => {
       streamCreatorPool.submit(new Runnable {
         override def run(): Unit = {
-          if (exceptionRef.get() == null) {
-            try {
-              val start = System.currentTimeMillis()
-              val inputStream = createInputStream(partitionId)
-              val duration = System.currentTimeMillis() - start
-              streams.put(partitionId, inputStream)
-              logInfo(s"Create inputstream costs ${duration}ms")
-            } catch {
-              case e: IOException =>
-                logError(s"Exception caught when readPartition $partitionId!", e)
-                exceptionRef.compareAndSet(null, e)
-              case e: Throwable =>
-                logError(s"Non IOException caught when readPartition $partitionId!", e)
-                exceptionRef.compareAndSet(null, new CelebornIOException(e))
-            }
-          }
+          createInputStream(partitionId)
         }
       })
     })
-    logInfo("Submitted Creating inputStreams")
 
     val recordIter = (startPartition until endPartition).iterator.map(partitionId => {
       if (handle.numMappers > 0) {
@@ -284,6 +272,16 @@ class CelebornShuffleReader[K, C](
           TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startFetchWait))
         // ensure inputStream is closed when task completes
         context.addTaskCompletionListener[Unit](_ => inputStream.close())
+
+        // Advance the input creation window
+        if (partitionId + inputStreamCreationWindow < endPartition) {
+          streamCreatorPool.submit(new Runnable {
+            override def run(): Unit = {
+              createInputStream(partitionId + inputStreamCreationWindow)
+            }
+          })
+        }
+
         (partitionId, inputStream)
       } else {
         (partitionId, CelebornInputStream.empty())
